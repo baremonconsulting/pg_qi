@@ -38,7 +38,7 @@ Production versions of `pg_qi` will require `shared_preload_libraries`.
 - Never assume that `pg_qi` is the only extension using planner hooks.
 - Do not implement query routing before the pg_duckdb delegation mechanism is demonstrated by a dedicated prototype.
 - Keep PostgreSQL-version-specific code isolated.
-- Keep proprietary modules outside this repository and dependent only on deliberate, versioned interfaces.
+- Keep the commercial platform outside this repository and dependent only on deliberate, public and versioned interfaces.
 - Do not perform network calls in planner or executor hooks.
 - Fail towards normal PostgreSQL execution.
 
