@@ -59,19 +59,73 @@ jobs:
       - name: Install extension
         run: sudo --preserve-env=PG_CONFIG make install
 
-      - name: Start PostgreSQL
+      - name: Initialise and start PostgreSQL
         shell: bash
         run: |
           set -euxo pipefail
-          sudo pg_ctlcluster "${PG_MAJOR}" main start
-          sudo -u postgres createuser --superuser "${USER}"
+
+          PGBIN="$(dirname "${PG_CONFIG}")"
+          PGDATA="${RUNNER_TEMP}/pgdata-${PG_MAJOR}"
+          PGHOST="${RUNNER_TEMP}/pgsocket-${PG_MAJOR}"
+          PGPORT="55432"
+          PGUSER="${USER}"
+          PGLOG="${RUNNER_TEMP}/postgresql-${PG_MAJOR}.log"
+          export PGBIN PGDATA PGHOST PGPORT PGUSER PGLOG
+
+          mkdir -p "${PGHOST}"
+
+          {
+            echo "PGBIN=${PGBIN}"
+            echo "PGDATA=${PGDATA}"
+            echo "PGHOST=${PGHOST}"
+            echo "PGPORT=${PGPORT}"
+            echo "PGUSER=${PGUSER}"
+            echo "PGLOG=${PGLOG}"
+          } >> "${GITHUB_ENV}"
+
+          "${PGBIN}/initdb" \
+            --pgdata="${PGDATA}" \
+            --username="${PGUSER}" \
+            --auth-local=trust \
+            --auth-host=trust \
+            --no-sync
+
+          "${PGBIN}/pg_ctl" \
+            -D "${PGDATA}" \
+            -l "${PGLOG}" \
+            -o "-k ${PGHOST} -p ${PGPORT}" \
+            -w start
+
+          "${PGBIN}/pg_isready" \
+            --host="${PGHOST}" \
+            --port="${PGPORT}"
+
+          "${PGBIN}/psql" \
+            --dbname=postgres \
+            --command='SELECT version();'
 
       - name: Run regression tests
         run: make installcheck
 
-      - name: Show regression differences
+      - name: Show failure diagnostics
         if: failure()
         shell: bash
         run: |
+          echo "=== Regression differences ==="
           cat regression.diffs 2>/dev/null || true
-          sudo journalctl -u "postgresql@${PG_MAJOR}-main" --no-pager 2>/dev/null || true
+
+          echo "=== PostgreSQL log ==="
+          if [[ -n "${PGLOG:-}" ]]; then
+            cat "${PGLOG}" 2>/dev/null || true
+          fi
+
+      - name: Stop PostgreSQL
+        if: always()
+        shell: bash
+        run: |
+          if [[ -n "${PGDATA:-}" && -f "${PGDATA}/postmaster.pid" ]]; then
+            "${PGBIN}/pg_ctl" \
+              -D "${PGDATA}" \
+              -m fast \
+              -w stop
+          fi
