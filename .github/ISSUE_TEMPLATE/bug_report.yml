@@ -1,0 +1,66 @@
+name: Bug report
+description: Report a reproducible problem in pg_qi
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not disclose security vulnerabilities here. Follow SECURITY.md instead.
+
+  - type: input
+    id: pg_qi_version
+    attributes:
+      label: pg_qi version
+      placeholder: 0.0.1
+    validations:
+      required: true
+
+  - type: input
+    id: postgresql_version
+    attributes:
+      label: PostgreSQL version
+      placeholder: PostgreSQL 18.x
+    validations:
+      required: true
+
+  - type: input
+    id: pg_duckdb_version
+    attributes:
+      label: pg_duckdb version
+      description: Use "not installed" when the issue does not involve pg_duckdb.
+    validations:
+      required: true
+
+  - type: input
+    id: operating_system
+    attributes:
+      label: Operating system and architecture
+      placeholder: Ubuntu 24.04, x86_64
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Explain what happened and what you expected.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include configuration and SQL without sensitive data.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Remove credentials, SQL text and customer data before posting.
+      render: text

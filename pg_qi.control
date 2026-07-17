@@ -1,0 +1,7 @@
+# pg_qi extension control file
+comment = 'PostgreSQL Query Intelligence execution-policy engine'
+default_version = '0.0.1'
+module_pathname = '$libdir/pg_qi'
+relocatable = false
+schema = 'qi'
+superuser = true
