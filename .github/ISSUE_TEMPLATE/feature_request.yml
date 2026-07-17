@@ -1,5 +1,5 @@
 name: Feature request
-description: Propose an improvement to the open-source pg_qi edition
+description: Propose an improvement to pg_qi
 title: "[Feature]: "
 labels:
   - enhancement

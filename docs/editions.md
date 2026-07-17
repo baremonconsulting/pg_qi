@@ -2,7 +2,7 @@
 
 ## The single-extension rule
 
-There is exactly one PostgreSQL extension: `pg_qi`. The same source code, the same SQL objects, the same safety features and the same extension name for every user, whether or not they are a commercial customer.
+There is exactly one PostgreSQL extension: `pg_qi`. The same source code, the same SQL objects, the same safety features and the same extension name are used for every user, whether or not they are a commercial customer.
 
 Certified builds distributed by Baremon (for example RPM or DEB packages, or container images published under a name such as `baremon-pg_qi`) may differ in packaging name, build provenance and support terms — never in functionality. Inside the database it is always:
 
@@ -10,7 +10,7 @@ Certified builds distributed by Baremon (for example RPM or DEB packages, or con
 CREATE EXTENSION pg_qi;
 ```
 
-There are no binary variants of `pg_qi`. This keeps bug reports unambiguous, upgrades predictable and the loaded library identity transparent.
+There are no proprietary, feature-gated or functionally different binary variants of `pg_qi`. This keeps bug reports unambiguous, upgrades predictable and the loaded library identity transparent.
 
 ## Open-source scope
 
@@ -20,14 +20,14 @@ The complete single-instance router is open source, including every safety mecha
 
 ## Commercial scope
 
-The commercial product is the **Baremon Query Intelligence Platform**, together with certified builds, assessments and support. It runs outside the database and provides fleet-scale analytics, cross-instance comparison, ROI evidence, recommendations, governance (RBAC, SSO, audit, compliance exports) and central policy authoring with signed distribution.
+The commercial product is the **Baremon Query Intelligence Platform**. It runs outside the database and provides fleet-scale analytics, cross-instance comparison, ROI evidence, recommendations, governance (RBAC, SSO, audit, compliance exports) and central policy authoring with signed distribution.
 
-The platform consumes `pg_qi` telemetry exclusively through the public, versioned telemetry contract. Proprietary source code, licensing mechanisms, private policy logic, customer-specific rules and commercial build material must not be committed to this repository.
+The platform integrates with `pg_qi` exclusively through deliberate, public and versioned telemetry and policy interfaces. Baremon may also provide certified builds, assessments, support and professional services under commercial terms. Proprietary source code, licensing mechanisms, private policy logic, customer-specific rules and commercial build material must not be committed to this repository.
 
 ## Dependency direction
 
 ```text
-commercial platform  ─────►  deliberate public pg_qi interface (SQL / telemetry contract)
+commercial platform  ─────►  deliberate public pg_qi interfaces (SQL / telemetry / policy contracts)
 open-source pg_qi    ──X──►  commercial implementation
 ```
 
