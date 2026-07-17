@@ -68,7 +68,9 @@ jobs:
           PGDATA="${RUNNER_TEMP}/pgdata-${PG_MAJOR}"
           PGHOST="${RUNNER_TEMP}/pgsocket-${PG_MAJOR}"
           PGPORT="55432"
+          PGUSER="${USER}"
           PGLOG="${RUNNER_TEMP}/postgresql-${PG_MAJOR}.log"
+          export PGBIN PGDATA PGHOST PGPORT PGUSER PGLOG
 
           mkdir -p "${PGHOST}"
 
@@ -77,13 +79,13 @@ jobs:
             echo "PGDATA=${PGDATA}"
             echo "PGHOST=${PGHOST}"
             echo "PGPORT=${PGPORT}"
-            echo "PGUSER=${USER}"
+            echo "PGUSER=${PGUSER}"
             echo "PGLOG=${PGLOG}"
           } >> "${GITHUB_ENV}"
 
           "${PGBIN}/initdb" \
             --pgdata="${PGDATA}" \
-            --username="${USER}" \
+            --username="${PGUSER}" \
             --auth-local=trust \
             --auth-host=trust \
             --no-sync
