@@ -1,55 +1,41 @@
-# Prerequisites
-*.d
-
-# Object files
+# PGXS build products
 *.o
-*.ko
-*.obj
-*.elf
-
-# Linker output
-*.ilk
-*.map
-*.exp
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Libraries
-*.lib
-*.a
-*.la
-*.lo
-
-# Shared objects (inc. Windows DLLs)
-*.dll
 *.so
 *.so.*
-*.dylib
+*.a
+*.d
 
-# Executables
-*.exe
-*.out
-*.app
-*.i*86
-*.x86_64
-*.hex
+# PostgreSQL regression tests
+results/
+regression.diffs
+regression.out
+tmp_check/
+log/
 
-# Debug files
-*.dSYM/
-*.su
-*.idb
-*.pdb
+# Coverage and profiling
+*.gcda
+*.gcno
+*.gcov
+*.profraw
+*.profdata
 
-# Kernel Module Compile Results
-*.mod*
-*.cmd
-.tmp_versions/
-modules.order
-Module.symvers
-Mkfile.old
-dkms.conf
+# Local build directories
+build/
+cmake-build-*/
+compile_commands.json
 
-# debug information files
-*.dwo
+# Editors and operating systems
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem

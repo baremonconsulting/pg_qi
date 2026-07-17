@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: PostgreSQL ${{ matrix.postgresql }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        postgresql:
+          - "16"
+          - "17"
+          - "18"
+
+    env:
+      PG_MAJOR: ${{ matrix.postgresql }}
+      PG_CONFIG: /usr/lib/postgresql/${{ matrix.postgresql }}/bin/pg_config
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Add the PostgreSQL APT repository
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ca-certificates curl gnupg lsb-release
+          sudo install -d -m 0755 /usr/share/postgresql-common/pgdg
+          curl --fail --silent --show-error \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor --yes -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list
+
+      - name: Install PostgreSQL and build dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential \
+            postgresql-${PG_MAJOR} \
+            postgresql-server-dev-${PG_MAJOR}
+
+      - name: Build
+        run: make
+
+      - name: Install extension
+        run: sudo --preserve-env=PG_CONFIG make install
+
+      - name: Start PostgreSQL
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo pg_ctlcluster "${PG_MAJOR}" main start
+          sudo -u postgres createuser --superuser "${USER}"
+
+      - name: Run regression tests
+        run: make installcheck
+
+      - name: Show regression differences
+        if: failure()
+        shell: bash
+        run: |
+          cat regression.diffs 2>/dev/null || true
+          sudo journalctl -u "postgresql@${PG_MAJOR}-main" --no-pager 2>/dev/null || true
