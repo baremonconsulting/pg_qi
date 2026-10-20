@@ -1,0 +1,41 @@
+name: Temporary CROSS JOIN LATERAL benchmark
+
+on:
+  push:
+    branches:
+      - tmp/lateral-benchmark-20261020
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - name: Check out temporary benchmark payload
+        uses: actions/checkout@v4
+
+      - name: Materialise benchmark package
+        shell: bash
+        run: |
+          set -euxo pipefail
+          base64 --decode .benchmark-tmp/benchmark-input.b64 > /tmp/lateral-benchmark.tar.gz
+          echo '822d71539e21afa92228239cd2c9e58599238ba80e8b90fb93b2074c5f3d35e9  /tmp/lateral-benchmark.tar.gz' | sha256sum -c -
+          tar -xzf /tmp/lateral-benchmark.tar.gz
+          find benchmark -maxdepth 2 -type f -print | sort
+
+      - name: Run PostgreSQL 16.15 benchmark
+        shell: bash
+        run: |
+          set -euxo pipefail
+          bash benchmark/run.sh
+
+      - name: Upload benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lateral-benchmark-results
+          path: benchmark
+          if-no-files-found: error
+          retention-days: 3
