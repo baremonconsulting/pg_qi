@@ -23,3 +23,5 @@ CREATE FUNCTION spike_observer(OUT pid integer, OUT parallel_worker boolean, OUT
 RETURNS record AS 'MODULE_PATHNAME', 'qi_spike_observer' LANGUAGE C VOLATILE STRICT PARALLEL SAFE;
 CREATE FUNCTION test_active_control_guard() RETURNS boolean
 AS 'MODULE_PATHNAME', 'qi_test_active_control_guard' LANGUAGE C VOLATILE STRICT PARALLEL UNSAFE;
+CREATE FUNCTION test_classifier_contract(OUT unknown_node_rejected boolean, OUT oid_mismatch_rejected boolean, OUT null_query_rejected boolean)
+RETURNS record AS 'MODULE_PATHNAME', 'qi_test_classifier_contract' LANGUAGE C VOLATILE STRICT PARALLEL UNSAFE;

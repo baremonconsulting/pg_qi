@@ -2,7 +2,7 @@ PG_QI_TESTING ?= 0
 
 EXTENSION = pg_qi
 MODULE_big = pg_qi
-OBJS = src/pg_qi.o src/qi_delegation.o src/qi_detector.o
+OBJS = src/pg_qi.o src/qi_classify.o src/qi_delegation.o src/qi_detector.o
 
 DATA = sql/pg_qi--0.0.1.sql
 

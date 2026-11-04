@@ -5,6 +5,8 @@
 
 #include "postgres.h"
 
+#include <limits.h>
+
 #include "access/htup_details.h"
 #include "access/parallel.h"
 #include "catalog/pg_authid_d.h"

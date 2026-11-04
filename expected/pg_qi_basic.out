@@ -42,6 +42,8 @@ SELECT * FROM qi.test_detector_contract();
 t|t|t|t
 SELECT * FROM qi.test_frame_contract();
 t|t|t|t|t|t|t
+SELECT * FROM qi.test_classifier_contract();
+t|t|t
 SELECT depth, cleanup_broken, accounting_valid FROM qi.test_frame_state();
 0|f|t
 SHOW pg_qi.spike_stack_depth;

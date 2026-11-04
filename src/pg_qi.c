@@ -15,6 +15,7 @@
 #include "fmgr.h"
 #include "miscadmin.h"
 #include "pg_qi/planner_compat.h"
+#include "pg_qi/qi_classify.h"
 #include "pg_qi/qi_delegation.h"
 #include "pg_qi/qi_detector.h"
 #if PG_QI_TESTING
@@ -88,6 +89,7 @@ PG_FUNCTION_INFO_V1(qi_spike_reset_state);
 PG_FUNCTION_INFO_V1(qi_spike_state);
 PG_FUNCTION_INFO_V1(qi_spike_observer);
 PG_FUNCTION_INFO_V1(qi_test_active_control_guard);
+PG_FUNCTION_INFO_V1(qi_test_classifier_contract);
 #endif
 
 QI_PLANNER_PROTO(pg_qi_planner)
@@ -101,6 +103,7 @@ QI_PLANNER_PROTO(pg_qi_planner)
 #if PG_QI_TESTING
     instr_time started_at;
     instr_time finished_at;
+    QiClassifyResult classification = qi_classify_query(parse);
     INSTR_TIME_SET_CURRENT(started_at);
 
     if (!pg_qi_final_report_registered && MyBackendType == B_BACKEND)
@@ -210,6 +213,7 @@ QI_PLANNER_PROTO(pg_qi_planner)
     (void) qi_frame_pop(frame_id);
 done:
 #if PG_QI_TESTING
+    qi_classify_record_test_result(classification);
     INSTR_TIME_SET_CURRENT(finished_at);
     INSTR_TIME_SUBTRACT(finished_at, started_at);
     qi_record_planner_timing((uint64) INSTR_TIME_GET_MICROSEC(finished_at));
@@ -260,6 +264,7 @@ _PG_init(void)
                              PGC_USERSET, 0, NULL, NULL, NULL);
 
     qi_init_frame_diagnostics();
+    qi_classify_init_test_gucs();
     qi_reenter_init_gucs();
     qi_diag_init_gucs();
 #endif
