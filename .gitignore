@@ -24,6 +24,9 @@ build/
 cmake-build-*/
 compile_commands.json
 
+# Generated Spike evidence and delivery archives
+deliverables/
+
 # Editors and operating systems
 .idea/
 .vscode/
