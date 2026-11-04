@@ -6,7 +6,10 @@
 `pg_qi` is a PostgreSQL execution-policy extension for safe and explainable query-engine selection, initially targeting [`pg_duckdb`](https://github.com/duckdb/pg_duckdb).
 
 > [!IMPORTANT]
-> The project is in **pre-alpha development**. The current code is a bootstrap extension skeleton. It does not route queries and must not be used in production.
+> The project is in **pre-alpha development**. The production build does not
+> yet classify or automatically route queries and must not be used in
+> production. Spike 1 has validated the low-level `pg_duckdb` delegation
+> mechanism; that result is an integration proof, not a production router.
 
 ## Project goals
 
@@ -24,21 +27,39 @@
 The repository currently contains:
 
 - a PGXS buildable PostgreSQL extension;
-- a transparent planner-hook skeleton;
+- planner-hook chaining compatible with PostgreSQL 16, 17 and 18;
+- backend-local delegation frames with error-safe GUC restoration;
+- a validated temporary adapter for requesting `pg_duckdb` planning through
+  `duckdb.force_execution`;
+- plan-tree detection for `DuckDBScan`;
 - `pg_qi.enabled`, the first extension GUC;
 - SQL functions for version and preload diagnostics;
-- regression tests;
-- CI builds for PostgreSQL 16, 17 and 18.
+- an explicit test-only build containing Spike 1 controls, diagnostics,
+  failpoints, re-entry simulation and benchmarks;
+- regression and S0–S11 integration tests;
+- CI builds and tests for PostgreSQL 16, 17 and 18.
 
-No query classification, telemetry, `pg_duckdb` delegation or automatic routing is implemented yet.
+Spike 1 demonstrated deterministic one-shot delegation in its test harness,
+including nested planning, errors, cached plans, concurrency and parallel
+workers. The default production build deliberately exposes none of those test
+controls. Query classification, telemetry, policy management and automatic
+routing are not implemented yet. See the
+[Spike 1 report](docs/spike1/spike-1-report.md) and
+[WP14 production/test boundary](docs/phase2/WP14-production-test-boundary.md).
 
 ## Requirements
 
 - PostgreSQL 16, 17 or 18 with server development headers;
 - a C compiler and GNU Make;
-- PGXS, normally installed with the PostgreSQL server development package.
+- PGXS, normally installed with the PostgreSQL server development package;
+- `pg_duckdb` for preload and runtime operation of the planner integration.
 
-`pg_duckdb` is not yet a build-time dependency. Its integration will be introduced through a dedicated adapter after the integration mechanism has been validated.
+`pg_duckdb` is not a compile-time dependency. The current runtime adapter
+requires a real, resettable `duckdb.force_execution` GUC and therefore requires
+`pg_duckdb` to be loaded before `pg_qi`. Spike 1 and CI are pinned to
+`pg_duckdb` commit `ee38d3b540ecea1d93683ba99bdcec5632a21eaf` and DuckDB
+`v1.5.4`; changes to that dependency require the integration matrix to be
+replayed.
 
 ## Build
 
@@ -56,10 +77,11 @@ sudo make PG_CONFIG=/path/to/pg_config install
 
 ## Installation
 
-Add `pg_qi` to `shared_preload_libraries`:
+Add `pg_duckdb` and `pg_qi`, in that order, to
+`shared_preload_libraries`:
 
 ```conf
-shared_preload_libraries = 'pg_qi'
+shared_preload_libraries = 'pg_duckdb,pg_qi'
 ```
 
 Restart PostgreSQL, then install the extension in each database where it is required:
@@ -76,17 +98,26 @@ SELECT qi.is_preloaded();
 SHOW pg_qi.enabled;
 ```
 
-The current hook is transparent. It always calls the next planner hook, or PostgreSQL's standard planner when no downstream hook exists.
+The current production hook preserves the downstream planner-hook chain and
+does not initiate delegation because no production policy source exists yet.
+It calls the next planner hook, or PostgreSQL's standard planner when no
+downstream hook exists.
 
 ## Development
 
-Build and run the regression test suite against a running PostgreSQL instance:
+Build and run the regression suite against a PostgreSQL instance that preloads
+`pg_duckdb,pg_qi`:
 
 ```bash
-make
-sudo make install
-make installcheck
+make PG_QI_TESTING=1 clean
+make PG_QI_TESTING=1
+sudo make PG_QI_TESTING=1 install
+make PG_QI_TESTING=1 installcheck
 ```
+
+The test build additionally installs `pg_qi_spike_test`. Test databases create
+`pg_qi` first and then `pg_qi_spike_test`; this secondary extension is not part
+of the default production installation.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and [docs/architecture.md](docs/architecture.md) for the initial architecture.
 

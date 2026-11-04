@@ -11,12 +11,16 @@ The project is pre-alpha. Interfaces and file layout may change. Discuss substan
 Install PostgreSQL server development packages for a supported major version, then run:
 
 ```bash
-make
-sudo make install
-make installcheck
+make PG_QI_TESTING=1 clean
+make PG_QI_TESTING=1
+sudo make PG_QI_TESTING=1 install
+make PG_QI_TESTING=1 installcheck
 ```
 
-The initial support matrix is PostgreSQL 16–18.
+The test server must preload `pg_duckdb,pg_qi`. The initial support matrix is
+PostgreSQL 16–18. See
+[WP14 production/test boundary](docs/phase2/WP14-production-test-boundary.md)
+for the production and test build contracts.
 
 ## Pull requests
 
