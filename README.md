@@ -123,9 +123,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and [docs/arc
 
 ## Editions
 
-There is a single PostgreSQL extension, `pg_qi`, and it is fully open source under Apache License 2.0. The complete single-instance router — including every safety mechanism — is and will remain open source; safety features are never paywalled.
+There is a single production PostgreSQL extension, `pg_qi`, and it is fully open source under Apache License 2.0. When the complete single-instance router is implemented, it will be open source in this repository, including every safety mechanism; safety features will never be paywalled. Most of the router is still planned.
 
-The Baremon Query Intelligence Platform runs outside the database and consumes `pg_qi` telemetry through its public contract. Baremon may also provide certified builds, assessments, support and professional services. Certified builds use the same extension name and provide identical functionality. See [docs/editions.md](docs/editions.md).
+The planned Baremon Query Intelligence Platform will run outside the database and consume `pg_qi` telemetry through a public, versioned contract that is not yet defined. Baremon may also provide certified builds, assessments, support and professional services. Certified builds use the same extension name and provide identical functionality. See [docs/editions.md](docs/editions.md) for the status of each component.
 
 ## Security
 

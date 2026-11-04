@@ -1,5 +1,26 @@
 # pg_qi Spike 1 — final evidence report
 
+> [!NOTE]
+> **Status note, 2026-11-04.** This report is preserved as the historical
+> record of Spike 1 as concluded on 2026-10-16. Statements below about an
+> uncommitted worktree and a future first hosted CI run describe that date.
+> Since then:
+>
+> - The Spike 1 implementation was committed as `9d1ab09` and merged into
+>   `main` through [PR #5](https://github.com/baremonconsulting/pg_qi/pull/5)
+>   (merge commit `cf82a31`).
+> - The first hosted GitHub Actions runs of the implementation passed, both
+>   for the [pull request](https://github.com/baremonconsulting/pg_qi/actions/runs/41841360236)
+>   and for the [merge commit on `main`](https://github.com/baremonconsulting/pg_qi/actions/runs/41842440621).
+> - [WP14](../phase2/WP14-production-test-boundary.md)
+>   ([PR #6](https://github.com/baremonconsulting/pg_qi/pull/6)) separated the
+>   Spike 1 test controls and diagnostics listed in section 9 from the
+>   production build. They remain available in an explicit test build and the
+>   separate `pg_qi_spike_test` extension.
+>
+> The evidence scope is unchanged: PostgreSQL 16–18 with the dependency pins in
+> section 2. Newer `pg_duckdb` releases have not been replayed.
+
 Date: 2026-10-16
 Status: **COMPLETE — verdict A**
 Scope: PostgreSQL 16, 17, and 18 with pinned pg_duckdb
