@@ -1,3 +1,4 @@
+CREATE EXTENSION pg_duckdb;
 CREATE EXTENSION pg_qi;
 SELECT qi.version();
  version 
@@ -17,4 +18,44 @@ SHOW pg_qi.enabled;
  on
 (1 row)
 
+\pset format unaligned
+\pset tuples_only on
+SELECT preflight_passed
+       AND CASE
+               WHEN current_setting('server_version_num')::integer >= 170000
+                   THEN handle_present IS TRUE
+               ELSE handle_present IS NULL
+           END
+       AND NOT is_placeholder
+       AND NOT no_reset
+       AND provider_name = 'DuckDBScan' AS force_meta_valid
+FROM qi.test_force_meta();
+t
+SELECT qi.test_force_save_roundtrip(true);
+t
+SET duckdb.force_execution = on;
+SELECT qi.test_force_save_roundtrip(false);
+t
+SET duckdb.force_execution = off;
+SELECT * FROM qi.test_detector_contract();
+t|t|t|t
+SELECT * FROM qi.test_frame_contract();
+t|t|t|t|t|t|t
+SELECT depth, cleanup_broken, accounting_valid FROM qi.test_frame_state();
+0|f|t
+SHOW pg_qi.spike_stack_depth;
+0
+SHOW pg_qi.spike_cleanup_broken;
+off
+CREATE TABLE spike_small(id integer PRIMARY KEY, v integer);
+INSERT INTO spike_small
+SELECT i, i * 10 FROM generate_series(1, 100) AS g(i);
+SET duckdb.force_execution = on;
+SELECT count(*) FROM spike_small;
+100
+SHOW pg_qi.spike_last_plan_has_duckdb_scan;
+on
+SET duckdb.force_execution = off;
+DROP TABLE spike_small;
 DROP EXTENSION pg_qi;
+DROP EXTENSION pg_duckdb;

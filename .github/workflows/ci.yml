@@ -2,130 +2,217 @@ name: CI
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      run_benchmark:
+        description: Run the non-blocking WP11 performance matrix
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
-jobs:
-  build-and-test:
-    name: PostgreSQL ${{ matrix.postgresql }}
-    runs-on: ubuntu-latest
+env:
+  PG_DUCKDB_SHA: ee38d3b540ecea1d93683ba99bdcec5632a21eaf
+  DUCKDB_VERSION: v1.5.4
+  DUCKDB_ARCHIVE_SHA256: 838d98a85e697bab9935010c88a8c67d3312ccedcab4cb4a0ba01da65113bb70
 
+jobs:
+  compile:
+    name: Compile PG${{ matrix.postgresql }} (-Werror)
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        postgresql:
-          - "16"
-          - "17"
-          - "18"
-
-    env:
-      PG_MAJOR: ${{ matrix.postgresql }}
-      PG_CONFIG: /usr/lib/postgresql/${{ matrix.postgresql }}/bin/pg_config
-
+        postgresql: ["16", "17", "18"]
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Add the PostgreSQL APT repository
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL headers
+        run: bash .github/scripts/ci-install-postgresql.sh "${{ matrix.postgresql }}"
+      - name: Compile
         shell: bash
         run: |
-          set -euxo pipefail
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends ca-certificates curl gnupg lsb-release
-          sudo install -d -m 0755 /usr/share/postgresql-common/pgdg
-          curl --fail --silent --show-error \
-            https://www.postgresql.org/media/keys/ACCC4CF8.asc \
-            | sudo gpg --dearmor --yes -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg
-          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
-            | sudo tee /etc/apt/sources.list.d/pgdg.list
+          set -euo pipefail
+          mkdir -p "ci-artifacts/compile-pg${{ matrix.postgresql }}"
+          make PG_CONFIG="/usr/lib/postgresql/${{ matrix.postgresql }}/bin/pg_config" clean >"ci-artifacts/compile-pg${{ matrix.postgresql }}/clean.log" 2>&1
+          make PG_CONFIG="/usr/lib/postgresql/${{ matrix.postgresql }}/bin/pg_config" -j2 >"ci-artifacts/compile-pg${{ matrix.postgresql }}/build.log" 2>&1
+      - name: Upload compile logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compile-pg${{ matrix.postgresql }}
+          path: ci-artifacts/compile-pg${{ matrix.postgresql }}
 
-      - name: Install PostgreSQL and build dependencies
+  regression:
+    name: Regression PG${{ matrix.postgresql }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgresql: ["16", "17", "18"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL and dependencies
+        run: bash .github/scripts/ci-install-postgresql.sh "${{ matrix.postgresql }}"
+      - name: Build pinned pg_duckdb
+        run: bash .github/scripts/ci-build-pg-duckdb.sh "${{ matrix.postgresql }}"
+      - name: Build and install pg_qi
+        run: bash .github/scripts/ci-build-install-pg-qi.sh "${{ matrix.postgresql }}" "ci-artifacts/regression-pg${{ matrix.postgresql }}"
+      - name: Run pg_regress
         shell: bash
         run: |
-          set -euxo pipefail
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends \
-            build-essential \
-            postgresql-${PG_MAJOR} \
-            postgresql-server-dev-${PG_MAJOR}
-
-      - name: Build
-        run: make
-
-      - name: Install extension
-        run: sudo --preserve-env=PG_CONFIG make install
-
-      - name: Initialise and start PostgreSQL
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          PGBIN="$(dirname "${PG_CONFIG}")"
-          PGDATA="${RUNNER_TEMP}/pgdata-${PG_MAJOR}"
-          PGHOST="${RUNNER_TEMP}/pgsocket-${PG_MAJOR}"
-          PGPORT="55432"
-          PGUSER="${USER}"
-          PGLOG="${RUNNER_TEMP}/postgresql-${PG_MAJOR}.log"
-          export PGBIN PGDATA PGHOST PGPORT PGUSER PGLOG
-
-          mkdir -p "${PGHOST}"
-
-          {
-            echo "PGBIN=${PGBIN}"
-            echo "PGDATA=${PGDATA}"
-            echo "PGHOST=${PGHOST}"
-            echo "PGPORT=${PGPORT}"
-            echo "PGUSER=${PGUSER}"
-            echo "PGLOG=${PGLOG}"
-          } >> "${GITHUB_ENV}"
-
-          "${PGBIN}/initdb" \
-            --pgdata="${PGDATA}" \
-            --username="${PGUSER}" \
-            --auth-local=trust \
-            --auth-host=trust \
-            --no-sync
-
-          "${PGBIN}/pg_ctl" \
-            -D "${PGDATA}" \
-            -l "${PGLOG}" \
-            -o "-k ${PGHOST} -p ${PGPORT}" \
-            -w start
-
-          "${PGBIN}/pg_isready" \
-            --host="${PGHOST}" \
-            --port="${PGPORT}"
-
-          "${PGBIN}/psql" \
-            --dbname=postgres \
-            --command='SELECT version();'
-
-      - name: Run regression tests
-        run: make installcheck
-
-      - name: Show failure diagnostics
-        if: failure()
-        shell: bash
-        run: |
-          echo "=== Regression differences ==="
-          cat regression.diffs 2>/dev/null || true
-
-          echo "=== PostgreSQL log ==="
-          if [[ -n "${PGLOG:-}" ]]; then
-            cat "${PGLOG}" 2>/dev/null || true
-          fi
-
-      - name: Stop PostgreSQL
+          set -euo pipefail
+          major="${{ matrix.postgresql }}"
+          pgbin="/usr/lib/postgresql/$major/bin"
+          pgdata="${RUNNER_TEMP}/regression-data-$major"
+          pghost="${RUNNER_TEMP}/regression-socket-$major"
+          pglog="${RUNNER_TEMP}/regression-pg$major.log"
+          mkdir -p "$pghost"
+          "$pgbin/initdb" -D "$pgdata" --no-locale --encoding=UTF8 --no-sync
+          { echo "unix_socket_directories = '$pghost'"; echo "listen_addresses = ''"; echo "shared_preload_libraries = 'pg_duckdb,pg_qi'"; } >>"$pgdata/postgresql.conf"
+          "$pgbin/pg_ctl" -D "$pgdata" -l "$pglog" -w start
+          trap '"$pgbin/pg_ctl" -D "$pgdata" -m fast -w stop || true' EXIT
+          PGHOST="$pghost" PGUSER="$USER" make PG_CONFIG="$pgbin/pg_config" installcheck
+          "$pgbin/pg_ctl" -D "$pgdata" -m fast -w stop
+          trap - EXIT
+      - name: Collect regression diagnostics
         if: always()
         shell: bash
         run: |
-          if [[ -n "${PGDATA:-}" && -f "${PGDATA}/postmaster.pid" ]]; then
-            "${PGBIN}/pg_ctl" \
-              -D "${PGDATA}" \
-              -m fast \
-              -w stop
-          fi
+          mkdir -p "ci-artifacts/regression-pg${{ matrix.postgresql }}/diagnostics"
+          cp regression.diffs regression.out "ci-artifacts/regression-pg${{ matrix.postgresql }}/diagnostics/" 2>/dev/null || true
+          cp "${RUNNER_TEMP}/regression-pg${{ matrix.postgresql }}.log" "ci-artifacts/regression-pg${{ matrix.postgresql }}/diagnostics/postgresql.log" 2>/dev/null || true
+      - name: Upload regression evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regression-pg${{ matrix.postgresql }}
+          path: ci-artifacts/regression-pg${{ matrix.postgresql }}
+
+  integration:
+    name: S0-S11 integration PG${{ matrix.postgresql }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgresql: ["16", "17", "18"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL and dependencies
+        run: bash .github/scripts/ci-install-postgresql.sh "${{ matrix.postgresql }}"
+      - name: Build pinned pg_duckdb
+        run: bash .github/scripts/ci-build-pg-duckdb.sh "${{ matrix.postgresql }}"
+      - name: Build and install pg_qi
+        run: bash .github/scripts/ci-build-install-pg-qi.sh "${{ matrix.postgresql }}" "ci-artifacts/integration-pg${{ matrix.postgresql }}"
+      - name: Run S0-S11
+        env:
+          PG_INSTALL_ROOT: /usr/lib/postgresql
+          WP9_MAJORS: ${{ matrix.postgresql }}
+          WP9_SKIP_BUILD_INSTALL: "1"
+          WP9_ARTIFACT_DIR: ${{ runner.temp }}/wp9-${{ matrix.postgresql }}
+        run: bash scripts/spike1/wp9-matrix.sh
+      - name: Upload S0-S11 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-s0-s11-pg${{ matrix.postgresql }}
+          path: |
+            ${{ runner.temp }}/wp9-${{ matrix.postgresql }}/results.tsv
+            ${{ runner.temp }}/wp9-${{ matrix.postgresql }}/pg*/*.log
+            ci-artifacts/integration-pg${{ matrix.postgresql }}
+
+  reentrancy-focus:
+    name: Reentrancy and failpoints PG17
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL and dependencies
+        run: bash .github/scripts/ci-install-postgresql.sh 17
+      - name: Build pinned pg_duckdb
+        run: bash .github/scripts/ci-build-pg-duckdb.sh 17
+      - name: Build and install pg_qi
+        run: bash .github/scripts/ci-build-install-pg-qi.sh 17 ci-artifacts/reentrancy-pg17
+      - name: Repeat protected ERROR and reentrancy scenarios
+        shell: bash
+        run: |
+          set -euo pipefail
+          for repetition in 1 2 3; do
+            PG_INSTALL_ROOT=/usr/lib/postgresql WP9_MAJORS=17 WP9_SKIP_BUILD_INSTALL=1 WP9_ARTIFACT_DIR="${RUNNER_TEMP}/reentrancy-$repetition" bash scripts/spike1/wp9-matrix.sh
+          done
+      - name: Upload reentrancy evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reentrancy-focus-pg17
+          path: |
+            ${{ runner.temp }}/reentrancy-*/results.tsv
+            ${{ runner.temp }}/reentrancy-*/pg17/*.log
+            ci-artifacts/reentrancy-pg17
+
+  parallel-isolation:
+    name: Parallel worker isolation S11 PG17
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL and dependencies
+        run: bash .github/scripts/ci-install-postgresql.sh 17
+      - name: Build pinned pg_duckdb
+        run: bash .github/scripts/ci-build-pg-duckdb.sh 17
+      - name: Build and install pg_qi
+        run: bash .github/scripts/ci-build-install-pg-qi.sh 17 ci-artifacts/parallel-pg17
+      - name: Run S11 with parallelism enabled
+        env:
+          PG_INSTALL_ROOT: /usr/lib/postgresql
+          WP9_MAJORS: "17"
+          WP9_SKIP_BUILD_INSTALL: "1"
+          WP9_ARTIFACT_DIR: ${{ runner.temp }}/parallel-s11
+        run: bash scripts/spike1/wp9-matrix.sh
+      - name: Require explicit parallel-worker evidence
+        run: grep -Eq '^[0-9]+\|t\|0\|f\|f\|' "${RUNNER_TEMP}/parallel-s11/pg17/S11.log"
+      - name: Upload parallel evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: parallel-isolation-pg17
+          path: |
+            ${{ runner.temp }}/parallel-s11/results.tsv
+            ${{ runner.temp }}/parallel-s11/pg17/*.log
+            ci-artifacts/parallel-pg17
+
+  benchmark:
+    name: Manual benchmark PG${{ matrix.postgresql }}
+    if: github.event_name == 'workflow_dispatch' && inputs.run_benchmark
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgresql: ["16", "17", "18"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL and dependencies
+        run: bash .github/scripts/ci-install-postgresql.sh "${{ matrix.postgresql }}"
+      - name: Build pinned pg_duckdb
+        run: bash .github/scripts/ci-build-pg-duckdb.sh "${{ matrix.postgresql }}"
+      - name: Build and install pg_qi
+        run: bash .github/scripts/ci-build-install-pg-qi.sh "${{ matrix.postgresql }}" "ci-artifacts/benchmark-pg${{ matrix.postgresql }}"
+      - name: Run non-blocking WP11 benchmark
+        env:
+          PG_INSTALL_ROOT: /usr/lib/postgresql
+          WP11_MAJORS: ${{ matrix.postgresql }}
+          WP11_SKIP_BUILD_INSTALL: "1"
+          WP11_ARTIFACT_DIR: ${{ runner.temp }}/wp11-${{ matrix.postgresql }}
+        run: bash scripts/spike1/wp11-benchmark.sh
+      - name: Upload benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-pg${{ matrix.postgresql }}
+          path: |
+            ${{ runner.temp }}/wp11-${{ matrix.postgresql }}/results.csv
+            ${{ runner.temp }}/wp11-${{ matrix.postgresql }}/pg*/*.log
+            ${{ runner.temp }}/wp11-${{ matrix.postgresql }}/pg*/*/*.txt
+            ci-artifacts/benchmark-pg${{ matrix.postgresql }}

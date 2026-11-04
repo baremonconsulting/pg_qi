@@ -1,0 +1,31 @@
+Spike 1 / WP0 source snapshot
+verified_at_utc=2026-10-14
+
+pg_qi_repository=https://github.com/baremonconsulting/pg_qi.git
+pg_qi_baseline=d3529d4e6a7cd71657bbf8279c533a3c5a81e2df
+pg_qi_work_branch=spike/1-delegation
+
+pg_duckdb_repository=https://github.com/duckdb/pg_duckdb.git
+pg_duckdb_pin=ee38d3b540ecea1d93683ba99bdcec5632a21eaf
+
+postgres_REL_16_STABLE=333d566c4f51f1b8b002175032586423c581d3d6
+postgres_REL_17_STABLE=9e8f4ce286bf03306fc0ad29374095782b2a8136
+postgres_REL_18_STABLE=70ffc30e12b1de43d6160682fc44c78b8de00f24
+postgres_master=2246c04e7b99519010cd47be636273a5700b0b0d
+
+planner_signature_pg16=4_args
+planner_signature_pg17=4_args
+planner_signature_pg18=4_args
+planner_signature_master=5_args_with_ExplainState
+planner_es_boundary=PG_VERSION_NUM>=190000
+
+force_guc=duckdb.force_execution
+force_guc_context=PGC_USERSET
+force_guc_flags=GUC_REPORT
+unsafe_functions_guc=duckdb.unsafe_allow_execution_inside_functions
+unsafe_functions_guc_context=PGC_SUSET
+provider_name=DuckDBScan
+explain_property=DuckDB Execution Plan
+
+wp0_result=PASS_FOR_WP1
+runtime_validation=NOT_YET_PERFORMED
