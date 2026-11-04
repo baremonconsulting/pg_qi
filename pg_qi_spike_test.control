@@ -1,0 +1,7 @@
+comment = 'Test-only Spike 1 interfaces for pg_qi'
+default_version = '0.0.1'
+module_pathname = '$libdir/pg_qi'
+relocatable = false
+schema = 'qi'
+requires = 'pg_qi'
+superuser = true

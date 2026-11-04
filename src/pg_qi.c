@@ -16,9 +16,11 @@
 #include "miscadmin.h"
 #include "pg_qi/planner_compat.h"
 #include "pg_qi/qi_delegation.h"
-#include "pg_qi/qi_diag.h"
 #include "pg_qi/qi_detector.h"
+#if PG_QI_TESTING
+#include "pg_qi/qi_diag.h"
 #include "pg_qi/qi_reenter.h"
+#endif
 #include "portability/instr_time.h"
 #include "storage/ipc.h"
 #include "utils/builtins.h"
@@ -30,13 +32,16 @@ PG_MODULE_MAGIC;
 
 static bool pg_qi_enabled = true;
 static bool pg_qi_preloaded = false;
+#if PG_QI_TESTING
 static bool pg_qi_last_plan_has_duckdb_scan = false;
 static bool pg_qi_previous_hook_present = false;
 static bool pg_qi_final_report_registered = false;
 static int pg_qi_benchmark_mode = QI_BENCH_NORMAL;
 static bool pg_qi_benchmark_collect = true;
+#endif
 static qi_planner_fn_type previous_planner_hook = NULL;
 
+#if PG_QI_TESTING
 static const struct config_enum_entry pg_qi_benchmark_options[] = {
     {"normal", QI_BENCH_NORMAL, false},
     {"bypass", QI_BENCH_BYPASS, false},
@@ -45,6 +50,7 @@ static const struct config_enum_entry pg_qi_benchmark_options[] = {
     {"delegate", QI_BENCH_DELEGATE, false},
     {NULL, 0, false}
 };
+#endif
 
 static inline PlannedStmt *
 pg_qi_call_downstream(Query *parse, const char *query_string,
@@ -68,6 +74,7 @@ void _PG_fini(void);
 
 PG_FUNCTION_INFO_V1(pg_qi_version);
 PG_FUNCTION_INFO_V1(pg_qi_is_preloaded);
+#if PG_QI_TESTING
 PG_FUNCTION_INFO_V1(qi_test_force_meta);
 PG_FUNCTION_INFO_V1(qi_test_force_save_roundtrip);
 PG_FUNCTION_INFO_V1(qi_test_detector_contract);
@@ -81,6 +88,7 @@ PG_FUNCTION_INFO_V1(qi_spike_reset_state);
 PG_FUNCTION_INFO_V1(qi_spike_state);
 PG_FUNCTION_INFO_V1(qi_spike_observer);
 PG_FUNCTION_INFO_V1(qi_test_active_control_guard);
+#endif
 
 QI_PLANNER_PROTO(pg_qi_planner)
 {
@@ -90,9 +98,9 @@ QI_PLANNER_PROTO(pg_qi_planner)
     int save_nestlevel;
     bool delegation_requested;
     uint64 generation = 0;
+#if PG_QI_TESTING
     instr_time started_at;
     instr_time finished_at;
-
     INSTR_TIME_SET_CURRENT(started_at);
 
     if (!pg_qi_final_report_registered && MyBackendType == B_BACKEND)
@@ -108,6 +116,7 @@ QI_PLANNER_PROTO(pg_qi_planner)
                                      , es
 #endif
                                      );
+#endif
 
     if (!pg_qi_enabled)
     {
@@ -120,6 +129,7 @@ QI_PLANNER_PROTO(pg_qi_planner)
         goto done;
     }
 
+#if PG_QI_TESTING
     if (pg_qi_benchmark_mode == QI_BENCH_BYPASS)
     {
         planned_stmt = pg_qi_call_downstream(parse, query_string,
@@ -130,20 +140,30 @@ QI_PLANNER_PROTO(pg_qi_planner)
                                               );
         goto done;
     }
+#endif
 
     /* Token consumption must precede every operation that can throw. */
+    delegation_requested = false;
+#if PG_QI_TESTING
     delegation_requested = pg_qi_benchmark_mode == QI_BENCH_DELEGATE;
     if (!delegation_requested)
         delegation_requested = qi_token_consume_top_level(&generation);
     qi_failpoint_hit(QI_FAILPOINT_BEFORE_PUSH);
+#endif
     save_nestlevel = NewGUCNestLevel();
     frame = qi_frame_push(save_nestlevel, qi_current_force_origin(),
-                          delegation_requested, qi_reenter_is_active(),
+                          delegation_requested,
+#if PG_QI_TESTING
+                          qi_reenter_is_active(),
+#else
+                          false,
+#endif
                           generation);
     frame_id = frame->frame_id;
 
     PG_TRY();
     {
+#if PG_QI_TESTING
         qi_failpoint_hit(QI_FAILPOINT_INSIDE_TRY_BEFORE_POLICY);
         if (pg_qi_benchmark_mode == QI_BENCH_SHADOW_SAVE)
             qi_set_force_execution(false);
@@ -161,6 +181,10 @@ QI_PLANNER_PROTO(pg_qi_planner)
         qi_maybe_reenter(parse, query_string, cursor_options, bound_params,
                          QI_CURRENT_EXPLAIN_STATE, delegation_requested);
         qi_failpoint_hit(QI_FAILPOINT_INSIDE_TRY_BEFORE_DOWNSTREAM);
+#else
+        if (frame->guc_changed)
+            qi_set_force_execution(frame->effective_origin != QI_FORCE_OFF);
+#endif
 
         planned_stmt = pg_qi_call_downstream(parse, query_string,
                                               cursor_options, bound_params
@@ -169,9 +193,11 @@ QI_PLANNER_PROTO(pg_qi_planner)
 #endif
                                               );
 
+#if PG_QI_TESTING
         pg_qi_last_plan_has_duckdb_scan =
             qi_plan_has_duckdb_scan((PlannedStmt *) planned_stmt);
         qi_record_completed_plan(pg_qi_last_plan_has_duckdb_scan);
+#endif
     }
     PG_CATCH();
     {
@@ -183,9 +209,11 @@ QI_PLANNER_PROTO(pg_qi_planner)
     AtEOXact_GUC(true, save_nestlevel);
     (void) qi_frame_pop(frame_id);
 done:
+#if PG_QI_TESTING
     INSTR_TIME_SET_CURRENT(finished_at);
     INSTR_TIME_SUBTRACT(finished_at, started_at);
     qi_record_planner_timing((uint64) INSTR_TIME_GET_MICROSEC(finished_at));
+#endif
     return (PlannedStmt *) planned_stmt;
 }
 
@@ -203,6 +231,7 @@ _PG_init(void)
                              NULL,
                              NULL);
 
+#if PG_QI_TESTING
     DefineCustomBoolVariable("pg_qi.spike_last_plan_has_duckdb_scan",
                              "Reports whether the last completed plan contained DuckDBScan.",
                              NULL,
@@ -233,6 +262,7 @@ _PG_init(void)
     qi_init_frame_diagnostics();
     qi_reenter_init_gucs();
     qi_diag_init_gucs();
+#endif
 
     /*
      * SQL-callable functions remain available when the library is loaded by
@@ -245,7 +275,9 @@ _PG_init(void)
     qi_preflight_force_execution();
     pg_qi_preloaded = true;
     previous_planner_hook = planner_hook;
+#if PG_QI_TESTING
     pg_qi_previous_hook_present = previous_planner_hook != NULL;
+#endif
     planner_hook = pg_qi_planner;
 }
 

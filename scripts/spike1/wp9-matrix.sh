@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
+export PG_QI_TESTING=1
 
 repo_dir=$(cd "$(dirname "$0")/../.." && pwd)
 install_root=${PG_INSTALL_ROOT:-/home/adam/.local/pgsql}
@@ -45,6 +46,7 @@ for major in $majors; do
     "${psql[@]}" -v ON_ERROR_STOP=1 >"$version_dir/setup.log" 2>&1 <<'SQL'
 CREATE EXTENSION pg_duckdb;
 CREATE EXTENSION pg_qi;
+CREATE EXTENSION pg_qi_spike_test;
 CREATE TABLE probe AS SELECT i, i % 10 AS v FROM generate_series(1, 1000000) g(i);
 CREATE TABLE runtime_zero(v integer);
 INSERT INTO runtime_zero VALUES (2),(1),(0);

@@ -12,7 +12,9 @@
 #include "miscadmin.h"
 #include "pg_qi/qi_delegation.h"
 #include "pg_qi/qi_detector.h"
+#if PG_QI_TESTING
 #include "pg_qi/qi_reenter.h"
+#endif
 #include "utils/builtins.h"
 #include "utils/guc.h"
 
@@ -30,6 +32,7 @@ typedef struct QiBackendState
 } QiBackendState;
 
 static QiBackendState qi_backend_state;
+#if PG_QI_TESTING
 static int qi_diag_armed_generation = 0;
 static int qi_diag_consumed_generation = 0;
 static bool qi_diag_token_armed = false;
@@ -37,9 +40,11 @@ static int qi_diag_last_force_origin = QI_FORCE_OFF;
 static int qi_diag_last_effective_origin = QI_FORCE_OFF;
 static bool qi_diag_last_delegation_requested = false;
 static bool qi_diag_last_guc_changed = false;
+#endif
 static bool qi_force_preflight_passed = false;
 static int qi_force_flags = 0;
 
+#if PG_QI_TESTING
 void
 qi_backend_final_report(int code, Datum arg)
 {
@@ -70,6 +75,7 @@ static const struct config_enum_entry qi_force_origin_options[] = {
     {"qi_stack", QI_FORCE_QI_STACK, false},
     {NULL, 0, false}
 };
+#endif
 
 #if PG_VERSION_NUM >= 170000
 static config_handle *qi_force_handle = NULL;
@@ -128,6 +134,7 @@ qi_state_try_push(QiBackendState *state, int guc_nest_level,
 
     state->depth++;
     state->counters.pushed++;
+#if PG_QI_TESTING
     if (state == &qi_backend_state)
     {
         qi_diag_last_force_origin = frame->force_origin;
@@ -135,6 +142,7 @@ qi_state_try_push(QiBackendState *state, int guc_nest_level,
         qi_diag_last_delegation_requested = frame->delegation_requested;
         qi_diag_last_guc_changed = frame->guc_changed;
     }
+#endif
     *result = frame;
     return true;
 }
@@ -167,6 +175,7 @@ qi_state_remove_top(QiBackendState *state, uint64 expected_frame_id,
     return true;
 }
 
+#if PG_QI_TESTING
 void
 qi_init_frame_diagnostics(void)
 {
@@ -245,6 +254,7 @@ qi_init_frame_diagnostics(void)
                              &qi_diag_last_guc_changed, false,
                              PGC_INTERNAL, 0, NULL, NULL, NULL);
 }
+#endif
 
 QiDelegationFrame *
 qi_frame_push(int guc_nest_level, QiForceOrigin ambient_origin,
@@ -290,6 +300,7 @@ qi_current_force_origin(void)
 bool
 qi_token_consume_top_level(uint64 *generation)
 {
+#if PG_QI_TESTING
     if (qi_backend_state.depth != 0 || qi_reenter_is_active() ||
         qi_backend_state.armed_generation ==
         qi_backend_state.consumed_generation)
@@ -303,8 +314,13 @@ qi_token_consume_top_level(uint64 *generation)
     qi_diag_token_armed = false;
     *generation = qi_backend_state.consumed_generation;
     return true;
+#else
+    *generation = 0;
+    return false;
+#endif
 }
 
+#if PG_QI_TESTING
 static void
 qi_token_require_idle(const char *operation)
 {
@@ -319,6 +335,7 @@ qi_token_controls_allowed(void)
 {
     return qi_backend_state.depth == 0 && !qi_reenter_is_active();
 }
+#endif
 
 void
 qi_record_nested_plan(bool has_duckdb_scan)
@@ -400,6 +417,7 @@ qi_set_force_execution(bool enabled)
                 (errmsg("could not set %s to %s", QI_FORCE_GUC, value)));
 }
 
+#if PG_QI_TESTING
 Datum
 qi_test_force_meta(PG_FUNCTION_ARGS)
 {
@@ -689,3 +707,4 @@ qi_test_active_control_guard(PG_FUNCTION_ARGS)
     PG_RETURN_BOOL(rejected && qi_backend_state.depth == 0 &&
                    !qi_backend_state.cleanup_broken);
 }
+#endif

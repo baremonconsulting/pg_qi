@@ -1,5 +1,6 @@
 CREATE EXTENSION pg_duckdb;
 CREATE EXTENSION pg_qi;
+CREATE EXTENSION pg_qi_spike_test;
 
 SELECT qi.version();
 SELECT qi.is_preloaded() IS NOT NULL AS reports_preload_state;
@@ -39,5 +40,6 @@ SHOW pg_qi.spike_last_plan_has_duckdb_scan;
 SET duckdb.force_execution = off;
 DROP TABLE spike_small;
 
+DROP EXTENSION pg_qi_spike_test;
 DROP EXTENSION pg_qi;
 DROP EXTENSION pg_duckdb;

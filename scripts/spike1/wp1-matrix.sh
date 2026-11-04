@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
+export PG_QI_TESTING=1
 
 repo_dir=$(cd "$(dirname "$0")/../.." && pwd)
 artifact_dir=${WP1_ARTIFACT_DIR:-"$repo_dir/artifacts/spike1/wp1"}
@@ -55,8 +56,10 @@ for major in 16 17 18; do
         --dbname=postgres --set=ON_ERROR_STOP=1 --tuples-only --no-align \
         >"$preload_log" <<'SQL'
 CREATE EXTENSION pg_qi;
+CREATE EXTENSION pg_qi_spike_test;
 SELECT qi.is_preloaded();
 SHOW pg_qi.enabled;
+DROP EXTENSION pg_qi_spike_test;
 DROP EXTENSION pg_qi;
 SQL
     if [ "$(sed -n '2p' "$preload_log")" != "t" ]; then

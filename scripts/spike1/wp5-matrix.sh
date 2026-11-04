@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
+export PG_QI_TESTING=1
 
 repo_dir=$(cd "$(dirname "$0")/../.." && pwd)
 install_root=${PG_INSTALL_ROOT:-/home/adam/.local/pgsql}
@@ -47,6 +48,7 @@ for major in 16 17 18; do
         >"$run_dir/pg$major/wp5-error.sql.log" 2>&1 <<'SQL'
 CREATE EXTENSION pg_duckdb;
 CREATE EXTENSION pg_qi;
+CREATE EXTENSION pg_qi_spike_test;
 SET duckdb.force_execution = off;
 SELECT 1 / 0;
 SELECT depth, cleanup_broken, unwound, accounting_valid
