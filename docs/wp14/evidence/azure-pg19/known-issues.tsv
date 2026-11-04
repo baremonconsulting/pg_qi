@@ -1,0 +1,6 @@
+issue	classifier_eligible	reason	reproduction
+1077	f	unsupported_join	NOT_REPRODUCED
+1078	f	unsupported_operator	NOT_REPRODUCED
+1069	f	unsupported_aggregate	REPRODUCED
+1098	f	unsupported_operator	REPRODUCED
+1096	f	unsupported_relation	REPRODUCED

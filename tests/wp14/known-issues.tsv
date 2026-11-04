@@ -1,0 +1,6 @@
+# issue|sql
+1077|SELECT count(*) FROM qi_issue_text a JOIN qi_issue_text b ON a.s = b.s
+1078|SELECT count(*) FROM qi_issue_text WHERE s ~ 'Product'
+1069|SELECT sum(dec), avg(dec), min(dec) FROM qi_issue_numeric
+1098|SELECT id / 7, CAST(id / 7 AS integer) FROM qi_gate_data WHERE id = 64
+1096|SELECT -0.0125 * t.x, -0.13857109526572012 * t.x, 0.13857109526572012 * t.x FROM (SELECT 1.0::float8 AS x) t

@@ -6,7 +6,7 @@ export PG_QI_TESTING=1
 repo_dir=$(cd "$(dirname "$0")/../.." && pwd)
 install_root=${PG_INSTALL_ROOT:-/home/adam/.local/pgsql}
 artifact_root=${WP9_ARTIFACT_DIR:-"$repo_dir/artifacts/spike1/wp9"}
-majors=${WP9_MAJORS:-"16 17 18"}
+majors=${WP9_MAJORS:-"16 17 18 19"}
 skip_build_install=${WP9_SKIP_BUILD_INSTALL:-0}
 mkdir -p "$artifact_root"
 results="$artifact_root/results.tsv"

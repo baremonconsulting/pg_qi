@@ -8,24 +8,30 @@ pgroot=${PG_ASSERT_ROOT:-/home/adam/.local/pgsql/17-assert}
 artifact_root=${WP10_ARTIFACT_DIR:-"$repo_dir/artifacts/spike1/wp10"}
 duration=${WP10_DURATION:-300}
 clients=${WP10_CLIENTS:-8}
+skip_build_install=${WP10_SKIP_BUILD_INSTALL:-0}
 mkdir -p "$artifact_root/socket"
 
 test "$duration" -eq 300
 test "$clients" -eq 8
 "$pgroot/bin/pg_config" --configure | grep -q -- --enable-cassert
 
-make -C "$repo_dir" PG_CONFIG="$pgroot/bin/pg_config" clean >/dev/null
-make -C "$repo_dir" PG_CONFIG="$pgroot/bin/pg_config" -j2 \
-    >"$artifact_root/build.log" 2>&1
-make -C "$repo_dir" PG_CONFIG="$pgroot/bin/pg_config" install \
-    >"$artifact_root/install.log" 2>&1
+if [ "$skip_build_install" != 1 ]; then
+    make -C "$repo_dir" PG_CONFIG="$pgroot/bin/pg_config" clean >/dev/null
+    make -C "$repo_dir" PG_CONFIG="$pgroot/bin/pg_config" -j2 \
+        >"$artifact_root/build.log" 2>&1
+    make -C "$repo_dir" PG_CONFIG="$pgroot/bin/pg_config" install \
+        >"$artifact_root/install.log" 2>&1
+fi
 
 data_dir="$artifact_root/data"
 socket_dir="$artifact_root/socket"
-case "$data_dir" in
-    "$repo_dir"/artifacts/spike1/*/data) ;;
-    *) echo "Refusing to replace unsafe data directory: $data_dir" >&2; exit 1 ;;
+case "$artifact_root" in
+    ''|'/'|'/tmp'|'/var/tmp')
+        echo "Refusing unsafe artifact directory: $artifact_root" >&2
+        exit 1
+        ;;
 esac
+test "$data_dir" = "$artifact_root/data"
 rm -rf "$data_dir"
 "$pgroot/bin/initdb" -D "$data_dir" --no-locale --encoding=UTF8 \
     >"$artifact_root/initdb.log" 2>&1

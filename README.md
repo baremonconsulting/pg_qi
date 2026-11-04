@@ -27,7 +27,7 @@
 The repository currently contains:
 
 - a PGXS buildable PostgreSQL extension;
-- planner-hook chaining compatible with PostgreSQL 16, 17 and 18;
+- planner-hook chaining compatible with PostgreSQL 16, 17, 18 and 19 RC1;
 - backend-local delegation frames with error-safe GUC restoration;
 - a validated temporary adapter for requesting `pg_duckdb` planning through
   `duckdb.force_execution`;
@@ -37,7 +37,7 @@ The repository currently contains:
 - an explicit test-only build containing Spike 1 controls, diagnostics,
   failpoints, re-entry simulation and benchmarks;
 - regression and S0–S11 integration tests;
-- CI builds and tests for PostgreSQL 16, 17 and 18.
+- CI builds and tests for PostgreSQL 16, 17, 18 and 19 RC1.
 
 Spike 1 demonstrated deterministic one-shot delegation in its test harness,
 including nested planning, errors, cached plans, concurrency and parallel
@@ -49,7 +49,7 @@ routing are not implemented yet. See the
 
 ## Requirements
 
-- PostgreSQL 16, 17 or 18 with server development headers;
+- PostgreSQL 16, 17, 18 or 19 RC1 with server development headers;
 - a C compiler and GNU Make;
 - PGXS, normally installed with the PostgreSQL server development package;
 - `pg_duckdb` for preload and runtime operation of the planner integration.
@@ -60,6 +60,11 @@ requires a real, resettable `duckdb.force_execution` GUC and therefore requires
 `pg_duckdb` commit `ee38d3b540ecea1d93683ba99bdcec5632a21eaf` and DuckDB
 `v1.5.4`; changes to that dependency require the integration matrix to be
 replayed.
+
+PostgreSQL 19 support is pinned to RC1 commit
+`0b8bff042a997fe50fcd1c4c83b9ef1cc9ed8a89` while the WP14.2 technical gate
+is in progress. The pin will be replayed before claiming support for the final
+PostgreSQL 19 release.
 
 ## Build
 

@@ -1,0 +1,47 @@
+name: Manual benchmark
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PG19_SHA: 0b8bff042a997fe50fcd1c4c83b9ef1cc9ed8a89
+  PG_DUCKDB_SHA: 8756099e267c47f0b86c24de4cf995327f1f4279
+  DUCKDB_SHA: d54cbbe3df17e8e5ce68312f483b4155836112aa
+  PG_DUCKDB_BUILD_MODE: source
+
+jobs:
+  benchmark:
+    name: Benchmark PG${{ matrix.postgresql }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgresql: ["16", "17", "18", "19"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL and dependencies
+        run: bash .github/scripts/ci-install-postgresql.sh "${{ matrix.postgresql }}"
+      - name: Build target pg_duckdb
+        run: bash .github/scripts/ci-build-pg-duckdb.sh "${{ matrix.postgresql }}"
+      - name: Build and install pg_qi
+        run: bash .github/scripts/ci-build-install-pg-qi.sh "${{ matrix.postgresql }}" "ci-artifacts/benchmark-pg${{ matrix.postgresql }}"
+      - name: Run WP11 benchmark
+        env:
+          PG_INSTALL_ROOT: /usr/lib/postgresql
+          WP11_MAJORS: ${{ matrix.postgresql }}
+          WP11_SKIP_BUILD_INSTALL: "1"
+          WP11_ARTIFACT_DIR: ${{ runner.temp }}/wp11-${{ matrix.postgresql }}
+        run: bash scripts/spike1/wp11-benchmark.sh
+      - name: Upload benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-pg${{ matrix.postgresql }}
+          path: |
+            ${{ runner.temp }}/wp11-${{ matrix.postgresql }}/results.csv
+            ${{ runner.temp }}/wp11-${{ matrix.postgresql }}/pg*/*.log
+            ${{ runner.temp }}/wp11-${{ matrix.postgresql }}/pg*/*/*.txt
+            ci-artifacts/benchmark-pg${{ matrix.postgresql }}

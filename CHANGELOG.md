@@ -22,6 +22,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   statements, plan invalidation, utility paths and parallel-worker isolation.
 - Concurrency smoke testing and a layer-separated benchmark harness.
 - A separate `pg_qi_spike_test` extension for test-only SQL interfaces.
+- PostgreSQL 19 RC1 source-build coverage in the compile, regression and
+  integration matrices.
+- A fail-closed Query-tree classifier prototype and a frozen differential
+  semantics corpus for the WP14.2 technical gate.
 
 ### Changed
 

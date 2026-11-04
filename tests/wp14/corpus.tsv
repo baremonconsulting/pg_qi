@@ -1,0 +1,16 @@
+# id|expected_eligible|ordered|sql
+filter_comparison|t|t|SELECT id FROM qi_gate_data WHERE id >= 195 ORDER BY id
+filter_null|t|t|SELECT id FROM qi_gate_data WHERE nullable_value IS NULL ORDER BY id
+filter_boolean|t|t|SELECT id FROM qi_gate_data WHERE (group_id = 1 OR group_id = 2) AND NOT id < 0 ORDER BY id
+group_by|t|t|SELECT group_id, count(*) FROM qi_gate_data GROUP BY group_id ORDER BY group_id
+count_int4|t|t|SELECT count(id) FROM qi_gate_data
+minmax_int4|t|t|SELECT min(id), max(id) FROM qi_gate_data
+minmax_int8|t|t|SELECT min(big_value), max(big_value) FROM qi_gate_data
+minmax_date|t|t|SELECT min(event_date), max(event_date) FROM qi_gate_data
+minmax_timestamp|t|t|SELECT min(event_time), max(event_time) FROM qi_gate_data
+empty_aggregates|t|t|SELECT count(id), min(event_date), max(event_time) FROM qi_gate_empty
+duplicates|t|t|SELECT group_id, count(*) FROM qi_gate_data GROUP BY group_id ORDER BY group_id
+order_limit|t|t|SELECT id, big_value FROM qi_gate_data ORDER BY big_value DESC LIMIT 7
+inner_join|t|t|SELECT d.id, j.payload FROM qi_gate_data d INNER JOIN qi_gate_join j ON d.id = j.id WHERE d.id < 5 ORDER BY d.id
+arithmetic_add|t|t|SELECT id + group_id FROM qi_gate_data WHERE id BETWEEN 1 AND 5 ORDER BY id
+arithmetic_multiply|t|t|SELECT id * group_id FROM qi_gate_data WHERE id BETWEEN 1 AND 5 ORDER BY id

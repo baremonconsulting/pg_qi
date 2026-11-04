@@ -4,7 +4,7 @@ set -euo pipefail
 
 major=${1:?PostgreSQL major version is required}
 artifact_dir=${2:-ci-artifacts/build-pg$major}
-pg_config="/usr/lib/postgresql/$major/bin/pg_config"
+pg_config=${PG_CONFIG:-"/usr/lib/postgresql/$major/bin/pg_config"}
 testing=${PG_QI_TESTING:-1}
 
 mkdir -p "$artifact_dir"

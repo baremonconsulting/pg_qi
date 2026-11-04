@@ -5,20 +5,15 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
-    inputs:
-      run_benchmark:
-        description: Run the non-blocking WP11 performance matrix
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: read
 
 env:
-  PG_DUCKDB_SHA: ee38d3b540ecea1d93683ba99bdcec5632a21eaf
-  DUCKDB_VERSION: v1.5.4
-  DUCKDB_ARCHIVE_SHA256: 838d98a85e697bab9935010c88a8c67d3312ccedcab4cb4a0ba01da65113bb70
+  PG19_SHA: 0b8bff042a997fe50fcd1c4c83b9ef1cc9ed8a89
+  PG_DUCKDB_SHA: 8756099e267c47f0b86c24de4cf995327f1f4279
+  DUCKDB_SHA: d54cbbe3df17e8e5ce68312f483b4155836112aa
+  PG_DUCKDB_BUILD_MODE: source
 
 jobs:
   compile:
@@ -27,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        postgresql: ["16", "17", "18"]
+        postgresql: ["16", "17", "18", "19"]
     steps:
       - uses: actions/checkout@v4
       - name: Install PostgreSQL headers
@@ -60,7 +55,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        postgresql: ["16", "17", "18"]
+        postgresql: ["16", "17", "18", "19"]
     steps:
       - uses: actions/checkout@v4
       - name: Install PostgreSQL and dependencies
@@ -106,7 +101,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        postgresql: ["16", "17", "18"]
+        postgresql: ["16", "17", "18", "19"]
     steps:
       - uses: actions/checkout@v4
       - name: Install PostgreSQL and dependencies
@@ -131,6 +126,93 @@ jobs:
             ${{ runner.temp }}/wp9-${{ matrix.postgresql }}/results.tsv
             ${{ runner.temp }}/wp9-${{ matrix.postgresql }}/pg*/*.log
             ci-artifacts/integration-pg${{ matrix.postgresql }}
+
+  baseline-integration:
+    name: Baseline S0-S11 PG${{ matrix.postgresql }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgresql: ["16", "17", "18"]
+    env:
+      PG_DUCKDB_SHA: ee38d3b540ecea1d93683ba99bdcec5632a21eaf
+      DUCKDB_SHA: 08e34c447bae34eaee3723cac61f2878b6bdf787
+      DUCKDB_VERSION: v1.5.4
+      DUCKDB_ARCHIVE_SHA256: 838d98a85e697bab9935010c88a8c67d3312ccedcab4cb4a0ba01da65113bb70
+      PG_DUCKDB_BUILD_MODE: prebuilt
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL and dependencies
+        run: bash .github/scripts/ci-install-postgresql.sh "${{ matrix.postgresql }}"
+      - name: Build baseline pg_duckdb
+        run: bash .github/scripts/ci-build-pg-duckdb.sh "${{ matrix.postgresql }}"
+      - name: Build and install pg_qi
+        run: bash .github/scripts/ci-build-install-pg-qi.sh "${{ matrix.postgresql }}" "ci-artifacts/baseline-pg${{ matrix.postgresql }}"
+      - name: Run baseline S0-S11
+        env:
+          PG_INSTALL_ROOT: /usr/lib/postgresql
+          WP9_MAJORS: ${{ matrix.postgresql }}
+          WP9_SKIP_BUILD_INSTALL: "1"
+          WP9_ARTIFACT_DIR: ${{ runner.temp }}/baseline-wp9-${{ matrix.postgresql }}
+        run: bash scripts/spike1/wp9-matrix.sh
+      - name: Upload baseline evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: baseline-s0-s11-pg${{ matrix.postgresql }}
+          path: |
+            ${{ runner.temp }}/baseline-wp9-${{ matrix.postgresql }}/results.tsv
+            ${{ runner.temp }}/baseline-wp9-${{ matrix.postgresql }}/pg*/*.log
+            ci-artifacts/baseline-pg${{ matrix.postgresql }}
+
+  differential:
+    name: Differential semantics PG${{ matrix.postgresql }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgresql: ["16", "19"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL and dependencies
+        run: bash .github/scripts/ci-install-postgresql.sh "${{ matrix.postgresql }}"
+      - name: Build target pg_duckdb
+        run: bash .github/scripts/ci-build-pg-duckdb.sh "${{ matrix.postgresql }}"
+      - name: Build and install pg_qi
+        run: bash .github/scripts/ci-build-install-pg-qi.sh "${{ matrix.postgresql }}" "ci-artifacts/differential-pg${{ matrix.postgresql }}"
+      - name: Run frozen corpus and known-issue exclusions
+        shell: bash
+        run: |
+          set -euo pipefail
+          major="${{ matrix.postgresql }}"
+          pgbin="/usr/lib/postgresql/$major/bin"
+          pgdata="${RUNNER_TEMP}/differential-data-$major"
+          pghost="${RUNNER_TEMP}/differential-socket-$major"
+          pglog="${RUNNER_TEMP}/differential-pg$major.log"
+          artifacts="${RUNNER_TEMP}/differential-pg$major"
+          mkdir -p "$pghost" "$artifacts"
+          "$pgbin/initdb" -D "$pgdata" --no-locale --encoding=UTF8 --no-sync
+          { echo "unix_socket_directories = '$pghost'"; echo "listen_addresses = ''"; echo "shared_preload_libraries = 'pg_duckdb,pg_qi'"; } >>"$pgdata/postgresql.conf"
+          "$pgbin/pg_ctl" -D "$pgdata" -l "$pglog" -w start
+          trap '"$pgbin/pg_ctl" -D "$pgdata" -m fast -w stop || true' EXIT
+          "$pgbin/psql" -X -v ON_ERROR_STOP=1 -h "$pghost" -d postgres <<'SQL'
+          CREATE EXTENSION pg_duckdb;
+          CREATE EXTENSION pg_qi;
+          CREATE EXTENSION pg_qi_spike_test;
+          SQL
+          PG_BIN="$pgbin" PGHOST="$pghost" WP14_ARTIFACT_DIR="$artifacts" bash scripts/wp14/run-differential.sh
+          PG_BIN="$pgbin" PGHOST="$pghost" WP14_ARTIFACT_DIR="$artifacts" bash scripts/wp14/run-known-issues.sh
+          cp "$pglog" "$artifacts/postgresql.log"
+          "$pgbin/pg_ctl" -D "$pgdata" -m fast -w stop
+          trap - EXIT
+      - name: Upload differential evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: differential-pg${{ matrix.postgresql }}
+          path: |
+            ${{ runner.temp }}/differential-pg${{ matrix.postgresql }}
+            ci-artifacts/differential-pg${{ matrix.postgresql }}
 
   reentrancy-focus:
     name: Reentrancy and failpoints PG17
@@ -159,6 +241,43 @@ jobs:
             ${{ runner.temp }}/reentrancy-*/results.tsv
             ${{ runner.temp }}/reentrancy-*/pg17/*.log
             ci-artifacts/reentrancy-pg17
+
+  concurrency-smoke:
+    name: Concurrency smoke PG17 assertions
+    runs-on: ubuntu-latest
+    env:
+      PG17_ASSERT_SHA: 083ac033419f690758508e08c1736089384bbee8
+      PG_ASSERT_ROOT: /opt/postgresql/17-assert
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: bash .github/scripts/ci-install-postgresql.sh 17
+      - name: Build PostgreSQL 17.11 with assertions
+        run: bash .github/scripts/ci-build-postgresql-assert.sh
+      - name: Build target pg_duckdb
+        env:
+          PG_CONFIG: /opt/postgresql/17-assert/bin/pg_config
+        run: bash .github/scripts/ci-build-pg-duckdb.sh 17
+      - name: Build and install pg_qi
+        env:
+          PG_CONFIG: /opt/postgresql/17-assert/bin/pg_config
+        run: bash .github/scripts/ci-build-install-pg-qi.sh 17 ci-artifacts/concurrency-pg17
+      - name: Run eight-client 300-second smoke
+        env:
+          PG_ASSERT_ROOT: /opt/postgresql/17-assert
+          WP10_SKIP_BUILD_INSTALL: "1"
+          WP10_DURATION: "300"
+          WP10_CLIENTS: "8"
+          WP10_ARTIFACT_DIR: ${{ runner.temp }}/wp10-pg17
+        run: bash scripts/spike1/wp10-concurrency-smoke.sh
+      - name: Upload concurrency evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: concurrency-smoke-pg17
+          path: |
+            ${{ runner.temp }}/wp10-pg17
+            ci-artifacts/concurrency-pg17
 
   parallel-isolation:
     name: Parallel worker isolation S11 PG17
@@ -189,38 +308,3 @@ jobs:
             ${{ runner.temp }}/parallel-s11/results.tsv
             ${{ runner.temp }}/parallel-s11/pg17/*.log
             ci-artifacts/parallel-pg17
-
-  benchmark:
-    name: Manual benchmark PG${{ matrix.postgresql }}
-    if: github.event_name == 'workflow_dispatch' && inputs.run_benchmark
-    continue-on-error: true
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        postgresql: ["16", "17", "18"]
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install PostgreSQL and dependencies
-        run: bash .github/scripts/ci-install-postgresql.sh "${{ matrix.postgresql }}"
-      - name: Build pinned pg_duckdb
-        run: bash .github/scripts/ci-build-pg-duckdb.sh "${{ matrix.postgresql }}"
-      - name: Build and install pg_qi
-        run: bash .github/scripts/ci-build-install-pg-qi.sh "${{ matrix.postgresql }}" "ci-artifacts/benchmark-pg${{ matrix.postgresql }}"
-      - name: Run non-blocking WP11 benchmark
-        env:
-          PG_INSTALL_ROOT: /usr/lib/postgresql
-          WP11_MAJORS: ${{ matrix.postgresql }}
-          WP11_SKIP_BUILD_INSTALL: "1"
-          WP11_ARTIFACT_DIR: ${{ runner.temp }}/wp11-${{ matrix.postgresql }}
-        run: bash scripts/spike1/wp11-benchmark.sh
-      - name: Upload benchmark evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: benchmark-pg${{ matrix.postgresql }}
-          path: |
-            ${{ runner.temp }}/wp11-${{ matrix.postgresql }}/results.csv
-            ${{ runner.temp }}/wp11-${{ matrix.postgresql }}/pg*/*.log
-            ${{ runner.temp }}/wp11-${{ matrix.postgresql }}/pg*/*/*.txt
-            ci-artifacts/benchmark-pg${{ matrix.postgresql }}
