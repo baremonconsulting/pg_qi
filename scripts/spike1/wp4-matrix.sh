@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
+export PG_QI_TESTING=1
 
 repo_dir=$(cd "$(dirname "$0")/../.." && pwd)
 install_root=${PG_INSTALL_ROOT:-/home/adam/.local/pgsql}

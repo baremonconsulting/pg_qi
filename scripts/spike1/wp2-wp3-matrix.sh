@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
+export PG_QI_TESTING=1
 
 repo_dir=$(cd "$(dirname "$0")/../.." && pwd)
 artifact_root=${WP23_ARTIFACT_DIR:-"$repo_dir/artifacts/spike1/wp2-wp3"}
@@ -63,6 +64,7 @@ for major in 16 17 18; do
         >"$version_dir/positive.sql.log" 2>&1 <<'SQL'
 CREATE EXTENSION pg_duckdb;
 CREATE EXTENSION pg_qi;
+CREATE EXTENSION pg_qi_spike_test;
 SELECT preflight_passed,
        handle_present IS NULL,
        COALESCE(handle_present, false),

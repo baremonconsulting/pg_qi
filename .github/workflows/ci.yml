@@ -32,13 +32,21 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install PostgreSQL headers
         run: bash .github/scripts/ci-install-postgresql.sh "${{ matrix.postgresql }}"
-      - name: Compile
+      - name: Compile production and test variants
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "ci-artifacts/compile-pg${{ matrix.postgresql }}"
-          make PG_CONFIG="/usr/lib/postgresql/${{ matrix.postgresql }}/bin/pg_config" clean >"ci-artifacts/compile-pg${{ matrix.postgresql }}/clean.log" 2>&1
-          make PG_CONFIG="/usr/lib/postgresql/${{ matrix.postgresql }}/bin/pg_config" -j2 >"ci-artifacts/compile-pg${{ matrix.postgresql }}/build.log" 2>&1
+          pgconfig="/usr/lib/postgresql/${{ matrix.postgresql }}/bin/pg_config"
+          make PG_CONFIG="$pgconfig" clean >"ci-artifacts/compile-pg${{ matrix.postgresql }}/production-clean.log" 2>&1
+          make PG_CONFIG="$pgconfig" -j2 >"ci-artifacts/compile-pg${{ matrix.postgresql }}/production-build.log" 2>&1
+          if strings pg_qi.so | grep -Eq 'pg_qi\.spike_|qi_spike_|qi_test_|PG_QI_FINAL'; then
+            echo "test-only surface leaked into production library" >&2
+            exit 1
+          fi
+          make PG_CONFIG="$pgconfig" clean >"ci-artifacts/compile-pg${{ matrix.postgresql }}/test-clean.log" 2>&1
+          make PG_CONFIG="$pgconfig" PG_QI_TESTING=1 -j2 >"ci-artifacts/compile-pg${{ matrix.postgresql }}/test-build.log" 2>&1
+          test -f pg_qi.so
       - name: Upload compile logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -75,7 +83,7 @@ jobs:
           { echo "unix_socket_directories = '$pghost'"; echo "listen_addresses = ''"; echo "shared_preload_libraries = 'pg_duckdb,pg_qi'"; } >>"$pgdata/postgresql.conf"
           "$pgbin/pg_ctl" -D "$pgdata" -l "$pglog" -w start
           trap '"$pgbin/pg_ctl" -D "$pgdata" -m fast -w stop || true' EXIT
-          PGHOST="$pghost" PGUSER="$USER" make PG_CONFIG="$pgbin/pg_config" installcheck
+          PGHOST="$pghost" PGUSER="$USER" make PG_CONFIG="$pgbin/pg_config" PG_QI_TESTING=1 installcheck
           "$pgbin/pg_ctl" -D "$pgdata" -m fast -w stop
           trap - EXIT
       - name: Collect regression diagnostics

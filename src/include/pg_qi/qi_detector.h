@@ -14,6 +14,8 @@
 #define QI_DUCKDB_SCAN_PROVIDER "DuckDBScan"
 
 extern bool qi_plan_has_duckdb_scan(const PlannedStmt *planned_stmt);
+#if PG_QI_TESTING
 extern PGDLLEXPORT Datum qi_test_detector_contract(PG_FUNCTION_ARGS);
+#endif
 
 #endif /* PG_QI_QI_DETECTOR_H */

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
+export PG_QI_TESTING=1
 
 repo_dir=$(cd "$(dirname "$0")/../.." && pwd)
 pgroot=${PG_ASSERT_ROOT:-/home/adam/.local/pgsql/17-assert}
@@ -45,6 +46,7 @@ trap cleanup EXIT
     >"$artifact_root/setup.log" 2>&1 <<'SQL'
 CREATE EXTENSION pg_duckdb;
 CREATE EXTENSION pg_qi;
+CREATE EXTENSION pg_qi_spike_test;
 CREATE TABLE wp10_probe AS
   SELECT i, i % 10 AS v FROM generate_series(1, 100000) AS g(i);
 ANALYZE wp10_probe;

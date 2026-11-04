@@ -78,6 +78,7 @@ qi_plan_has_duckdb_scan(const PlannedStmt *planned_stmt)
            qi_visit_plan_list(planned_stmt->subplans);
 }
 
+#if PG_QI_TESTING
 Datum
 qi_test_detector_contract(PG_FUNCTION_ARGS)
 {
@@ -137,3 +138,4 @@ qi_test_detector_contract(PG_FUNCTION_ARGS)
 
     PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tuple_desc, values, nulls)));
 }
+#endif

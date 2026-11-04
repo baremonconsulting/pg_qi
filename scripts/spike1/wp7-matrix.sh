@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
+export PG_QI_TESTING=1
 
 repo_dir=$(cd "$(dirname "$0")/../.." && pwd)
 install_root=${PG_INSTALL_ROOT:-/home/adam/.local/pgsql}
@@ -47,6 +48,7 @@ for major in 16 17 18; do
         >"$run_dir/pg$major/wp7-setup.sql.log" 2>&1 <<'SQL'
 CREATE EXTENSION pg_duckdb;
 CREATE EXTENSION pg_qi;
+CREATE EXTENSION pg_qi_spike_test;
 CREATE TABLE reentry_probe(id integer PRIMARY KEY, v integer);
 INSERT INTO reentry_probe SELECT i, i * 10 FROM generate_series(1, 100) g(i);
 SQL
