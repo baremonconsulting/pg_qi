@@ -19,14 +19,14 @@ AS '$libdir/pg_qi_outer_test', 'pg_qi_outer_test_restore_order'
 LANGUAGE C;
 SET pg_qi.routing_mode = allowlist;
 SET pg_qi_outer_test.reenter_once = on;
-SELECT id FROM ONLY outer_test_plain WHERE id = 1;
+SELECT id FROM outer_test_plain WHERE id = 1;
 SHOW pg_qi.shadow_reason;
 SHOW pg_qi.shadow_verification;
 SHOW pg_qi_outer_test.inner_force_seen;
 SHOW duckdb.force_execution;
 SET pg_qi_outer_test.reenter_once = off;
 SELECT pg_qi_outer_test_become_outer();
-SELECT id FROM ONLY outer_test_plain WHERE id = 2;
+SELECT id FROM outer_test_plain WHERE id = 2;
 SHOW pg_qi.shadow_reason;
 SHOW pg_qi.shadow_request_applied;
 SHOW duckdb.force_execution;
