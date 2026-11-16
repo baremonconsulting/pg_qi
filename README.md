@@ -42,8 +42,9 @@ The repository currently contains:
 Spike 1 demonstrated deterministic one-shot delegation in its test harness,
 including nested planning, errors, cached plans, concurrency and parallel
 workers. The default production build deliberately exposes none of those test
-controls. Query classification, telemetry, policy management and automatic
-routing are not implemented yet. See the
+controls. Production classifier integration, telemetry, policy management and
+automatic routing are not implemented yet. A fail-closed classifier prototype
+exists for the WP14.2 test gate but is not called by the production hook. See the
 [Spike 1 report](docs/spike1/spike-1-report.md) and
 [WP14 production/test boundary](docs/phase2/WP14-production-test-boundary.md).
 
@@ -56,10 +57,11 @@ routing are not implemented yet. See the
 
 `pg_duckdb` is not a compile-time dependency. The current runtime adapter
 requires a real, resettable `duckdb.force_execution` GUC and therefore requires
-`pg_duckdb` to be loaded before `pg_qi`. Spike 1 and CI are pinned to
-`pg_duckdb` commit `ee38d3b540ecea1d93683ba99bdcec5632a21eaf` and DuckDB
-`v1.5.4`; changes to that dependency require the integration matrix to be
-replayed.
+`pg_duckdb` to be loaded before `pg_qi`. The current target CI matrix pins
+`pg_duckdb` commit `8756099e267c47f0b86c24de4cf995327f1f4279`; a separate
+PostgreSQL 16–18 baseline matrix retains the original Spike 1 pin
+`ee38d3b540ecea1d93683ba99bdcec5632a21eaf` with DuckDB `v1.5.4`.
+Dependency changes require the integration matrix to be replayed.
 
 PostgreSQL 19 support is pinned to RC2 commit
 `dffcca2e3c81178c64d4c1f44543a3507d0b7508`. The pin will be replayed before
@@ -123,7 +125,10 @@ The test build additionally installs `pg_qi_spike_test`. Test databases create
 `pg_qi` first and then `pg_qi_spike_test`; this secondary extension is not part
 of the default production installation.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and [docs/architecture.md](docs/architecture.md) for the initial architecture.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines,
+[docs/architecture.md](docs/architecture.md) for the current architecture and
+the [production decision contract](docs/production-decision-contract.md) for
+the next routing stage.
 
 ## Editions
 

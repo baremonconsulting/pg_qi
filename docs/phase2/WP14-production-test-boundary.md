@@ -48,6 +48,7 @@ enables benchmark modes, or emits `PG_QI_FINAL` evidence.
 
 ## Verification
 
-CI compiles both variants with `-Werror` on PostgreSQL 16, 17 and 18. It also
+CI compiles both variants with `-Werror` on PostgreSQL 16, 17, 18 and the
+pinned PostgreSQL 19 RC2 source build. It also
 scans the production library for test-only names and runs the existing
 regression and S0-S11 suites against the explicit test build.

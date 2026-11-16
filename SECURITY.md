@@ -21,3 +21,15 @@ Include, where possible:
 - whether the issue can crash a backend, corrupt memory, bypass policy or expose data.
 
 Do not include production credentials, customer SQL text or customer data.
+
+## Current safety boundary
+
+The production build does not classify or automatically route queries. The
+classifier and plan detector currently support test evidence only. See the
+[architecture](docs/architecture.md) and
+[production decision contract](docs/production-decision-contract.md) for the
+implemented boundary and the controls required before routing can be enabled.
+
+Reports about planner-hook ordering, GUC restoration, fail-closed
+classification, plan-provider verification or leakage of test-only controls
+are security-relevant and should use the private reporting channel above.
