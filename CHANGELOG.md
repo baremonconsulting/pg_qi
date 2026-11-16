@@ -26,6 +26,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   integration matrices.
 - A fail-closed Query-tree classifier prototype and a frozen differential
   semantics corpus for the WP14.2 technical gate.
+- Current architecture and safety-boundary documentation, plus the normative
+  production decision contract for the next routing stage.
 
 ### Changed
 

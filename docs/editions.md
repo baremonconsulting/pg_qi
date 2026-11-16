@@ -29,13 +29,13 @@ The complete single-instance router will be open source in this repository, incl
 |---|---|
 | Planner-hook integration and `pg_duckdb` delegation adapter | Implemented and validated by Spike 1; the production build does not initiate delegation yet |
 | Off switch (`pg_qi.enabled`) | Implemented; when disabled, the planner hook passes straight through |
-| Query classification | Planned |
+| Query classification | Fail-closed prototype validated in test builds; production decision integration planned |
 | Routing rules and eligibility policy | Planned |
 | Admission control | Planned |
 | Execution watchdog | Planned |
 | Quarantine | Planned |
 | Manual whitelist and blacklist | Planned |
-| Explain reason codes | Planned |
+| Explain reason codes | Prototype classifier names exist; versioned production contract and public interface planned |
 | Local decision telemetry | Planned |
 
 Once these components exist, everything needed to operate one instance safely will live in this repository.
