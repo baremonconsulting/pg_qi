@@ -13,7 +13,7 @@ SET ROLE shadow_unprivileged;
 SET pg_qi.routing_mode = allowlist;
 RESET ROLE;
 DROP ROLE shadow_unprivileged;
-SELECT id FROM ONLY shadow_plain WHERE id = 1;
+SELECT id FROM shadow_plain WHERE id = 1;
 SHOW pg_qi.shadow_policy_intent;
 SHOW pg_qi.shadow_reason;
 SHOW pg_qi.shadow_context;
@@ -25,7 +25,7 @@ SHOW pg_qi.shadow_verification;
 SHOW pg_qi.shadow_request_applied;
 
 SET pg_qi.routing_mode = allowlist;
-SELECT id FROM ONLY shadow_plain WHERE id = 1;
+SELECT id FROM shadow_plain WHERE id = 1;
 SHOW pg_qi.shadow_policy_intent;
 SHOW pg_qi.shadow_reason;
 SHOW pg_qi.shadow_force_origin;
@@ -34,9 +34,9 @@ SHOW pg_qi.shadow_verification;
 SHOW pg_qi.shadow_request_applied;
 SHOW duckdb.force_execution;
 
-SELECT id FROM ONLY shadow_plain WHERE id = 1 AND (1 / 0) = 0;
+SELECT id FROM shadow_plain WHERE id = 1 AND (1 / 0) = 0;
 SHOW duckdb.force_execution;
-SELECT id FROM ONLY shadow_plain WHERE id = 2;
+SELECT id FROM shadow_plain WHERE id = 2;
 SHOW pg_qi.shadow_reason;
 SHOW pg_qi.shadow_verification;
 SET pg_qi.routing_mode = off;
@@ -52,27 +52,27 @@ SELECT shadow_spi();
 SHOW pg_qi.shadow_context;
 SHOW pg_qi.shadow_reason;
 SHOW pg_qi.shadow_request_applied;
-EXPLAIN SELECT id FROM ONLY shadow_plain WHERE id = 1;
+EXPLAIN SELECT id FROM shadow_plain WHERE id = 1;
 SHOW pg_qi.shadow_context;
 SHOW pg_qi.shadow_reason;
 DROP FUNCTION shadow_spi();
 
-SELECT count(*) FROM ONLY shadow_plain;
+SELECT count(*) FROM shadow_plain;
 SHOW pg_qi.shadow_reason;
 SHOW pg_qi.shadow_classifier_reason;
 
 SELECT 1 HAVING true;
 SHOW pg_qi.shadow_classifier_reason;
 
-SELECT id FROM ONLY shadow_plain ORDER BY id;
+SELECT id FROM shadow_plain ORDER BY id;
 SHOW pg_qi.shadow_classifier_reason;
 
-SELECT EXISTS (SELECT 1 FROM ONLY shadow_plain WHERE id = 1);
+SELECT EXISTS (SELECT 1 FROM shadow_plain WHERE id = 1);
 SHOW pg_qi.shadow_classifier_reason;
 
 SET pg_qi.routing_mode = allowlist;
 PREPARE shadow_parameter(integer) AS
-    SELECT id FROM ONLY shadow_plain WHERE id = $1;
+    SELECT id FROM shadow_plain WHERE id = $1;
 EXECUTE shadow_parameter(1);
 EXECUTE shadow_parameter(2);
 EXECUTE shadow_parameter(1);
@@ -95,15 +95,15 @@ SHOW pg_qi.shadow_classifier_reason;
 DROP TABLE shadow_child;
 
 ALTER TABLE shadow_plain ENABLE ROW LEVEL SECURITY;
-SELECT id FROM ONLY shadow_plain WHERE id = 1;
+SELECT id FROM shadow_plain WHERE id = 1;
 SHOW pg_qi.shadow_classifier_reason;
 ALTER TABLE shadow_plain DISABLE ROW LEVEL SECURITY;
 
-SELECT id FROM ONLY shadow_plain TABLESAMPLE SYSTEM (100);
+SELECT id FROM shadow_plain TABLESAMPLE SYSTEM (100);
 SHOW pg_qi.shadow_classifier_reason;
 
 SET pg_qi.enabled = off;
-SELECT id FROM ONLY shadow_plain WHERE id = 1;
+SELECT id FROM shadow_plain WHERE id = 1;
 SHOW pg_qi.shadow_reason;
 SHOW pg_qi.shadow_classifier_status;
 SET pg_qi.enabled = on;
@@ -123,13 +123,13 @@ SHOW duckdb.force_execution;
 SET duckdb.force_execution = off;
 SET pg_qi.routing_mode = off;
 
-SELECT id FROM ONLY shadow_plain WHERE id = 1;
+SELECT id FROM shadow_plain WHERE id = 1;
 SHOW pg_qi.shadow_reason;
 SHOW pg_qi.shadow_decision_id;
 SELECT 1 / 0;
 SHOW pg_qi.shadow_reason;
 SHOW pg_qi.shadow_decision_id;
-SELECT id FROM ONLY shadow_plain WHERE id = 2;
+SELECT id FROM shadow_plain WHERE id = 2;
 SHOW pg_qi.shadow_context;
 
 SET pg_qi.shadow_reason = 'policy_missing';
