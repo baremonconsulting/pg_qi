@@ -3,7 +3,7 @@
 set -euo pipefail
 
 major=${1:?PostgreSQL major version is required}
-pg19_sha=${PG19_SHA:-0b8bff042a997fe50fcd1c4c83b9ef1cc9ed8a89}
+pg19_sha=${PG19_SHA:-dffcca2e3c81178c64d4c1f44543a3507d0b7508}
 
 sudo apt-get update
 sudo apt-get install --yes --no-install-recommends \
@@ -36,7 +36,7 @@ if [ "$major" = 19 ]; then
         sudo make install
     )
     test "$(/usr/lib/postgresql/19/bin/pg_config --version)" = \
-        "PostgreSQL 19rc1"
+        "PostgreSQL 19rc2"
 else
     sudo apt-get install --yes --no-install-recommends \
         "postgresql-$major" "postgresql-server-dev-$major"
