@@ -50,7 +50,7 @@ jobs:
           path: ci-artifacts/compile-pg${{ matrix.postgresql }}
 
   production-shadow:
-    name: Production shadow PG${{ matrix.postgresql }}
+    name: Production routing PG${{ matrix.postgresql }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -66,6 +66,14 @@ jobs:
         env:
           PG_QI_TESTING: "0"
         run: bash .github/scripts/ci-build-install-pg-qi.sh "${{ matrix.postgresql }}" "ci-artifacts/production-shadow-pg${{ matrix.postgresql }}"
+      - name: Build production hook-chain fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          pgconfig="/usr/lib/postgresql/${{ matrix.postgresql }}/bin/pg_config"
+          make -C tests/outer_hook PG_CONFIG="$pgconfig" clean
+          make -C tests/outer_hook PG_CONFIG="$pgconfig" -j2
+          sudo make -C tests/outer_hook PG_CONFIG="$pgconfig" install
       - name: Verify production artifact boundary
         shell: bash
         run: |
@@ -74,11 +82,7 @@ jobs:
             echo "test-only surface leaked into production library" >&2
             exit 1
           fi
-          if objdump -dr src/pg_qi.o | grep -q 'qi_set_force_execution'; then
-            echo "production planner hook references force setter" >&2
-            exit 1
-          fi
-      - name: Run production shadow regression
+      - name: Run production routing regression
         shell: bash
         run: |
           set -euo pipefail
@@ -89,10 +93,11 @@ jobs:
           pglog="${RUNNER_TEMP}/production-shadow-pg$major.log"
           mkdir -p "$pghost"
           "$pgbin/initdb" -D "$pgdata" --no-locale --encoding=UTF8 --no-sync
-          { echo "unix_socket_directories = '$pghost'"; echo "listen_addresses = ''"; echo "shared_preload_libraries = 'pg_duckdb,pg_qi'"; } >>"$pgdata/postgresql.conf"
+          { echo "unix_socket_directories = '$pghost'"; echo "listen_addresses = ''"; echo "shared_preload_libraries = 'pg_duckdb,pg_qi_outer_test,pg_qi'"; } >>"$pgdata/postgresql.conf"
           "$pgbin/pg_ctl" -D "$pgdata" -l "$pglog" -w start
           trap '"$pgbin/pg_ctl" -D "$pgdata" -m fast -w stop || true' EXIT
           PGHOST="$pghost" PGUSER="$USER" make PG_CONFIG="$pgbin/pg_config" PG_QI_TESTING=0 installcheck
+          PGHOST="$pghost" PGUSER="$USER" bash tests/outer_hook/verify.sh "$major"
           "$pgbin/pg_ctl" -D "$pgdata" -m fast -w stop
           trap - EXIT
       - name: Collect production shadow diagnostics

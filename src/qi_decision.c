@@ -24,7 +24,8 @@ static int qi_shadow_observation = QI_SHADOW_OBSERVATION_NONE;
 static bool qi_shadow_request_applied = false;
 
 static const struct config_enum_entry qi_policy_intent_options[] = {
-    {"pass_through", 0, false},
+    {"pass_through", QI_POLICY_PASS_THROUGH, false},
+    {"request_delegation", QI_POLICY_REQUEST_DELEGATION, false},
     {NULL, 0, false}
 };
 
@@ -35,6 +36,11 @@ static const struct config_enum_entry qi_shadow_reason_options[] = {
     {"force_external", QI_SHADOW_FORCE_EXTERNAL, false},
     {"classifier_rejected", QI_SHADOW_CLASSIFIER_REJECTED_REASON, false},
     {"policy_missing", QI_SHADOW_POLICY_MISSING, false},
+    {"context_unproved", QI_SHADOW_CONTEXT_UNPROVED_REASON, false},
+    {"state_poisoned", QI_SHADOW_STATE_POISONED, false},
+    {"delegation_requested", QI_SHADOW_DELEGATION_REQUESTED, false},
+    {"delegation_declined", QI_SHADOW_DELEGATION_DECLINED, false},
+    {"delegation_verified", QI_SHADOW_DELEGATION_VERIFIED, false},
     {NULL, 0, false}
 };
 
@@ -52,13 +58,15 @@ static const struct config_enum_entry qi_engine_options[] = {
 };
 
 static const struct config_enum_entry qi_verification_options[] = {
-    {"unverified", 0, false},
+    {"unverified", QI_VERIFICATION_UNVERIFIED, false},
+    {"verified", QI_VERIFICATION_VERIFIED, false},
     {NULL, 0, false}
 };
 
 static const struct config_enum_entry qi_context_options[] = {
     {"unproved_outermost", QI_SHADOW_CONTEXT_UNPROVED_OUTERMOST, false},
     {"nested", QI_SHADOW_CONTEXT_NESTED, false},
+    {"proven_client", QI_SHADOW_CONTEXT_PROVEN_CLIENT, false},
     {NULL, 0, false}
 };
 
@@ -152,22 +160,24 @@ qi_shadow_init_gucs(void)
 }
 
 void
-qi_shadow_publish(QiShadowContext context, QiForceOrigin force_origin,
+qi_shadow_publish(QiShadowContext context, QiPolicyIntent policy_intent,
+                  QiForceOrigin force_origin,
                   QiShadowClassifierStatus classifier_status,
                   QiEligibilityResult eligibility, QiShadowReason reason,
                   QiShadowEngine observed_engine,
-                  QiShadowObservation observation)
+                  QiVerification verification,
+                  QiShadowObservation observation, bool request_applied)
 {
     if (qi_shadow_decision_id < INT_MAX)
         qi_shadow_decision_id++;
-    qi_shadow_policy_intent = 0;
+    qi_shadow_policy_intent = policy_intent;
     qi_shadow_reason = reason;
     qi_shadow_force_origin = force_origin;
     qi_shadow_observed_engine = observed_engine;
-    qi_shadow_verification = 0;
+    qi_shadow_verification = verification;
     qi_shadow_context = context;
     qi_shadow_classifier_status = classifier_status;
     qi_shadow_classifier_reason = eligibility.reason;
     qi_shadow_observation = observation;
-    qi_shadow_request_applied = false;
+    qi_shadow_request_applied = request_applied;
 }

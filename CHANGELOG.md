@@ -34,6 +34,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   sampling, inheritance, parameters, grouping, ordering, aggregates, casts
   and functions with deny-by-default outcomes.
 - Production-artifact shadow regression jobs for PostgreSQL 16–19 RC2.
+- An experimental `pg_qi.routing_mode = allowlist` policy, disabled by
+  default and restricted to superusers.
+- Production context tracking for executor, utility, nested and outer-hook
+  isolation, with authoritative positive DuckDB verification.
+- A CI-only planner-hook fixture that verifies nested force masking and later
+  outer-hook rejection on every supported PostgreSQL major.
 
 ### Changed
 
@@ -48,9 +54,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - CI now compiles both production and test variants, rejects test-surface
   leakage from the production library and runs regression plus S0–S11 matrices
   across all supported PostgreSQL versions.
-- The production planner hook now records shadow-only decisions and returned
-  plan evidence while remaining structurally pass-through. It does not call
-  the force-execution setter or request delegation.
+- The production planner hook can make a scoped delegation request only when
+  explicit local policy and every fail-closed gate allow it. Default behavior
+  remains observational pass-through.
 
 ### Security
 
@@ -59,7 +65,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Known limitations
 
-- The production build does not yet implement classification, telemetry,
-  policy management or automatic routing.
+- Routing is pre-alpha, default-off and limited to a narrow static allow-list;
+  external policy management and telemetry export are not implemented.
 - Runtime preload currently requires `pg_duckdb` to provide a real, resettable
   `duckdb.force_execution` GUC before `pg_qi` is initialised.

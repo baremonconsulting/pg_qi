@@ -1,5 +1,9 @@
 # PGQI-4A: production shadow decision engine
 
+> This document records the completed PGQI-4A boundary. PGQI-4B subsequently
+> adds a default-off controlled routing path; see
+> [PGQI-4B](PGQI-4B-controlled-routing.md).
+
 ## Outcome
 
 PGQI-4A adds an observational production path without enabling routing. For

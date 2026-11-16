@@ -24,11 +24,17 @@ Do not include production credentials, customer SQL text or customer data.
 
 ## Current safety boundary
 
-The production build classifies only for a backend-local shadow record and
-does not automatically route queries. Shadow output contains finite status
-codes only: it retains no SQL text, values, parameters, relation names or plan
-pointers. The returned-plan observation is not presented as final-engine
-verification. See the
+The production build keeps routing disabled by default. Its experimental
+`allowlist` mode is `SUSET` and may request delegation only for the narrow
+positive classifier subset in a proven client planning context. Owned force is
+scoped by a backend-local frame and restored on success or error; nested work
+masks parent-owned force. A later outer hook, executor/utility context,
+poisoned state, external force or unknown semantic prevents policy routing.
+
+Decision output contains finite status codes only: it retains no SQL text,
+values, parameters, relation names or plan pointers. Only a positive
+`DuckDBScan` at the proven final planner boundary is marked verified. A
+negative match is never presented as verified PostgreSQL. See the
 [architecture](docs/architecture.md) and
 [production decision contract](docs/production-decision-contract.md) for the
 implemented boundary and the controls required before routing can be enabled.
