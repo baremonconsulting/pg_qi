@@ -49,6 +49,66 @@ jobs:
           name: compile-pg${{ matrix.postgresql }}
           path: ci-artifacts/compile-pg${{ matrix.postgresql }}
 
+  production-shadow:
+    name: Production shadow PG${{ matrix.postgresql }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgresql: ["16", "17", "18", "19"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL and dependencies
+        run: bash .github/scripts/ci-install-postgresql.sh "${{ matrix.postgresql }}"
+      - name: Build pinned pg_duckdb
+        run: bash .github/scripts/ci-build-pg-duckdb.sh "${{ matrix.postgresql }}"
+      - name: Build and install production pg_qi
+        env:
+          PG_QI_TESTING: "0"
+        run: bash .github/scripts/ci-build-install-pg-qi.sh "${{ matrix.postgresql }}" "ci-artifacts/production-shadow-pg${{ matrix.postgresql }}"
+      - name: Verify production artifact boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          if strings pg_qi.so | grep -Eq 'pg_qi\.spike_|pg_qi\.test_|qi_spike_|qi_test_|PG_QI_FINAL'; then
+            echo "test-only surface leaked into production library" >&2
+            exit 1
+          fi
+          if objdump -dr src/pg_qi.o | grep -q 'qi_set_force_execution'; then
+            echo "production planner hook references force setter" >&2
+            exit 1
+          fi
+      - name: Run production shadow regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          major="${{ matrix.postgresql }}"
+          pgbin="/usr/lib/postgresql/$major/bin"
+          pgdata="${RUNNER_TEMP}/production-shadow-data-$major"
+          pghost="${RUNNER_TEMP}/production-shadow-socket-$major"
+          pglog="${RUNNER_TEMP}/production-shadow-pg$major.log"
+          mkdir -p "$pghost"
+          "$pgbin/initdb" -D "$pgdata" --no-locale --encoding=UTF8 --no-sync
+          { echo "unix_socket_directories = '$pghost'"; echo "listen_addresses = ''"; echo "shared_preload_libraries = 'pg_duckdb,pg_qi'"; } >>"$pgdata/postgresql.conf"
+          "$pgbin/pg_ctl" -D "$pgdata" -l "$pglog" -w start
+          trap '"$pgbin/pg_ctl" -D "$pgdata" -m fast -w stop || true' EXIT
+          PGHOST="$pghost" PGUSER="$USER" make PG_CONFIG="$pgbin/pg_config" PG_QI_TESTING=0 installcheck
+          "$pgbin/pg_ctl" -D "$pgdata" -m fast -w stop
+          trap - EXIT
+      - name: Collect production shadow diagnostics
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p "ci-artifacts/production-shadow-pg${{ matrix.postgresql }}/diagnostics"
+          cp regression.diffs regression.out "ci-artifacts/production-shadow-pg${{ matrix.postgresql }}/diagnostics/" 2>/dev/null || true
+          cp "${RUNNER_TEMP}/production-shadow-pg${{ matrix.postgresql }}.log" "ci-artifacts/production-shadow-pg${{ matrix.postgresql }}/diagnostics/postgresql.log" 2>/dev/null || true
+      - name: Upload production shadow evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-shadow-pg${{ matrix.postgresql }}
+          path: ci-artifacts/production-shadow-pg${{ matrix.postgresql }}
+
   regression:
     name: Regression PG${{ matrix.postgresql }}
     runs-on: ubuntu-latest

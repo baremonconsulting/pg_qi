@@ -28,9 +28,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   semantics corpus for the WP14.2 technical gate.
 - Current architecture and safety-boundary documentation, plus the normative
   production decision contract for the next routing stage.
+- A production-built, backend-local PGQI-4A shadow decision record exposed by
+  read-only `pg_qi.shadow_*` settings.
+- A conservative shadow eligibility classifier covering security context,
+  sampling, inheritance, parameters, grouping, ordering, aggregates, casts
+  and functions with deny-by-default outcomes.
+- Production-artifact shadow regression jobs for PostgreSQL 16–19 RC2.
 
 ### Changed
 
+- Hardened the CI PGDG repository bootstrap against transient TLS failures
+  with bounded retries, exact signing-key fingerprint validation and atomic
+  keyring installation.
 - Validated the temporary GUC-based `pg_duckdb` adapter on PostgreSQL 16, 17
   and 18 with pinned dependency versions; Spike 1 concluded with verdict A.
 - Made the default build production-only. Spike GUCs, failpoints, synthetic
@@ -39,6 +48,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - CI now compiles both production and test variants, rejects test-surface
   leakage from the production library and runs regression plus S0–S11 matrices
   across all supported PostgreSQL versions.
+- The production planner hook now records shadow-only decisions and returned
+  plan evidence while remaining structurally pass-through. It does not call
+  the force-execution setter or request delegation.
 
 ### Security
 

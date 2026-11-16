@@ -2,9 +2,11 @@
 
 ## Status and scope
 
-This document is the normative design input for the next production-routing
-stage. It is not implemented by the current production build and does not
-authorise automatic routing.
+This document is the normative design input for production routing. PGQI-4A
+implements its observational subset: pass-through intent, conservative shadow
+candidacy, external-force provenance and local returned-plan evidence. The
+owned-force and automatic-routing parts remain unimplemented. This contract
+does not authorise automatic routing.
 
 The contract separates four facts that must never be collapsed into one:
 

@@ -40,7 +40,9 @@ CREATE EXTENSION pg_qi_spike_test;
 
 Production exports only the supported SQL surface from `pg_qi`: `version()`
 and `is_preloaded()`. The supported `pg_qi.enabled` setting and planner hook
-remain available.
+remain available. PGQI-4A later added read-only `pg_qi.shadow_*` observation
+settings to the production build. They contain finite backend-local status
+values and do not expose test controls or enable routing.
 
 Only the test build compiles `qi_diag.c` and `qi_reenter.c`, registers
 `pg_qi.spike_*` settings, exposes `qi_test_*` and `qi_spike_*` C entry points,
