@@ -4,9 +4,9 @@
 
 This document describes the current `pg_qi` codebase after Spike 1, the
 production/test split and the PostgreSQL 19 RC2 compatibility replay. The
-project remains pre-alpha. The production build installs a planner hook and
-the delegation infrastructure, but it does not classify or automatically
-route queries.
+project remains pre-alpha. The production build installs a planner hook,
+evaluates a conservative PGQI-4A shadow candidate and records local plan
+evidence, but it does not automatically route queries.
 
 The [production decision contract](production-decision-contract.md) defines
 the required behaviour for the next implementation stage. It is a design
@@ -22,10 +22,16 @@ src/qi_delegation.c
     backend-local frame stack, duckdb.force_execution adapter and provenance
 
 src/qi_classify.c
-    fail-closed classifier prototype; evaluated only by test builds
+    broader WP14 classifier prototype used by test evidence
+
+src/qi_eligibility.c
+    conservative production shadow candidate classifier
+
+src/qi_decision.c
+    versioned backend-local shadow decision record and read-only GUCs
 
 src/qi_detector.c
-    DuckDBScan plan-tree detector; consumed only by test diagnostics today
+    DuckDBScan plan-tree detector used by shadow evidence and test diagnostics
 
 src/qi_diag.c, src/qi_reenter.c
     test-only diagnostics, failpoints and synthetic planner re-entry
@@ -34,9 +40,8 @@ src/include/pg_qi/planner_compat.h
     PostgreSQL planner-signature compatibility
 ```
 
-The classifier and detector are compiled into the production library, but the
-production planner path does not invoke them. Compilation is not a supported
-production interface.
+The production shadow classifier is deliberately narrower than the WP14
+prototype. Neither classifier result is permission to route.
 
 ## Loading and hook ownership
 
@@ -58,19 +63,20 @@ caller or later-loaded outer hook
                 v
           pg_qi planner hook
                 |
-                +-- pg_qi.enabled = off --> saved hook or standard planner
+                +-- observe availability, context, provenance and candidacy
                 |
-                +-- enabled -------------> scoped frame
-                                             |
-                                             v
-                                   saved hook or standard planner
-                                             |
-                                             v
-                                      returned plan
+                +-- saved hook or standard planner (exactly once)
+                                      |
+                                      v
+                              observe returned plan
+                                      |
+                                      v
+                          publish pass-through snapshot
 ```
 
-The current production path always enters a frame when enabled, but never
-originates a delegation request because no production decision source exists.
+The PGQI-4A production path creates no delegation frame or GUC nest and never
+originates a delegation request. The explicit test build retains the Spike
+delegation path and its frames.
 
 ## Delegation frames and GUC scope
 
@@ -96,10 +102,11 @@ backend-local cleanup sentinel as broken. The present sentinel is diagnostic;
 production fail-closed enforcement for a poisoned state is a prerequisite of
 the next runtime stage.
 
-Synthetic nested-planner masking is part of the explicit test build. The
-production build currently passes no general re-entry signal into a frame and
-must not be described as providing a complete production nested-planning
-guard.
+Synthetic nested-planner masking is part of the explicit test build. PGQI-4A
+tracks recursion depth for observation, but depth zero is only an unproved
+outermost hook invocation; it is not a complete production top-level-context
+proof. Production shadow mode never owns force, so no inherited `qi_stack`
+request can originate from its call path.
 
 ## Force provenance
 
@@ -122,7 +129,7 @@ current preflight does not independently validate the GUC type. The adapter is
 validated only against the pinned dependency identities recorded in the test
 reports.
 
-## Classifier prototype
+## Classifiers
 
 `qi_classify_query()` is a positive allow-list over an analysed PostgreSQL
 `Query` tree. Unknown node types and unsupported relations, joins, operators,
@@ -130,11 +137,14 @@ aggregates and data types receive an ineligible result. Its reason names are
 deterministic within the current prototype.
 
 The prototype is evidence for a future policy stage, not a complete safety
-proof. It is not called by the production hook and does not yet establish a
-contract for every query property, including row-security qualifications,
-table sampling, grouping sets and all sort/group semantics. Production
-routing must remain disabled until the decision contract and its complete
-fail-closed traversal are implemented and tested.
+proof. PGQI-4A therefore wraps it with a narrower production shadow classifier
+that explicitly rejects active RLS metadata, security qualifications,
+TABLESAMPLE, active inheritance, partitioned or non-permanent relations,
+joins, aggregates, grouping, ordering, parameters, functions and casts.
+
+The result is candidate research data, not a routing certificate. Production
+routing remains disabled until the complete routing contract is implemented
+and tested.
 
 ## Decision time and cached plans
 
@@ -173,11 +183,10 @@ child and subplan locations. A positive match proves that the plan returned to
 the `pg_qi` hook contains that provider. A negative match is not a universal
 proof that every possible alternative engine is absent.
 
-The detector is currently used only by the test build. A later-loaded outer
-planner hook may also transform a plan after `pg_qi` returns, so a future
-production claim about the final engine requires either a controlled hook
-ordering contract or verification at a point after all plan transformations.
-Unverifiable results must be reported as unknown, not as verified PostgreSQL.
+PGQI-4A uses the detector only as evidence at the downstream-planner-return
+boundary. A later-loaded outer planner hook may transform the plan after
+`pg_qi` returns, so every shadow result remains `unverified`. A negative match
+is recorded as `unknown`, not as PostgreSQL.
 
 ## Production and test surfaces
 
@@ -209,13 +218,13 @@ be lower-case stable identifiers, have deterministic precedence and evolve
 additively. Operators must preserve unknown codes rather than reinterpret
 them. Human-readable messages may change without changing the code.
 
-The current classifier names are prototype values. They become a public
-contract only when the production decision contract is implemented and its
-versioned interface is released.
+PGQI-4A shadow reasons and eligibility details are versioned machine-readable
+values. Reserved routing reasons remain unimplemented.
 
 ## Next implementation boundary
 
-PGQI-3 changes documentation and freezes the design boundary only. The next
-runtime stage must implement and test the
-[production decision contract](production-decision-contract.md) before any
+PGQI-4A implements only the observational subset of the
+[production decision contract](production-decision-contract.md). The remaining
+routing gates—policy source, proven context, owned-force isolation, poison
+handling and final-engine verification—must be implemented and reviewed before
 automatic routing can be enabled.

@@ -1,0 +1,120 @@
+CREATE EXTENSION pg_duckdb;
+CREATE EXTENSION pg_qi;
+CREATE TABLE shadow_plain(id integer PRIMARY KEY, v integer);
+INSERT INTO shadow_plain VALUES (1, 10), (2, 20);
+\pset format unaligned
+\pset tuples_only on
+SELECT id FROM ONLY shadow_plain WHERE id = 1;
+1
+SHOW pg_qi.shadow_policy_intent;
+pass_through
+SHOW pg_qi.shadow_reason;
+policy_missing
+SHOW pg_qi.shadow_context;
+unproved_outermost
+SHOW pg_qi.shadow_force_origin;
+off
+SHOW pg_qi.shadow_classifier_status;
+candidate
+SHOW pg_qi.shadow_classifier_reason;
+candidate
+SHOW pg_qi.shadow_observed_engine;
+unknown
+SHOW pg_qi.shadow_verification;
+unverified
+SHOW pg_qi.shadow_request_applied;
+off
+SELECT count(*) FROM ONLY shadow_plain;
+2
+SHOW pg_qi.shadow_reason;
+classifier_rejected
+SHOW pg_qi.shadow_classifier_reason;
+unsupported_aggregate
+SELECT 1 HAVING true;
+1
+SHOW pg_qi.shadow_classifier_reason;
+unsupported_grouping
+SELECT id FROM ONLY shadow_plain ORDER BY id;
+1
+2
+SHOW pg_qi.shadow_classifier_reason;
+unsupported_ordering
+SELECT EXISTS (SELECT 1 FROM ONLY shadow_plain WHERE id = 1);
+t
+SHOW pg_qi.shadow_classifier_reason;
+unsupported_expression
+PREPARE shadow_parameter(integer) AS
+    SELECT id FROM ONLY shadow_plain WHERE id = $1;
+EXECUTE shadow_parameter(1);
+1
+SHOW pg_qi.shadow_classifier_reason;
+unsupported_parameter
+DEALLOCATE shadow_parameter;
+CREATE TABLE shadow_child() INHERITS (shadow_plain);
+SELECT id FROM shadow_plain WHERE id = 1;
+1
+SHOW pg_qi.shadow_classifier_reason;
+inheritance
+DROP TABLE shadow_child;
+ALTER TABLE shadow_plain ENABLE ROW LEVEL SECURITY;
+SELECT id FROM ONLY shadow_plain WHERE id = 1;
+1
+SHOW pg_qi.shadow_classifier_reason;
+security_context
+ALTER TABLE shadow_plain DISABLE ROW LEVEL SECURITY;
+SELECT id FROM ONLY shadow_plain TABLESAMPLE SYSTEM (100);
+1
+2
+SHOW pg_qi.shadow_classifier_reason;
+table_sample
+SET pg_qi.enabled = off;
+SELECT id FROM ONLY shadow_plain WHERE id = 1;
+1
+SHOW pg_qi.shadow_reason;
+control_disabled
+SHOW pg_qi.shadow_classifier_status;
+not_evaluated
+SET pg_qi.enabled = on;
+SET duckdb.force_execution = on;
+SELECT count(*) FROM shadow_plain;
+2
+SHOW pg_qi.shadow_reason;
+force_external
+SHOW pg_qi.shadow_force_origin;
+external
+SHOW pg_qi.shadow_policy_intent;
+pass_through
+SHOW pg_qi.shadow_classifier_status;
+not_evaluated
+SHOW pg_qi.shadow_observed_engine;
+duckdb
+SHOW pg_qi.shadow_observation;
+duckdb_scan_at_downstream_boundary
+SHOW pg_qi.shadow_verification;
+unverified
+SHOW pg_qi.shadow_request_applied;
+off
+SHOW duckdb.force_execution;
+on
+SET duckdb.force_execution = off;
+SELECT id FROM ONLY shadow_plain WHERE id = 1;
+1
+SHOW pg_qi.shadow_reason;
+policy_missing
+SHOW pg_qi.shadow_decision_id;
+27
+SELECT 1 / 0;
+ERROR:  division by zero
+SHOW pg_qi.shadow_reason;
+policy_missing
+SHOW pg_qi.shadow_decision_id;
+27
+SELECT id FROM ONLY shadow_plain WHERE id = 2;
+2
+SHOW pg_qi.shadow_context;
+unproved_outermost
+SET pg_qi.shadow_reason = 'policy_missing';
+ERROR:  parameter "pg_qi.shadow_reason" cannot be changed
+DROP TABLE shadow_plain;
+DROP EXTENSION pg_qi;
+DROP EXTENSION pg_duckdb;

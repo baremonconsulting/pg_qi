@@ -16,8 +16,10 @@
 #include "miscadmin.h"
 #include "pg_qi/planner_compat.h"
 #include "pg_qi/qi_classify.h"
+#include "pg_qi/qi_decision.h"
 #include "pg_qi/qi_delegation.h"
 #include "pg_qi/qi_detector.h"
+#include "pg_qi/qi_eligibility.h"
 #if PG_QI_TESTING
 #include "pg_qi/qi_diag.h"
 #include "pg_qi/qi_reenter.h"
@@ -41,6 +43,9 @@ static int pg_qi_benchmark_mode = QI_BENCH_NORMAL;
 static bool pg_qi_benchmark_collect = true;
 #endif
 static qi_planner_fn_type previous_planner_hook = NULL;
+#if !PG_QI_TESTING
+static int pg_qi_shadow_planner_depth = 0;
+#endif
 
 #if PG_QI_TESTING
 static const struct config_enum_entry pg_qi_benchmark_options[] = {
@@ -94,6 +99,7 @@ PG_FUNCTION_INFO_V1(qi_test_classifier_contract);
 
 QI_PLANNER_PROTO(pg_qi_planner)
 {
+#if PG_QI_TESTING
     PlannedStmt *volatile planned_stmt = NULL;
     QiDelegationFrame *volatile frame = NULL;
     volatile uint64 frame_id = 0;
@@ -219,6 +225,80 @@ done:
     qi_record_planner_timing((uint64) INSTR_TIME_GET_MICROSEC(finished_at));
 #endif
     return (PlannedStmt *) planned_stmt;
+#else
+    PlannedStmt *volatile planned_stmt = NULL;
+    QiForceOrigin force_origin = QI_FORCE_OFF;
+    QiShadowContext context;
+    QiShadowClassifierStatus classifier_status =
+        QI_SHADOW_CLASSIFIER_NOT_EVALUATED;
+    QiEligibilityResult eligibility = {
+        .candidate = false,
+        .reason = QI_ELIGIBILITY_CANDIDATE,
+        .prototype_reason = QI_CLASSIFY_ELIGIBLE
+    };
+    QiShadowReason reason;
+    QiShadowEngine observed_engine = QI_SHADOW_ENGINE_UNKNOWN;
+    QiShadowObservation observation =
+        QI_SHADOW_OBSERVATION_NO_AUTHORITATIVE_MATCH;
+
+    pg_qi_shadow_planner_depth++;
+    context = pg_qi_shadow_planner_depth > 1
+        ? QI_SHADOW_CONTEXT_NESTED
+        : QI_SHADOW_CONTEXT_UNPROVED_OUTERMOST;
+
+    PG_TRY();
+    {
+        force_origin = qi_current_force_origin();
+        if (!pg_qi_enabled)
+            reason = QI_SHADOW_CONTROL_DISABLED;
+        else if (context == QI_SHADOW_CONTEXT_NESTED)
+            reason = QI_SHADOW_CONTEXT_NESTED_REASON;
+        else if (force_origin == QI_FORCE_EXTERNAL)
+            reason = QI_SHADOW_FORCE_EXTERNAL;
+        else
+        {
+            eligibility = qi_eligibility_query(parse);
+            classifier_status = eligibility.candidate
+                ? QI_SHADOW_CLASSIFIER_CANDIDATE
+                : QI_SHADOW_CLASSIFIER_REJECTED;
+            reason = eligibility.candidate
+                ? QI_SHADOW_POLICY_MISSING
+                : QI_SHADOW_CLASSIFIER_REJECTED_REASON;
+        }
+
+        /*
+         * PGQI-4A is structurally pass-through.  It never creates a GUC nest,
+         * never calls qi_set_force_execution(), and calls downstream once.
+         */
+        planned_stmt = pg_qi_call_downstream(parse, query_string,
+                                              cursor_options, bound_params
+#if QI_HAVE_PLANNER_ES
+                                              , es
+#endif
+                                              );
+        if (qi_plan_has_duckdb_scan((PlannedStmt *) planned_stmt))
+        {
+            observed_engine = QI_SHADOW_ENGINE_DUCKDB;
+            observation =
+                QI_SHADOW_OBSERVATION_DUCKDB_SCAN_AT_DOWNSTREAM_BOUNDARY;
+        }
+
+        /* Nested observations never replace the completed outer snapshot. */
+        if (pg_qi_shadow_planner_depth == 1)
+            qi_shadow_publish(context, force_origin, classifier_status,
+                              eligibility, reason, observed_engine,
+                              observation);
+    }
+    PG_CATCH();
+    {
+        pg_qi_shadow_planner_depth--;
+        PG_RE_THROW();
+    }
+    PG_END_TRY();
+
+    pg_qi_shadow_planner_depth--;
+    return (PlannedStmt *) planned_stmt;
+#endif
 }
 
 void
@@ -226,7 +306,7 @@ _PG_init(void)
 {
     DefineCustomBoolVariable("pg_qi.enabled",
                              "Enables pg_qi policy evaluation in this backend.",
-                             "The bootstrap version does not change planner decisions.",
+                             "PGQI-4A observes decisions in shadow mode and never routes.",
                              &pg_qi_enabled,
                              true,
                              PGC_SUSET,
@@ -234,6 +314,8 @@ _PG_init(void)
                              NULL,
                              NULL,
                              NULL);
+
+    qi_shadow_init_gucs();
 
 #if PG_QI_TESTING
     DefineCustomBoolVariable("pg_qi.spike_last_plan_has_duckdb_scan",

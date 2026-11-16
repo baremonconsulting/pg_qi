@@ -2,8 +2,9 @@
 
 > [!NOTE]
 > This document defines the intended editions model. Items marked **planned**
-> do not exist yet. The production build does not classify or route queries;
-> see [Current state](../README.md#current-state) in the README.
+> do not exist yet. The production build classifies candidates only for a
+> local PGQI-4A shadow record and does not route queries; see
+> [Current state](../README.md#current-state) in the README.
 
 ## The single-extension rule
 
@@ -29,14 +30,14 @@ The complete single-instance router will be open source in this repository, incl
 |---|---|
 | Planner-hook integration and `pg_duckdb` delegation adapter | Implemented and validated by Spike 1; the production build does not initiate delegation yet |
 | Off switch (`pg_qi.enabled`) | Implemented; when disabled, the planner hook passes straight through |
-| Query classification | Fail-closed prototype validated in test builds; production decision integration planned |
+| Query classification | Conservative PGQI-4A candidate classifier runs in production shadow mode; broader WP14 prototype remains test-only |
 | Routing rules and eligibility policy | Planned |
 | Admission control | Planned |
 | Execution watchdog | Planned |
 | Quarantine | Planned |
 | Manual whitelist and blacklist | Planned |
-| Explain reason codes | Prototype classifier names exist; versioned production contract and public interface planned |
-| Local decision telemetry | Planned |
+| Explain reason codes | Versioned backend-local PGQI-4A shadow reasons implemented; routing reasons remain planned |
+| Local decision telemetry | Backend-local read-only shadow snapshot implemented; export and durable telemetry planned |
 
 Once these components exist, everything needed to operate one instance safely will live in this repository.
 

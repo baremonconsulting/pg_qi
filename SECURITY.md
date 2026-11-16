@@ -24,8 +24,11 @@ Do not include production credentials, customer SQL text or customer data.
 
 ## Current safety boundary
 
-The production build does not classify or automatically route queries. The
-classifier and plan detector currently support test evidence only. See the
+The production build classifies only for a backend-local shadow record and
+does not automatically route queries. Shadow output contains finite status
+codes only: it retains no SQL text, values, parameters, relation names or plan
+pointers. The returned-plan observation is not presented as final-engine
+verification. See the
 [architecture](docs/architecture.md) and
 [production decision contract](docs/production-decision-contract.md) for the
 implemented boundary and the controls required before routing can be enabled.

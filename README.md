@@ -7,9 +7,11 @@
 
 > [!IMPORTANT]
 > The project is in **pre-alpha development**. The production build does not
-> yet classify or automatically route queries and must not be used in
-> production. Spike 1 has validated the low-level `pg_duckdb` delegation
-> mechanism; that result is an integration proof, not a production router.
+> automatically route queries and must not be used for production routing.
+> PGQI-4A evaluates a conservative candidate classifier and records a
+> backend-local shadow decision, but its actual intent is always
+> `pass_through`. Spike 1 validated the low-level `pg_duckdb` delegation
+> mechanism; neither result is a production router.
 
 ## Project goals
 
@@ -32,6 +34,9 @@ The repository currently contains:
 - a validated temporary adapter for requesting `pg_duckdb` planning through
   `duckdb.force_execution`;
 - plan-tree detection for `DuckDBScan`;
+- a production-built, backend-local shadow decision record;
+- a conservative shadow candidate classifier separate from the WP14
+  prototype;
 - `pg_qi.enabled`, the first extension GUC;
 - SQL functions for version and preload diagnostics;
 - an explicit test-only build containing Spike 1 controls, diagnostics,
@@ -42,9 +47,10 @@ The repository currently contains:
 Spike 1 demonstrated deterministic one-shot delegation in its test harness,
 including nested planning, errors, cached plans, concurrency and parallel
 workers. The default production build deliberately exposes none of those test
-controls. Production classifier integration, telemetry, policy management and
-automatic routing are not implemented yet. A fail-closed classifier prototype
-exists for the WP14.2 test gate but is not called by the production hook. See the
+controls. The production hook now evaluates shadow candidacy and observes the
+plan returned by its downstream planner, but it never requests delegation.
+Telemetry export, policy management and automatic routing are not implemented.
+The broader WP14.2 classifier remains a test-gate prototype. See the
 [Spike 1 report](docs/spike1/spike-1-report.md) and
 [WP14 production/test boundary](docs/phase2/WP14-production-test-boundary.md).
 
@@ -105,9 +111,25 @@ SHOW pg_qi.enabled;
 ```
 
 The current production hook preserves the downstream planner-hook chain and
-does not initiate delegation because no production policy source exists yet.
-It calls the next planner hook, or PostgreSQL's standard planner when no
-downstream hook exists.
+does not initiate delegation because no production policy source exists. It
+records a shadow decision, calls the next planner hook (or PostgreSQL's
+standard planner) exactly once and returns that plan unchanged.
+
+The completed backend-local snapshot is available through read-only
+`pg_qi.shadow_*` settings. Use `SHOW`, which does not itself create a plan:
+
+```sql
+SHOW pg_qi.shadow_reason;
+SHOW pg_qi.shadow_classifier_status;
+SHOW pg_qi.shadow_classifier_reason;
+SHOW pg_qi.shadow_observed_engine;
+SHOW pg_qi.shadow_verification;
+```
+
+`unproved_outermost` means only that no recursive invocation of the pg_qi hook
+was active; it is not proof that planning originated directly from a client.
+A negative plan-tree match remains `unknown/unverified`, never verified
+PostgreSQL.
 
 ## Development
 
