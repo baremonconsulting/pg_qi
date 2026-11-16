@@ -18,7 +18,7 @@ make PG_QI_TESTING=1 installcheck
 ```
 
 The test server must preload `pg_duckdb,pg_qi`. The current matrix is
-PostgreSQL 16–18 plus pinned PostgreSQL 19 RC1. See
+PostgreSQL 16–18 plus pinned PostgreSQL 19 RC2. See
 [WP14 production/test boundary](docs/phase2/WP14-production-test-boundary.md)
 for the production and test build contracts.
 
