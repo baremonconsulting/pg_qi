@@ -37,6 +37,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- Hardened the CI PGDG repository bootstrap against transient TLS failures
+  with bounded retries, exact signing-key fingerprint validation and atomic
+  keyring installation.
 - Validated the temporary GUC-based `pg_duckdb` adapter on PostgreSQL 16, 17
   and 18 with pinned dependency versions; Spike 1 concluded with verdict A.
 - Made the default build production-only. Spike GUCs, failpoints, synthetic

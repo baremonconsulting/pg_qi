@@ -47,6 +47,14 @@ reconstructible binary state.
 The defaults of WP9 and WP11 remain unchanged: local runs still cover PG
 16/17/18 and still build/install unless explicitly told not to.
 
+The PGDG bootstrap downloads the repository signing key to a private temporary
+directory over IPv4 from either of two official PostgreSQL endpoints, with
+three bounded attempts per endpoint for connection, TLS and HTTP failures. It
+installs the keyring atomically only after the download is non-empty and its
+primary fingerprint exactly matches
+`B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8`. Empty, truncated, malformed or
+unexpected key material therefore fails closed and is removed on exit.
+
 ## Local validation evidence
 
 - workflow YAML parsed successfully;
