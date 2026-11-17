@@ -1,0 +1,19 @@
+# id	kind	expectation
+eligible_literal	positive	delegation_verified/request_applied=on/duckdb/verified
+policy_off	control	request_applied=off
+extension_disabled	control	request_applied=off
+parameter_custom	negative	request_applied=off
+parameter_generic	negative	request_applied=off
+prepared_reuse	lifecycle	delegated cached plan does not publish a new decision on reuse
+prepared_invalidation	lifecycle	invalidated prepared plan replans and re-establishes verified delegation
+planning_error	diagnostics	last completed snapshot is retained
+join_rejected	security	join remains pass-through
+cast_rejected	security	cast expression remains pass-through
+function_rejected	security	function expression remains pass-through
+temporary_relation_rejected	security	temporary relation remains pass-through
+unlogged_relation_rejected	security	unlogged relation remains pass-through
+partitioned_relation_rejected	security	partitioned relation remains pass-through
+foreign_relation_rejected	security	foreign relation remains pass-through
+rls_ordinary_role_rejected	security	active RLS under ordinary role remains pass-through
+ordinary_role_control_denied	security	ordinary role cannot enable routing
+rollback_reconnect	rollback	new session returns to default-off

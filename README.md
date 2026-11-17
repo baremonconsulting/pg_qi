@@ -160,6 +160,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines,
 [docs/architecture.md](docs/architecture.md) for the current architecture and
 the [production decision contract](docs/production-decision-contract.md) and
 [PGQI-4B routing boundary](docs/phase4/PGQI-4B-controlled-routing.md).
+The bounded pilot gate and operator procedure are documented in
+[PGQI-4C pilot readiness](docs/phase4/PGQI-4C-pilot-readiness.md) and the
+[pilot operator cookbook](docs/phase4/PGQI-4C-operator-cookbook.md).
 
 ## Editions
 

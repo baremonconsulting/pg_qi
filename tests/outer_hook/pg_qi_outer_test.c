@@ -21,6 +21,7 @@ static bool reenter_once = false;
 static bool reentry_active = false;
 static bool dynamic_outer = false;
 static bool inner_force_seen = true;
+static bool error_after_owned_force = false;
 
 void _PG_init(void);
 void _PG_fini(void);
@@ -91,8 +92,21 @@ QI_PLANNER_PROTO(pg_qi_outer_test_planner)
     }
 
     if (!reenter_once)
+    {
+        if (error_after_owned_force)
+        {
+            force_value = GetConfigOption("duckdb.force_execution", false, false);
+            if (!parse_bool(force_value, &force_enabled))
+                ereport(ERROR,
+                        (errmsg("invalid duckdb.force_execution value")));
+            if (force_enabled)
+                ereport(ERROR,
+                        (errcode(ERRCODE_INTERNAL_ERROR),
+                         errmsg("pg_qi outer fixture error after owned force")));
+        }
         return call_planner(next_hook, parse, query_string, cursor_options,
                             bound_params, QI_CURRENT_EXPLAIN_STATE);
+    }
 
     reentry_active = true;
     PG_TRY();
@@ -122,6 +136,9 @@ _PG_init(void)
     DefineCustomBoolVariable("pg_qi_outer_test.inner_force_seen", NULL, NULL,
                              &inner_force_seen, true, PGC_INTERNAL, 0,
                              NULL, NULL, NULL);
+    DefineCustomBoolVariable("pg_qi_outer_test.error_after_owned_force",
+                             NULL, NULL, &error_after_owned_force, false,
+                             PGC_SUSET, 0, NULL, NULL, NULL);
 
     preload_previous_planner_hook = planner_hook;
     planner_hook = pg_qi_outer_test_planner;

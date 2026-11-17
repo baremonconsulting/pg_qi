@@ -5,8 +5,10 @@ set -euo pipefail
 major=${1:?PostgreSQL major version is required}
 pg_install_root=${PG_INSTALL_ROOT:-/usr/lib/postgresql}
 pgbin=$pg_install_root/$major/bin
+error_log=$(mktemp)
+trap 'rm -f "$error_log"' EXIT
 output=$(
-    "$pgbin/psql" -X -qAt -v ON_ERROR_STOP=1 postgres <<'SQL'
+    "$pgbin/psql" -X -qAt -v ON_ERROR_STOP=1 postgres 2>"$error_log" <<'SQL'
 CREATE EXTENSION pg_duckdb;
 CREATE EXTENSION pg_qi;
 CREATE TABLE outer_test_plain(id integer PRIMARY KEY, v integer);
@@ -25,6 +27,14 @@ SHOW pg_qi.shadow_verification;
 SHOW pg_qi_outer_test.inner_force_seen;
 SHOW duckdb.force_execution;
 SET pg_qi_outer_test.reenter_once = off;
+SET pg_qi_outer_test.error_after_owned_force = on;
+\set ON_ERROR_STOP off
+SELECT id FROM outer_test_plain WHERE id = 1;
+\set ON_ERROR_STOP on
+SHOW duckdb.force_execution;
+SET pg_qi_outer_test.error_after_owned_force = off;
+SELECT id FROM outer_test_plain WHERE id = 1;
+SHOW pg_qi.shadow_request_applied;
 SELECT pg_qi_outer_test_become_outer();
 SELECT id FROM outer_test_plain WHERE id = 2;
 SHOW pg_qi.shadow_reason;
@@ -39,7 +49,9 @@ DROP EXTENSION pg_duckdb;
 SQL
 )
 
-expected=$'1\ndelegation_verified\nverified\noff\noff\n\n2\ncontext_unproved\noff\noff'
+test "$(grep -Ec '^ERROR:  pg_qi outer fixture error after owned force$' "$error_log")" -eq 1
+
+expected=$'1\ndelegation_verified\nverified\noff\noff\noff\n1\non\n\n2\ncontext_unproved\noff\noff'
 if [ "$output" != "$expected" ]; then
     printf 'unexpected outer-hook verification output:\n%s\n' "$output" >&2
     exit 1

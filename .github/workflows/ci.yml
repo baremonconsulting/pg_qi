@@ -35,7 +35,7 @@ jobs:
           pgconfig="/usr/lib/postgresql/${{ matrix.postgresql }}/bin/pg_config"
           make PG_CONFIG="$pgconfig" clean >"ci-artifacts/compile-pg${{ matrix.postgresql }}/production-clean.log" 2>&1
           make PG_CONFIG="$pgconfig" -j2 >"ci-artifacts/compile-pg${{ matrix.postgresql }}/production-build.log" 2>&1
-          if strings pg_qi.so | grep -Eq 'pg_qi\.spike_|qi_spike_|qi_test_|PG_QI_FINAL'; then
+          if strings pg_qi.so | grep -E 'pg_qi\.spike_|qi_spike_|qi_test_|PG_QI_FINAL' >/dev/null; then
             echo "test-only surface leaked into production library" >&2
             exit 1
           fi
@@ -78,7 +78,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if strings pg_qi.so | grep -Eq 'pg_qi\.spike_|pg_qi\.test_|qi_spike_|qi_test_|PG_QI_FINAL'; then
+          if strings pg_qi.so | grep -E 'pg_qi\.spike_|pg_qi\.test_|qi_spike_|qi_test_|PG_QI_FINAL' >/dev/null; then
             echo "test-only surface leaked into production library" >&2
             exit 1
           fi
@@ -100,6 +100,18 @@ jobs:
           PGHOST="$pghost" PGUSER="$USER" bash tests/outer_hook/verify.sh "$major"
           "$pgbin/pg_ctl" -D "$pgdata" -m fast -w stop
           trap - EXIT
+      - name: Run PGQI-4C refusal tests
+        run: bash tests/phase4c/refusal-tests.sh
+      - name: Run PGQI-4C production smoke and rollback drill
+        shell: bash
+        env:
+          PG_INSTALL_ROOT: /usr/lib/postgresql
+        run: |
+          set -euo pipefail
+          major="${{ matrix.postgresql }}"
+          out="${RUNNER_TEMP}/pgqi4c-pg$major"
+          bash scripts/phase4c/run-production.sh "$major" "$out" | tee "ci-artifacts/production-shadow-pg$major/pgqi4c-smoke-path.txt"
+          bash scripts/phase4c/run-rollback-drill.sh "$major" "$out" | tee "ci-artifacts/production-shadow-pg$major/pgqi4c-rollback-path.txt"
       - name: Collect production shadow diagnostics
         if: always()
         shell: bash
@@ -107,6 +119,7 @@ jobs:
           mkdir -p "ci-artifacts/production-shadow-pg${{ matrix.postgresql }}/diagnostics"
           cp regression.diffs regression.out "ci-artifacts/production-shadow-pg${{ matrix.postgresql }}/diagnostics/" 2>/dev/null || true
           cp "${RUNNER_TEMP}/production-shadow-pg${{ matrix.postgresql }}.log" "ci-artifacts/production-shadow-pg${{ matrix.postgresql }}/diagnostics/postgresql.log" 2>/dev/null || true
+          cp -a "${RUNNER_TEMP}/pgqi4c-pg${{ matrix.postgresql }}" "ci-artifacts/production-shadow-pg${{ matrix.postgresql }}/pgqi4c" 2>/dev/null || true
       - name: Upload production shadow evidence
         if: always()
         uses: actions/upload-artifact@v4
