@@ -30,3 +30,25 @@ must never receive untrusted SQL or a production connection. Every invocation
 requires an explicit connection string, session/protocol mode, new spool and
 snapshot paths, positive finite limits and deadlines. A binary spool is valid
 only when the terminal state is `COMPLETE` and the offline verifier passes.
+
+## Offline evidence validation
+
+`evidence_tool.py` validates sealed evidence without database, network or shell
+access. `private_full` rechecks the complete local graph, oracle and individual
+site cells. `shared_derived` checks only an allow-listed derived directory and
+its link to an external private validation receipt; it never claims to have
+revalidated hidden raw evidence.
+
+```sh
+python3 tools/phase5/evidence_tool.py validate \
+  --profile private_full --bundle EVIDENCE \
+  --trusted-scope-sha256 APPROVED_SCOPE_SHA256 \
+  --receipt validation.json --receipt-id validation-1
+
+python3 tools/phase5/evidence_tool.py export \
+  --private-bundle EVIDENCE --private-receipt validation.json \
+  --output SHARED-DERIVED
+```
+
+The input bundle and receipt are never modified. Validation receipts are
+created exclusively, and an export destination must not already exist.

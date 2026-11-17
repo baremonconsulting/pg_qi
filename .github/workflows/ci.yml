@@ -66,6 +66,7 @@ jobs:
           make -C tools/phase5 PG_CONFIG="$pgconfig" clean all
           python3 tests/phase5/test_offline.py
           python3 tests/phase5/test_contracts.py
+          python3 tests/phase5/test_evidence_tool.py
       - name: Run disposable protocol and memory spike
         shell: bash
         run: |
