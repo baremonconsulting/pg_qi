@@ -49,6 +49,35 @@ jobs:
           name: compile-pg${{ matrix.postgresql }}
           path: ci-artifacts/compile-pg${{ matrix.postgresql }}
 
+  phase5-protocol-spike:
+    name: Phase 5 protocol and memory spike PG16
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL 16 and dependencies
+        run: bash .github/scripts/ci-install-postgresql.sh 16
+      - name: Build pinned pg_duckdb
+        run: bash .github/scripts/ci-build-pg-duckdb.sh 16
+      - name: Build protocol driver and run offline refusal tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          pgconfig=/usr/lib/postgresql/16/bin/pg_config
+          make -C tools/phase5 PG_CONFIG="$pgconfig" clean all
+          python3 tests/phase5/test_offline.py
+      - name: Run disposable protocol and memory spike
+        shell: bash
+        run: |
+          set -euo pipefail
+          PG_CONFIG=/usr/lib/postgresql/16/bin/pg_config \
+            tests/phase5/run-protocol-spike.sh "${RUNNER_TEMP}/phase5-protocol-spike"
+      - name: Upload phase 5 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase5-protocol-spike-pg16
+          path: ${{ runner.temp }}/phase5-protocol-spike
+
   production-shadow:
     name: Production routing PG${{ matrix.postgresql }}
     runs-on: ubuntu-latest

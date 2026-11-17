@@ -23,6 +23,8 @@ log/
 build/
 cmake-build-*/
 compile_commands.json
+__pycache__/
+tools/phase5/protocol-driver
 
 # Generated Spike evidence and delivery archives
 deliverables/
