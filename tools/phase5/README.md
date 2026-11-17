@@ -52,3 +52,12 @@ python3 tools/phase5/evidence_tool.py export \
 
 The input bundle and receipt are never modified. Validation receipts are
 created exclusively, and an export destination must not already exist.
+
+## Release and site-preflight policy
+
+`site_preflight.py` validates an exact source/build/install/start dossier,
+single endpoint policy and per-cell candidate replay before a connector may be
+called. It rejects ambient libpq/runtime influences and compiles a fixed
+read-only online query manifest. Its optional execution mode invokes only the
+typed `site-preflight-driver` without a shell; the driver has no activation or
+workload interface. See `docs/phase5/PGQI-5-release-site-preflight.md`.

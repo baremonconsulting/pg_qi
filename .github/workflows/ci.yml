@@ -58,6 +58,10 @@ jobs:
         run: bash .github/scripts/ci-install-postgresql.sh 16
       - name: Build pinned pg_duckdb
         run: bash .github/scripts/ci-build-pg-duckdb.sh 16
+      - name: Build and install production pg_qi for site preflight
+        env:
+          PG_QI_TESTING: "0"
+        run: bash .github/scripts/ci-build-install-pg-qi.sh 16 "ci-artifacts/phase5-site-preflight-pg16"
       - name: Build protocol driver and run offline refusal tests
         shell: bash
         run: |
@@ -67,6 +71,8 @@ jobs:
           python3 tests/phase5/test_offline.py
           python3 tests/phase5/test_contracts.py
           python3 tests/phase5/test_evidence_tool.py
+          python3 tests/phase5/test_site_preflight.py
+          PG_CONFIG="$pgconfig" tests/phase5/run-site-preflight-integration.sh "${RUNNER_TEMP}/phase5-site-preflight"
       - name: Run disposable protocol and memory spike
         shell: bash
         run: |
@@ -78,7 +84,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: phase5-protocol-spike-pg16
-          path: ${{ runner.temp }}/phase5-protocol-spike
+          path: |
+            ${{ runner.temp }}/phase5-protocol-spike
+            ${{ runner.temp }}/phase5-site-preflight
+            ci-artifacts/phase5-site-preflight-pg16
 
   production-shadow:
     name: Production routing PG${{ matrix.postgresql }}
