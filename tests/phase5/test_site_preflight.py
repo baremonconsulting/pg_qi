@@ -75,7 +75,7 @@ def dossier(endpoint_kind: str = "tls_tcp") -> dict:
                                 "database_oid": "16384", "session_user": "pilot_reader",
                                 "current_user": "pilot_reader", "postmaster_start_time": "2026-11-17T10:00:00Z",
                                 "start_id": start["start_id"], "cluster_id": "cluster-1", "pg_qi_version": "0.1.0",
-                                "pg_duckdb_version": "1.0.0", "shared_preload_libraries": "pg_duckdb,pg_qi",
+                                "pg_duckdb_version": "1.0.0",
                                 "routing_mode": "off", "duckdb_force_execution": "off", "pg_qi_enabled": "on"},
             "candidate_replay": {"source_commit": COMMIT, "build_sha256": build_sha, "cells": cells}}
 
@@ -125,7 +125,7 @@ class OfflinePolicyTests(unittest.TestCase):
                 compiled = intent(dossier(kind)); rendered = json.dumps(compiled)
                 self.assertNotIn("password", rendered.lower())
                 self.assertNotIn("service", rendered.lower())
-                self.assertEqual(compiled["libpq_parameters"]["passfile"], "/dev/null")
+                self.assertEqual(compiled["libpq_parameters"]["passfile"], "isolated_empty_file")
 
     def test_source_build_install_and_start_mismatches_refuse(self) -> None:
         mutations = [
@@ -234,7 +234,6 @@ class OnlineBoundaryTests(unittest.TestCase):
             "backend_identity": {"rows": [["1234", "2026-11-17T10:00:01.000000Z"]]},
             "extensions": {"rows": [["pg_duckdb", expected["pg_duckdb_version"]],
                                        ["pg_qi", expected["pg_qi_version"]]]},
-            "preload": {"rows": [[expected["shared_preload_libraries"]]]},
             "pg_qi_enabled": {"rows": [[expected["pg_qi_enabled"]]]},
         }}
         connection_id, observed = preflight._driver_observation(compiled, raw)

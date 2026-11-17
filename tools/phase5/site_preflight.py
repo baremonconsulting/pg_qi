@@ -58,7 +58,6 @@ FIXED_PREFLIGHT_QUERIES = (
     ("cluster_identity", "SELECT system_identifier::text FROM pg_catalog.pg_control_system()"),
     ("backend_identity", "SELECT pid::text, pg_catalog.to_char(backend_start AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') FROM pg_catalog.pg_stat_activity WHERE pid = pg_catalog.pg_backend_pid()"),
     ("extensions", "SELECT extname, extversion FROM pg_catalog.pg_extension WHERE extname IN ('pg_duckdb','pg_qi') ORDER BY extname"),
-    ("preload", "SHOW shared_preload_libraries"),
     ("pg_qi_enabled", "SHOW pg_qi.enabled"),
 )
 
@@ -155,7 +154,7 @@ def _validate_endpoint(value: Any) -> tuple[dict[str, Any], dict[str, str]]:
         return endpoint, {"host": host, "hostaddr": address, "port": port, "dbname": database,
                           "user": role, "sslmode": "verify-full", "gssencmode": "disable",
                           "sslrootcert": rootcert, "sslcert": "", "sslkey": "",
-                          "sslcrl": "", "sslcrldir": "", "passfile": "/dev/null",
+                          "sslcrl": "", "sslcrldir": "", "passfile": "isolated_empty_file",
                           "connect_timeout": "10"}
     endpoint = _exact(value, {"kind", "socket_directory", "socket_owner", "socket_owner_uid", "socket_mode",
                               "port", "database", "role", "credential_channel"}, "socket endpoint")
@@ -170,7 +169,7 @@ def _validate_endpoint(value: Any) -> tuple[dict[str, Any], dict[str, str]]:
     return endpoint, {"host": directory, "socket_owner_uid": owner_uid,
                       "port": str(_integer(endpoint["port"], "port", 1, 65535)),
                       "dbname": _safe_scalar(endpoint["database"], "database"),
-                      "user": _safe_scalar(endpoint["role"], "role"), "passfile": "/dev/null",
+                      "user": _safe_scalar(endpoint["role"], "role"), "passfile": "isolated_empty_file",
                       "connect_timeout": "10"}
 
 
@@ -289,15 +288,12 @@ def validate_dossier(value: Any, trusted_scope_sha256: str, trusted_dossier_sha2
     expected = _exact(dossier["expected_online"], {"server_version_num", "database_name",
                                                     "database_oid", "session_user", "current_user",
                                                     "postmaster_start_time", "start_id", "cluster_id",
-                                                    "pg_qi_version", "pg_duckdb_version",
-                                                    "shared_preload_libraries", "routing_mode",
+                                                    "pg_qi_version", "pg_duckdb_version", "routing_mode",
                                                     "duckdb_force_execution", "pg_qi_enabled"}, "expected online")
     for field in ("server_version_num", "database_oid"):
         _text(expected[field], f"expected_online.{field}", re.compile(r"^[0-9]+$"))
-    for field in set(expected) - {"server_version_num", "database_oid", "shared_preload_libraries"}:
+    for field in set(expected) - {"server_version_num", "database_oid"}:
         _safe_scalar(expected[field], f"expected_online.{field}", re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+ -]{0,127}$"))
-    if expected["shared_preload_libraries"] != "pg_duckdb,pg_qi":
-        raise QualificationError("online preload expectation differs")
     if expected["routing_mode"] != "off" or expected["duckdb_force_execution"] != "off" or expected["pg_qi_enabled"] != "on":
         raise QualificationError("online safe defaults are not expected")
     if (expected["postmaster_start_time"] != start["postmaster_start_time"] or
@@ -386,7 +382,6 @@ def _driver_observation(intent: dict[str, Any], raw: Any) -> tuple[str, dict[str
         "postmaster_start_time": postmaster_start,
         "start_id": _start_id(cluster_id, postmaster_start), "cluster_id": cluster_id,
         "pg_qi_version": extensions["pg_qi"], "pg_duckdb_version": extensions["pg_duckdb"],
-        "shared_preload_libraries": rows("preload", 1)[0][0],
         "routing_mode": rows("routing_mode", 1)[0][0],
         "duckdb_force_execution": rows("duckdb_force", 1)[0][0],
         "pg_qi_enabled": rows("pg_qi_enabled", 1)[0][0],

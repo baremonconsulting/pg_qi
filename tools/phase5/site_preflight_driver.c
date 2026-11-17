@@ -32,7 +32,6 @@ static const Check checks[] = {
     {"cluster_identity", "SELECT system_identifier::text FROM pg_catalog.pg_control_system()", 1, 1},
     {"backend_identity", "SELECT pid::text, pg_catalog.to_char(backend_start AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') FROM pg_catalog.pg_stat_activity WHERE pid = pg_catalog.pg_backend_pid()", 1, 2},
     {"extensions", "SELECT extname, extversion FROM pg_catalog.pg_extension WHERE extname IN ('pg_duckdb','pg_qi') ORDER BY extname", 2, 2},
-    {"preload", "SHOW shared_preload_libraries", 1, 1},
     {"pg_qi_enabled", "SHOW pg_qi.enabled", 1, 1}
 };
 
@@ -236,6 +235,7 @@ int main(int argc, char **argv) {
     int credential_fd = -1, rootcert_fd = -1, deadline_ms = 0, socket_uid = -1, i, exit_code = 1;
     char verified_rootcert[64] = {0};
     char isolated_home[] = "/tmp/pgqi-home-XXXXXX"; int isolated_home_created = 0;
+    char isolated_passfile[128] = {0}; int isolated_passfile_created = 0;
     char *password = NULL; PGconn *connection = NULL;
     unsigned char nonce[16]; char nonce_hex[33];
     PGresult *results[sizeof(checks) / sizeof(checks[0])] = {0};
@@ -301,7 +301,7 @@ int main(int argc, char **argv) {
     keywords[parameter] = "port"; values[parameter++] = port;
     keywords[parameter] = "dbname"; values[parameter++] = dbname;
     keywords[parameter] = "user"; values[parameter++] = user;
-    keywords[parameter] = "passfile"; values[parameter++] = "/dev/null";
+    keywords[parameter] = "passfile"; values[parameter++] = isolated_passfile;
     keywords[parameter] = "connect_timeout"; values[parameter++] = "10";
 
     if (!mkdtemp(isolated_home)) {
@@ -310,6 +310,20 @@ int main(int argc, char **argv) {
     isolated_home_created = 1;
     if (chmod(isolated_home, 0700) || setenv("HOME", isolated_home, 1)) {
         failure("runtime_isolation_failed"); goto done;
+    }
+    if (snprintf(isolated_passfile, sizeof(isolated_passfile), "%s/empty.pgpass", isolated_home) >=
+            (int)sizeof(isolated_passfile)) {
+        failure("runtime_isolation_failed"); goto done;
+    }
+    {
+        int descriptor = open(isolated_passfile, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+        if (descriptor < 0) {
+            failure("runtime_isolation_failed"); goto done;
+        }
+        if (close(descriptor)) {
+            failure("runtime_isolation_failed"); goto done;
+        }
+        isolated_passfile_created = 1;
     }
 
     connection = connect_bounded(keywords, values, now_ms() + deadline_ms);
@@ -363,6 +377,7 @@ done:
         if (results[check_index]) PQclear(results[check_index]);
     if (connection) PQfinish(connection);
     if (rootcert_fd >= 0) close(rootcert_fd);
+    if (isolated_passfile_created) unlink(isolated_passfile);
     if (isolated_home_created) rmdir(isolated_home);
     if (password) { memset(password, 0, strlen(password)); free(password); }
     return exit_code;

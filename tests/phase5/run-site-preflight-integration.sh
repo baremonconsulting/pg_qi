@@ -176,17 +176,19 @@ fi
 exec 9<&-
 
 statements="$root/statements.log"
-grep 'statement:' "$log" >"$statements"
+grep -E ' (statement:|execute <unnamed>:)' "$log" >"$statements"
+if [[ $(grep -c 'execute <unnamed>:' "$statements") -ne 40 ]]; then
+  echo 'fixed preflight query count differs from four complete ten-query connections' >&2; exit 1
+fi
 for query in \
   'SHOW pg_qi.routing_mode' \
   'SHOW duckdb.force_execution' \
   "SELECT pg_catalog.current_setting('server_version_num')" \
   'SELECT SESSION_USER::text, CURRENT_USER::text' \
-  'SHOW shared_preload_libraries' \
   'SHOW pg_qi.enabled'; do
   grep -F -- "$query" "$statements" >/dev/null
 done
-if grep -Eiq 'statement: *(SET|ALTER|CREATE|DROP|INSERT|UPDATE|DELETE|MERGE|COPY|CALL|DO|TRUNCATE|GRANT|REVOKE)' "$statements"; then
+if grep -Eiq '(statement:|execute <unnamed>:)[[:space:]]*(SET|ALTER|CREATE|DROP|INSERT|UPDATE|DELETE|MERGE|COPY|CALL|DO|TRUNCATE|GRANT|REVOKE)' "$statements"; then
   echo 'mutating or activation SQL observed' >&2; exit 1
 fi
 if grep -R -F 'PGQI_CREDENTIAL_CANARY' "$root" --exclude=server.key >/dev/null; then

@@ -41,7 +41,8 @@ The dossier contains one typed endpoint, never a URI or conninfo string:
 All inherited `PG*` variables and selected OpenSSL/dynamic-loader variables
 cause offline refusal. Service files, passfiles, options, URI expansion,
 multi-host lists and implicit endpoint search are outside the schema. Generated
-libpq parameters contain no password and disable the default passfile.
+libpq parameters contain no password; the driver points libpq to a private,
+mode-0600 empty passfile instead of a device or user-home default.
 The credential descriptor must resolve to an anonymous pipe; regular files and
 named FIFOs are rejected before any connection attempt.
 The adapter hashes the bounded CA input into a sealed in-memory file and gives
@@ -57,7 +58,9 @@ connection adapter must execute the exact ordered manifest with bounded
 protocol limits. A fresh cryptographic nonce plus the observed backend PID and
 backend start bind each result to one connection. The observed system
 identifier and postmaster start are compared with the externally attested
-start identity. An observation is accepted only with zero activation attempts. No `SET`, workload
+start identity. Preload order and hook inventory remain in that privileged,
+externally anchored start attestation; the ordinary application role is not
+granted `pg_read_all_settings`. An observation is accepted only with zero activation attempts. No `SET`, workload
 probe or retry belongs to this interface.
 
 `site-preflight-driver` is the narrow C/libpq adapter for these checks. It

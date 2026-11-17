@@ -60,7 +60,7 @@ expected = {"server_version_num": args.server_version, "database_name": "postgre
             "current_user": args.role, "postmaster_start_time": args.postmaster_start,
             "start_id": start["start_id"], "cluster_id": start["cluster_id"],
             "pg_qi_version": args.pg_qi_version, "pg_duckdb_version": args.pg_duckdb_version,
-            "shared_preload_libraries": "pg_duckdb,pg_qi", "routing_mode": "off",
+            "routing_mode": "off",
             "duckdb_force_execution": "off", "pg_qi_enabled": "on"}
 build_sha = hashlib.sha256(policy.canonical_bytes(build)).hexdigest()
 cells = [{"cell_id": cell, "result": "PASS", "evidence_sha256": "f" * 64}
