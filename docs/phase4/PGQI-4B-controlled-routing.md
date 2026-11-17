@@ -72,4 +72,6 @@ pinned PostgreSQL 19 build, including:
 - custom, generic, reused and invalidated plan behavior; and
 - absence of test controls and network operations from production hook paths.
 
-The feature is not release-ready until this evidence and human review pass.
+PGQI-4C defines the bounded pilot evidence and operator gate. Completion does
+not constitute unrestricted production certification; Human Review remains
+mandatory.

@@ -11,6 +11,8 @@ evidence. Experimental routing is explicit, `SUSET` and disabled by default.
 The [production decision contract](production-decision-contract.md) defines
 the required behavior and [PGQI-4B](phase4/PGQI-4B-controlled-routing.md)
 documents the implemented controlled-routing boundary.
+[PGQI-4C](phase4/PGQI-4C-pilot-readiness.md) adds a bounded evidence and
+operational gate without changing that routing boundary.
 
 ## Components
 

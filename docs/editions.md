@@ -29,7 +29,7 @@ The complete single-instance router will be open source in this repository, incl
 | Component | Status |
 |---|---|
 | Planner-hook integration and `pg_duckdb` delegation adapter | Implemented; production allow-list requests are explicit and scoped |
-| Off switch (`pg_qi.enabled`) | Implemented; when disabled, the planner hook passes straight through |
+| Off switch (`pg_qi.enabled`) | Implemented; when disabled, pg_qi makes no new routing request. Cached plans, running work and external force remain separate lifecycle concerns |
 | Query classification | Conservative PGQI-4B allow-list classifier runs in production; broader WP14 prototype remains test-only |
 | Routing rules and eligibility policy | Experimental static `off`/`allowlist` policy implemented; external policy is planned |
 | Admission control | Planned |

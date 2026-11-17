@@ -384,7 +384,7 @@ _PG_init(void)
 {
     DefineCustomBoolVariable("pg_qi.enabled",
                              "Enables pg_qi policy evaluation in this backend.",
-                             "PGQI-4A observes decisions in shadow mode and never routes.",
+                             "When enabled, pg_qi evaluates policy; routing still requires an explicit allow-list mode.",
                              &pg_qi_enabled,
                              true,
                              PGC_SUSET,

@@ -27,21 +27,23 @@ jobs:
       - name: Build target pg_duckdb
         run: bash .github/scripts/ci-build-pg-duckdb.sh "${{ matrix.postgresql }}"
       - name: Build and install pg_qi
+        env:
+          PG_QI_TESTING: "0"
         run: bash .github/scripts/ci-build-install-pg-qi.sh "${{ matrix.postgresql }}" "ci-artifacts/benchmark-pg${{ matrix.postgresql }}"
-      - name: Run WP11 benchmark
+      - name: Run PGQI-4C production benchmark
         env:
           PG_INSTALL_ROOT: /usr/lib/postgresql
-          WP11_MAJORS: ${{ matrix.postgresql }}
-          WP11_SKIP_BUILD_INSTALL: "1"
-          WP11_ARTIFACT_DIR: ${{ runner.temp }}/wp11-${{ matrix.postgresql }}
-        run: bash scripts/spike1/wp11-benchmark.sh
+        run: |
+          set -euo pipefail
+          bash scripts/phase4c/run-benchmark.sh \
+            "${{ matrix.postgresql }}" 25 250 \
+            "${{ runner.temp }}/pgqi4c-benchmark-${{ matrix.postgresql }}" \
+            | tee "ci-artifacts/benchmark-pg${{ matrix.postgresql }}/pgqi4c-path.txt"
       - name: Upload benchmark evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-pg${{ matrix.postgresql }}
           path: |
-            ${{ runner.temp }}/wp11-${{ matrix.postgresql }}/results.csv
-            ${{ runner.temp }}/wp11-${{ matrix.postgresql }}/pg*/*.log
-            ${{ runner.temp }}/wp11-${{ matrix.postgresql }}/pg*/*/*.txt
+            ${{ runner.temp }}/pgqi4c-benchmark-${{ matrix.postgresql }}
             ci-artifacts/benchmark-pg${{ matrix.postgresql }}
