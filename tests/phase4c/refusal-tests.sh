@@ -21,9 +21,9 @@ expect_refusal pgqi4c_start /nonexistent "$tmp/existing"
 expect_refusal pgqi4c_stop /nonexistent "$tmp"
 expect_refusal "$repo/scripts/phase4c/run-benchmark.sh" 0 invalid 1 "$tmp"
 printf 'pg_qi.spike_example\npg_qi.test_example\n' >"$tmp/test-surface"
-strings "$tmp/test-surface" | rg 'pg_qi\.spike_|pg_qi\.test_' >/dev/null
+strings "$tmp/test-surface" | grep -E 'pg_qi\.spike_|pg_qi\.test_' >/dev/null
 printf 'pg_qi.production_example\n' >"$tmp/production-surface"
-if strings "$tmp/production-surface" | rg 'pg_qi\.spike_|pg_qi\.test_' >/dev/null; then
+if strings "$tmp/production-surface" | grep -E 'pg_qi\.spike_|pg_qi\.test_' >/dev/null; then
     echo "production-surface pattern false positive" >&2
     failures=$((failures+1))
 fi

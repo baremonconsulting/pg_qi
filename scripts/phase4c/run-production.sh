@@ -18,7 +18,7 @@ run_root="$parent/run-pg${major}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 pgqi4c_sanitize_connection_env
 make -C "$pgqi4c_repo" PG_CONFIG="$pgbin/pg_config" PG_QI_TESTING=0 clean >"${run_root}.build.log" 2>&1
 make -C "$pgqi4c_repo" PG_CONFIG="$pgbin/pg_config" PG_QI_TESTING=0 -j2 >>"${run_root}.build.log" 2>&1
-if strings "$pgqi4c_repo/pg_qi.so" | rg 'pg_qi\.spike_|pg_qi\.test_|qi_spike_|qi_test_|PG_QI_FINAL' >/dev/null; then
+if strings "$pgqi4c_repo/pg_qi.so" | grep -E 'pg_qi\.spike_|pg_qi\.test_|qi_spike_|qi_test_|PG_QI_FINAL' >/dev/null; then
     echo "test-only surface leaked into production library" >&2; exit 1
 fi
 pgqi4c_verify_installed_production "$pgbin/pg_config" "$pgqi4c_repo/pg_qi.so"

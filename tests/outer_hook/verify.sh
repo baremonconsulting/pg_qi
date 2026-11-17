@@ -49,7 +49,7 @@ DROP EXTENSION pg_duckdb;
 SQL
 )
 
-test "$(rg -c '^ERROR:  pg_qi outer fixture error after owned force$' "$error_log")" -eq 1
+test "$(grep -Ec '^ERROR:  pg_qi outer fixture error after owned force$' "$error_log")" -eq 1
 
 expected=$'1\ndelegation_verified\nverified\noff\noff\noff\n1\non\n\n2\ncontext_unproved\noff\noff'
 if [ "$output" != "$expected" ]; then

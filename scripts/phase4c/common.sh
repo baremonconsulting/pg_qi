@@ -76,7 +76,7 @@ pgqi4c_verify_installed_production() {
         echo "installed pg_qi does not match the production build; install it explicitly in the dedicated test PostgreSQL tree" >&2
         return 1
     }
-    if strings "$installed" | rg 'pg_qi\.spike_|pg_qi\.test_|qi_spike_|qi_test_|PG_QI_FINAL' >/dev/null; then
+    if strings "$installed" | grep -E 'pg_qi\.spike_|pg_qi\.test_|qi_spike_|qi_test_|PG_QI_FINAL' >/dev/null; then
         echo "test-only surface found in installed pg_qi" >&2
         return 1
     fi

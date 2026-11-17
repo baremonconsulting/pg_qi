@@ -17,7 +17,7 @@ installed="$($pgbin/pg_config --pkglibdir)/pg_qi.so"
 installed_duckdb="$($pgbin/pg_config --pkglibdir)/pg_duckdb.so"
 test -f "$installed" || { echo "pg_qi production library is not installed" >&2; exit 1; }
 test -f "$installed_duckdb" || { echo "pg_duckdb library is not installed" >&2; exit 1; }
-if strings "$installed" | rg 'pg_qi\.spike_|pg_qi\.test_|qi_spike_|qi_test_|PG_QI_FINAL' >/dev/null; then echo "test-only installed library" >&2; exit 1; fi
+if strings "$installed" | grep -E 'pg_qi\.spike_|pg_qi\.test_|qi_spike_|qi_test_|PG_QI_FINAL' >/dev/null; then echo "test-only installed library" >&2; exit 1; fi
 installed_pre_sha=$(sha256sum "$installed" | cut -d' ' -f1)
 duckdb_pre_sha=$(sha256sum "$installed_duckdb" | cut -d' ' -f1)
 started=0
