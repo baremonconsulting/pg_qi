@@ -7,6 +7,7 @@
 
 #include "access/htup_details.h"
 #include "catalog/pg_class.h"
+#include "catalog/pg_inherits.h"
 #include "nodes/nodeFuncs.h"
 #include "pg_qi/qi_classify.h"
 #include "pg_qi/qi_eligibility.h"
@@ -79,6 +80,7 @@ qi_relation_allowed(const RangeTblEntry *entry,
     HeapTuple tuple;
     Form_pg_class relation;
     bool allowed = true;
+    bool has_inheritance_children = false;
 
     if (entry->tablesample != NULL)
     {
@@ -98,6 +100,13 @@ qi_relation_allowed(const RangeTblEntry *entry,
         return false;
     }
     relation = (Form_pg_class) GETSTRUCT(tuple);
+    if (entry->inh && relation->relhassubclass)
+    {
+        List *children = find_inheritance_children(entry->relid, NoLock);
+
+        has_inheritance_children = children != NIL;
+        list_free(children);
+    }
     if (relation->relkind != RELKIND_RELATION ||
         relation->relpersistence != RELPERSISTENCE_PERMANENT ||
         relation->relispartition)
@@ -110,7 +119,7 @@ qi_relation_allowed(const RangeTblEntry *entry,
         context->reason = QI_ELIGIBILITY_SECURITY_CONTEXT;
         allowed = false;
     }
-    else if (entry->inh && relation->relhassubclass)
+    else if (has_inheritance_children)
     {
         context->reason = QI_ELIGIBILITY_INHERITANCE;
         allowed = false;

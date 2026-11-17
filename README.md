@@ -6,12 +6,10 @@
 `pg_qi` is a PostgreSQL execution-policy extension for safe and explainable query-engine selection, initially targeting [`pg_duckdb`](https://github.com/duckdb/pg_duckdb).
 
 > [!IMPORTANT]
-> The project is in **pre-alpha development**. The production build does not
-> automatically route queries and must not be used for production routing.
-> PGQI-4A evaluates a conservative candidate classifier and records a
-> backend-local shadow decision, but its actual intent is always
-> `pass_through`. Spike 1 validated the low-level `pg_duckdb` delegation
-> mechanism; neither result is a production router.
+> The project is in **pre-alpha development** and must not be used for
+> production routing. PGQI-4B adds an experimental, superuser-controlled
+> `allowlist` mode for a deliberately narrow query subset; it remains `off` by
+> default and is intended only for controlled validation.
 
 ## Project goals
 
@@ -37,7 +35,9 @@ The repository currently contains:
 - a production-built, backend-local shadow decision record;
 - a conservative shadow candidate classifier separate from the WP14
   prototype;
-- `pg_qi.enabled`, the first extension GUC;
+- conservative client-context proof and final planner-boundary verification;
+- scoped production routing for the narrow allow-list, disabled by default;
+- `pg_qi.enabled` and `pg_qi.routing_mode` operator controls;
 - SQL functions for version and preload diagnostics;
 - an explicit test-only build containing Spike 1 controls, diagnostics,
   failpoints, re-entry simulation and benchmarks;
@@ -47,9 +47,11 @@ The repository currently contains:
 Spike 1 demonstrated deterministic one-shot delegation in its test harness,
 including nested planning, errors, cached plans, concurrency and parallel
 workers. The default production build deliberately exposes none of those test
-controls. The production hook now evaluates shadow candidacy and observes the
-plan returned by its downstream planner, but it never requests delegation.
-Telemetry export, policy management and automatic routing are not implemented.
+controls. The production hook evaluates candidacy and observes the plan
+returned by its downstream planner. When a superuser explicitly selects
+`allowlist`, it may request delegation only after context, provenance, state
+and classifier gates pass. Telemetry export and external policy management are
+not implemented.
 The broader WP14.2 classifier remains a test-gate prototype. See the
 [Spike 1 report](docs/spike1/spike-1-report.md) and
 [WP14 production/test boundary](docs/phase2/WP14-production-test-boundary.md).
@@ -108,12 +110,19 @@ Verify the installation:
 SELECT qi.version();
 SELECT qi.is_preloaded();
 SHOW pg_qi.enabled;
+SHOW pg_qi.routing_mode;
 ```
 
 The current production hook preserves the downstream planner-hook chain and
-does not initiate delegation because no production policy source exists. It
-records a shadow decision, calls the next planner hook (or PostgreSQL's
-standard planner) exactly once and returns that plan unchanged.
+calls the next planner hook (or PostgreSQL's standard planner) exactly once.
+Routing is disabled by default. A superuser may enable the experimental narrow
+allow-list for the current configuration scope:
+
+```sql
+SET pg_qi.routing_mode = 'allowlist';
+```
+
+Do not enable this mode for production workloads in the pre-alpha release.
 
 The completed backend-local snapshot is available through read-only
 `pg_qi.shadow_*` settings. Use `SHOW`, which does not itself create a plan:
@@ -126,10 +135,10 @@ SHOW pg_qi.shadow_observed_engine;
 SHOW pg_qi.shadow_verification;
 ```
 
-`unproved_outermost` means only that no recursive invocation of the pg_qi hook
-was active; it is not proof that planning originated directly from a client.
-A negative plan-tree match remains `unknown/unverified`, never verified
-PostgreSQL.
+`proven_client` requires a regular client backend outside executor and utility
+processing, an outermost pg_qi invocation and pg_qi ownership of the final
+planner-hook boundary. Other contexts do not originate requests. A negative
+plan-tree match remains `unknown/unverified`, never verified PostgreSQL.
 
 ## Development
 
@@ -149,8 +158,8 @@ of the default production installation.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines,
 [docs/architecture.md](docs/architecture.md) for the current architecture and
-the [production decision contract](docs/production-decision-contract.md) for
-the next routing stage.
+the [production decision contract](docs/production-decision-contract.md) and
+[PGQI-4B routing boundary](docs/phase4/PGQI-4B-controlled-routing.md).
 
 ## Editions
 

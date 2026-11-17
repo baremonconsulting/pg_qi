@@ -16,6 +16,7 @@
 #include "miscadmin.h"
 #include "pg_qi/planner_compat.h"
 #include "pg_qi/qi_classify.h"
+#include "pg_qi/qi_context.h"
 #include "pg_qi/qi_decision.h"
 #include "pg_qi/qi_delegation.h"
 #include "pg_qi/qi_detector.h"
@@ -35,6 +36,7 @@ PG_MODULE_MAGIC;
 
 static bool pg_qi_enabled = true;
 static bool pg_qi_preloaded = false;
+static int pg_qi_routing_mode = 0;
 #if PG_QI_TESTING
 static bool pg_qi_last_plan_has_duckdb_scan = false;
 static bool pg_qi_previous_hook_present = false;
@@ -46,6 +48,12 @@ static qi_planner_fn_type previous_planner_hook = NULL;
 #if !PG_QI_TESTING
 static int pg_qi_shadow_planner_depth = 0;
 #endif
+
+static const struct config_enum_entry pg_qi_routing_mode_options[] = {
+    {"off", 0, false},
+    {"allowlist", 1, false},
+    {NULL, 0, false}
+};
 
 #if PG_QI_TESTING
 static const struct config_enum_entry pg_qi_benchmark_options[] = {
@@ -227,8 +235,13 @@ done:
     return (PlannedStmt *) planned_stmt;
 #else
     PlannedStmt *volatile planned_stmt = NULL;
+    QiDelegationFrame *volatile frame = NULL;
+    volatile uint64 frame_id = 0;
+    volatile int save_nestlevel = 0;
     QiForceOrigin force_origin = QI_FORCE_OFF;
+    QiForceOrigin decision_force_origin = QI_FORCE_OFF;
     QiShadowContext context;
+    QiPolicyIntent policy_intent = QI_POLICY_PASS_THROUGH;
     QiShadowClassifierStatus classifier_status =
         QI_SHADOW_CLASSIFIER_NOT_EVALUATED;
     QiEligibilityResult eligibility = {
@@ -236,40 +249,81 @@ done:
         .reason = QI_ELIGIBILITY_CANDIDATE,
         .prototype_reason = QI_CLASSIFY_ELIGIBLE
     };
-    QiShadowReason reason;
+    QiShadowReason reason = QI_SHADOW_NO_COMPLETED_PLAN;
     QiShadowEngine observed_engine = QI_SHADOW_ENGINE_UNKNOWN;
+    QiVerification verification = QI_VERIFICATION_UNVERIFIED;
     QiShadowObservation observation =
         QI_SHADOW_OBSERVATION_NO_AUTHORITATIVE_MATCH;
+    bool context_proven;
+    bool request_applied = false;
+    volatile bool frame_active = false;
 
     pg_qi_shadow_planner_depth++;
-    context = pg_qi_shadow_planner_depth > 1
-        ? QI_SHADOW_CONTEXT_NESTED
-        : QI_SHADOW_CONTEXT_UNPROVED_OUTERMOST;
+    context_proven = qi_context_proven_for_routing(
+        planner_hook == pg_qi_planner, pg_qi_shadow_planner_depth);
+    if (pg_qi_shadow_planner_depth > 1)
+        context = QI_SHADOW_CONTEXT_NESTED;
+    else if (context_proven)
+        context = QI_SHADOW_CONTEXT_PROVEN_CLIENT;
+    else
+        context = QI_SHADOW_CONTEXT_UNPROVED_OUTERMOST;
 
     PG_TRY();
     {
+        if (qi_delegation_state_poisoned())
+            ereport(ERROR,
+                    (errmsg("pg_qi routing state is poisoned"),
+                     errhint("Reconnect the session before planning more queries.")));
+
         force_origin = qi_current_force_origin();
+        decision_force_origin = force_origin;
+
+        /* A nested invocation must not inherit a parent-owned request. */
+        if (context == QI_SHADOW_CONTEXT_NESTED &&
+            force_origin == QI_FORCE_QI_STACK)
+        {
+            save_nestlevel = NewGUCNestLevel();
+            frame = qi_frame_push(save_nestlevel, force_origin, false, true, 0);
+            frame_id = frame->frame_id;
+            frame_active = true;
+            if (frame->guc_changed)
+                qi_set_force_execution(false);
+        }
+
         if (!pg_qi_enabled)
             reason = QI_SHADOW_CONTROL_DISABLED;
         else if (context == QI_SHADOW_CONTEXT_NESTED)
             reason = QI_SHADOW_CONTEXT_NESTED_REASON;
         else if (force_origin == QI_FORCE_EXTERNAL)
             reason = QI_SHADOW_FORCE_EXTERNAL;
+        else if (!context_proven)
+            reason = QI_SHADOW_CONTEXT_UNPROVED_REASON;
         else
         {
             eligibility = qi_eligibility_query(parse);
             classifier_status = eligibility.candidate
                 ? QI_SHADOW_CLASSIFIER_CANDIDATE
                 : QI_SHADOW_CLASSIFIER_REJECTED;
-            reason = eligibility.candidate
-                ? QI_SHADOW_POLICY_MISSING
-                : QI_SHADOW_CLASSIFIER_REJECTED_REASON;
+            if (!eligibility.candidate)
+                reason = QI_SHADOW_CLASSIFIER_REJECTED_REASON;
+            else if (pg_qi_routing_mode == 0)
+                reason = QI_SHADOW_POLICY_MISSING;
+            else
+            {
+                policy_intent = QI_POLICY_REQUEST_DELEGATION;
+                reason = QI_SHADOW_DELEGATION_REQUESTED;
+                decision_force_origin = QI_FORCE_QI_STACK;
+                save_nestlevel = NewGUCNestLevel();
+                frame = qi_frame_push(save_nestlevel, force_origin, true,
+                                      false, 0);
+                frame_id = frame->frame_id;
+                frame_active = true;
+                if (frame->guc_changed)
+                    qi_set_force_execution(true);
+                request_applied = true;
+            }
         }
 
-        /*
-         * PGQI-4A is structurally pass-through.  It never creates a GUC nest,
-         * never calls qi_set_force_execution(), and calls downstream once.
-         */
         planned_stmt = pg_qi_call_downstream(parse, query_string,
                                               cursor_options, bound_params
 #if QI_HAVE_PLANNER_ES
@@ -281,16 +335,40 @@ done:
             observed_engine = QI_SHADOW_ENGINE_DUCKDB;
             observation =
                 QI_SHADOW_OBSERVATION_DUCKDB_SCAN_AT_DOWNSTREAM_BOUNDARY;
+            if (context_proven && planner_hook == pg_qi_planner)
+                verification = QI_VERIFICATION_VERIFIED;
+        }
+
+        if (request_applied)
+            reason = verification == QI_VERIFICATION_VERIFIED &&
+                observed_engine == QI_SHADOW_ENGINE_DUCKDB
+                ? QI_SHADOW_DELEGATION_VERIFIED
+                : QI_SHADOW_DELEGATION_DECLINED;
+
+        if (frame_active)
+        {
+            AtEOXact_GUC(true, save_nestlevel);
+            frame_active = false;
+            if (!qi_frame_pop(frame_id))
+                ereport(ERROR,
+                        (errmsg("pg_qi could not restore routing state"),
+                         errhint("Reconnect the session before planning more queries.")));
         }
 
         /* Nested observations never replace the completed outer snapshot. */
         if (pg_qi_shadow_planner_depth == 1)
-            qi_shadow_publish(context, force_origin, classifier_status,
-                              eligibility, reason, observed_engine,
-                              observation);
+            qi_shadow_publish(context, policy_intent, decision_force_origin,
+                              classifier_status, eligibility, reason,
+                              observed_engine, verification, observation,
+                              request_applied);
     }
     PG_CATCH();
     {
+        if (frame_active)
+        {
+            AtEOXact_GUC(false, save_nestlevel);
+            (void) qi_frame_unwind_on_error(frame_id);
+        }
         pg_qi_shadow_planner_depth--;
         PG_RE_THROW();
     }
@@ -309,6 +387,18 @@ _PG_init(void)
                              "PGQI-4A observes decisions in shadow mode and never routes.",
                              &pg_qi_enabled,
                              true,
+                             PGC_SUSET,
+                             0,
+                             NULL,
+                             NULL,
+                             NULL);
+
+    DefineCustomEnumVariable("pg_qi.routing_mode",
+                             "Controls production allow-list routing.",
+                             "The default off mode remains observational.",
+                             &pg_qi_routing_mode,
+                             0,
+                             pg_qi_routing_mode_options,
                              PGC_SUSET,
                              0,
                              NULL,
@@ -366,11 +456,13 @@ _PG_init(void)
     pg_qi_previous_hook_present = previous_planner_hook != NULL;
 #endif
     planner_hook = pg_qi_planner;
+    qi_context_init_hooks();
 }
 
 void
 _PG_fini(void)
 {
+    qi_context_fini_hooks();
     if (planner_hook == pg_qi_planner)
         planner_hook = previous_planner_hook;
 }

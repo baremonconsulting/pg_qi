@@ -4,13 +4,13 @@
 
 This document describes the current `pg_qi` codebase after Spike 1, the
 production/test split and the PostgreSQL 19 RC2 compatibility replay. The
-project remains pre-alpha. The production build installs a planner hook,
-evaluates a conservative PGQI-4A shadow candidate and records local plan
-evidence, but it does not automatically route queries.
+project remains pre-alpha. The production build installs planner, executor and
+utility hooks, evaluates a conservative allow-list and records local plan
+evidence. Experimental routing is explicit, `SUSET` and disabled by default.
 
 The [production decision contract](production-decision-contract.md) defines
-the required behaviour for the next implementation stage. It is a design
-contract, not a description of functionality available today.
+the required behavior and [PGQI-4B](phase4/PGQI-4B-controlled-routing.md)
+documents the implemented controlled-routing boundary.
 
 ## Components
 
@@ -21,14 +21,17 @@ src/pg_qi.c
 src/qi_delegation.c
     backend-local frame stack, duckdb.force_execution adapter and provenance
 
+src/qi_context.c
+    executor/utility tracking and conservative client-context proof
+
 src/qi_classify.c
     broader WP14 classifier prototype used by test evidence
 
 src/qi_eligibility.c
-    conservative production shadow candidate classifier
+    conservative production routing allow-list
 
 src/qi_decision.c
-    versioned backend-local shadow decision record and read-only GUCs
+    versioned backend-local decision record and read-only GUCs
 
 src/qi_detector.c
     DuckDBScan plan-tree detector used by shadow evidence and test diagnostics
@@ -40,8 +43,9 @@ src/include/pg_qi/planner_compat.h
     PostgreSQL planner-signature compatibility
 ```
 
-The production shadow classifier is deliberately narrower than the WP14
-prototype. Neither classifier result is permission to route.
+The production classifier is deliberately narrower than the WP14 prototype.
+Its result is only one routing gate; it cannot bypass context, provenance,
+state or policy checks.
 
 ## Loading and hook ownership
 
@@ -61,22 +65,25 @@ extension.
 caller or later-loaded outer hook
                 |
                 v
-          pg_qi planner hook
+          pg_qi planner hook (must own final boundary for routing)
                 |
-                +-- observe availability, context, provenance and candidacy
+                +-- gate availability, context, provenance and eligibility
                 |
-                +-- saved hook or standard planner (exactly once)
+                +-- optional scoped owned-force request
+                |
+                +-- saved hook or standard planner (exactly once per call)
                                       |
                                       v
                               observe returned plan
                                       |
                                       v
-                          publish pass-through snapshot
+                          publish independent intent and plan evidence
 ```
 
-The PGQI-4A production path creates no delegation frame or GUC nest and never
-originates a delegation request. The explicit test build retains the Spike
-delegation path and its frames.
+With `pg_qi.routing_mode = off`, the production path remains observational.
+In explicit `allowlist` mode, a proven client context and positive eligibility
+result may create an owning frame and scoped request. If another hook later
+becomes outermost, context proof fails and no request is made.
 
 ## Delegation frames and GUC scope
 
@@ -93,20 +100,17 @@ planning invocation:
 The adapter changes `duckdb.force_execution` only through PostgreSQL's GUC
 machinery. On a successful planning return, `AtEOXact_GUC()` restores the
 frame's scoped change before the frame is popped. On an error, the catch path
-removes the frame without throwing and rethrows the original error; PostgreSQL
-then restores the GUC nest level during transaction or subtransaction error
-cleanup. The catch path does not itself call `AtEOXact_GUC()`.
+restores the GUC nest, removes the frame without replacing the original error
+and rethrows it.
 
 Frame removal is order-checked. An ordering or underflow violation marks the
-backend-local cleanup sentinel as broken. The present sentinel is diagnostic;
-production fail-closed enforcement for a poisoned state is a prerequisite of
-the next runtime stage.
+backend-local cleanup sentinel as broken. A poisoned backend cannot originate
+another request and aborts rather than entering an unsafe downstream path.
 
-Synthetic nested-planner masking is part of the explicit test build. PGQI-4A
-tracks recursion depth for observation, but depth zero is only an unproved
-outermost hook invocation; it is not a complete production top-level-context
-proof. Production shadow mode never owns force, so no inherited `qi_stack`
-request can originate from its call path.
+Nested planning under an owned request creates its own frame, masks force to
+`off`, calls downstream and restores the parent request. A CI-only downstream
+hook fixture verifies the mask and restoration without entering the production
+library or SQL surface.
 
 ## Force provenance
 
@@ -136,15 +140,15 @@ reports.
 aggregates and data types receive an ineligible result. Its reason names are
 deterministic within the current prototype.
 
-The prototype is evidence for a future policy stage, not a complete safety
-proof. PGQI-4A therefore wraps it with a narrower production shadow classifier
+The prototype is evidence, not a complete safety proof. The production path
+therefore wraps it with a narrower allow-list classifier
 that explicitly rejects active RLS metadata, security qualifications,
 TABLESAMPLE, active inheritance, partitioned or non-permanent relations,
 joins, aggregates, grouping, ordering, parameters, functions and casts.
 
-The result is candidate research data, not a routing certificate. Production
-routing remains disabled until the complete routing contract is implemented
-and tested.
+The result is not a routing certificate by itself. A request additionally
+requires proven context, clean backend state, non-external provenance and
+explicit `allowlist` policy.
 
 ## Decision time and cached plans
 
@@ -183,17 +187,19 @@ child and subplan locations. A positive match proves that the plan returned to
 the `pg_qi` hook contains that provider. A negative match is not a universal
 proof that every possible alternative engine is absent.
 
-PGQI-4A uses the detector only as evidence at the downstream-planner-return
-boundary. A later-loaded outer planner hook may transform the plan after
-`pg_qi` returns, so every shadow result remains `unverified`. A negative match
-is recorded as `unknown`, not as PostgreSQL.
+When pg_qi owns the outermost planner hook, a positive provider match at its
+return boundary is verified DuckDB evidence. A later-loaded outer hook makes
+the context unproved and blocks policy routing. A negative match is recorded
+as `unknown`, not as PostgreSQL.
 
 ## Production and test surfaces
 
 The default build exposes only:
 
-- the planner integration;
+- planner, executor and utility integration;
 - `pg_qi.enabled`;
+- `pg_qi.routing_mode`;
+- read-only `pg_qi.shadow_*` decision fields;
 - `qi.version()`; and
 - `qi.is_preloaded()`.
 
@@ -218,13 +224,12 @@ be lower-case stable identifiers, have deterministic precedence and evolve
 additively. Operators must preserve unknown codes rather than reinterpret
 them. Human-readable messages may change without changing the code.
 
-PGQI-4A shadow reasons and eligibility details are versioned machine-readable
-values. Reserved routing reasons remain unimplemented.
+Shadow and routing reasons plus eligibility details are versioned
+machine-readable values. Existing meanings are not reused.
 
-## Next implementation boundary
+## Release boundary
 
-PGQI-4A implements only the observational subset of the
-[production decision contract](production-decision-contract.md). The remaining
-routing gates—policy source, proven context, owned-force isolation, poison
-handling and final-engine verification—must be implemented and reviewed before
-automatic routing can be enabled.
+PGQI-4B implements the controlled single-backend routing mechanics in the
+[production decision contract](production-decision-contract.md). It remains
+pre-alpha and default-off until the complete acceptance matrix, independent
+review and human review are finished.

@@ -2,11 +2,11 @@
 
 ## Status and scope
 
-This document is the normative design input for production routing. PGQI-4A
-implements its observational subset: pass-through intent, conservative shadow
-candidacy, external-force provenance and local returned-plan evidence. The
-owned-force and automatic-routing parts remain unimplemented. This contract
-does not authorise automatic routing.
+This document is the normative contract for production routing. PGQI-4A
+implemented its observational subset. PGQI-4B implements an experimental,
+default-off allow-list path with proven-context gating, owned-force isolation,
+poison handling and authoritative positive DuckDB verification. It does not
+claim verified PostgreSQL execution or release readiness.
 
 The contract separates four facts that must never be collapsed into one:
 
@@ -140,7 +140,8 @@ precedence are reviewed as part of the production API.
 
 ## Required implementation evidence
 
-Automatic routing remains disabled until the implementation proves:
+Controlled routing must remain default-off and must not be considered
+release-ready until the implementation proves:
 
 - production classifier coverage and negative tests for every unsupported
   semantic family;

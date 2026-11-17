@@ -101,7 +101,8 @@ qi_state_try_push(QiBackendState *state, int guc_nest_level,
     QiDelegationFrame *frame;
     QiForceOrigin inherited_origin;
 
-    if (state->depth < 0 || state->depth >= QI_MAX_DELEGATION_FRAMES)
+    if (state->cleanup_broken ||
+        state->depth < 0 || state->depth >= QI_MAX_DELEGATION_FRAMES)
         return false;
 
     inherited_origin = state->depth > 0
@@ -264,6 +265,10 @@ qi_frame_push(int guc_nest_level, QiForceOrigin ambient_origin,
 {
     QiDelegationFrame *frame = NULL;
 
+    if (qi_delegation_state_poisoned())
+        ereport(ERROR,
+                (errmsg("pg_qi delegation state is poisoned"),
+                 errhint("Reconnect the session before planning more queries.")));
     if (!qi_state_try_push(&qi_backend_state, guc_nest_level, ambient_origin,
                            delegation_requested, reentry, generation, &frame))
         ereport(ERROR,
@@ -291,12 +296,29 @@ qi_current_force_origin(void)
     const char *value;
     bool enabled;
 
+    if (qi_backend_state.depth > 0)
+        return qi_backend_state.frames[qi_backend_state.depth - 1]
+            .effective_origin;
+
     value = GetConfigOption(QI_FORCE_GUC, false, false);
     if (!parse_bool(value, &enabled))
         ereport(ERROR,
                 (errmsg("invalid boolean value for %s: %s",
                         QI_FORCE_GUC, value)));
     return enabled ? QI_FORCE_EXTERNAL : QI_FORCE_OFF;
+}
+
+int
+qi_delegation_depth(void)
+{
+    return qi_backend_state.depth;
+}
+
+bool
+qi_delegation_state_poisoned(void)
+{
+    return qi_backend_state.cleanup_broken || qi_backend_state.depth < 0 ||
+        qi_backend_state.depth > QI_MAX_DELEGATION_FRAMES;
 }
 
 bool
@@ -516,7 +538,9 @@ qi_test_frame_contract(PG_FUNCTION_ARGS)
     qi_state_try_push(&corrupt, 1, QI_FORCE_OFF, false, false, 1, &parent);
     corruption_detected =
         !qi_state_remove_top(&corrupt, parent->frame_id + 1, false) &&
-        corrupt.cleanup_broken && corrupt.depth == 1;
+        corrupt.cleanup_broken && corrupt.depth == 1 &&
+        !qi_state_try_push(&corrupt, 2, QI_FORCE_OFF, true, false, 2,
+                           &ignored);
 
     MemSet(&normal, 0, sizeof(normal));
     qi_state_try_push(&normal, 1, QI_FORCE_OFF, true, false, 20, &parent);

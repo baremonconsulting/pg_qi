@@ -66,6 +66,8 @@ extern QiDelegationFrame *qi_frame_push(int guc_nest_level,
 extern bool qi_frame_pop(uint64 expected_frame_id);
 extern bool qi_frame_unwind_on_error(uint64 expected_frame_id);
 extern QiForceOrigin qi_current_force_origin(void);
+extern int qi_delegation_depth(void);
+extern bool qi_delegation_state_poisoned(void);
 extern bool qi_token_consume_top_level(uint64 *generation);
 extern void qi_record_nested_plan(bool has_duckdb_scan);
 extern void qi_record_completed_plan(bool has_duckdb_scan);

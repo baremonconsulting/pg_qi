@@ -2,8 +2,8 @@
 
 > [!NOTE]
 > This document defines the intended editions model. Items marked **planned**
-> do not exist yet. The production build classifies candidates only for a
-> local PGQI-4A shadow record and does not route queries; see
+> do not exist yet. The production build has a default-off experimental
+> PGQI-4B allow-list router; see
 > [Current state](../README.md#current-state) in the README.
 
 ## The single-extension rule
@@ -28,15 +28,15 @@ The complete single-instance router will be open source in this repository, incl
 
 | Component | Status |
 |---|---|
-| Planner-hook integration and `pg_duckdb` delegation adapter | Implemented and validated by Spike 1; the production build does not initiate delegation yet |
+| Planner-hook integration and `pg_duckdb` delegation adapter | Implemented; production allow-list requests are explicit and scoped |
 | Off switch (`pg_qi.enabled`) | Implemented; when disabled, the planner hook passes straight through |
-| Query classification | Conservative PGQI-4A candidate classifier runs in production shadow mode; broader WP14 prototype remains test-only |
-| Routing rules and eligibility policy | Planned |
+| Query classification | Conservative PGQI-4B allow-list classifier runs in production; broader WP14 prototype remains test-only |
+| Routing rules and eligibility policy | Experimental static `off`/`allowlist` policy implemented; external policy is planned |
 | Admission control | Planned |
 | Execution watchdog | Planned |
 | Quarantine | Planned |
 | Manual whitelist and blacklist | Planned |
-| Explain reason codes | Versioned backend-local PGQI-4A shadow reasons implemented; routing reasons remain planned |
+| Explain reason codes | Versioned backend-local shadow and routing reasons implemented |
 | Local decision telemetry | Backend-local read-only shadow snapshot implemented; export and durable telemetry planned |
 
 Once these components exist, everything needed to operate one instance safely will live in this repository.
