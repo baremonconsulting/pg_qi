@@ -1,19 +1,30 @@
 # PGQI-4C closeout
 
-Status: implementation in progress; Human Review not yet granted.
+Status: automated implementation and evidence gates passed; Human Review not
+yet granted.
 
 ## Evidence matrix
 
 | Gate | Local | CI PG16 | CI PG17 | CI PG18 | CI PG19 pinned |
 |---|---|---|---|---|---|
-| Production compile and boundary | pending | pending | pending | pending | pending |
-| Production smoke | pending | pending | pending | pending | pending |
-| Security/lifecycle regression | pending | pending | pending | pending | pending |
-| Rollback drill | pending | pending | pending | pending | pending |
-| Manual request benchmark | pending | on dispatch | on dispatch | on dispatch | on dispatch |
+| Production compile and boundary | PASS (PG17 exploratory) | PASS | PASS | PASS | PASS |
+| Production smoke | PASS (PG17; foreign case NOT_RUN because local `file_fdw` is absent) | PASS | PASS | PASS | PASS |
+| Security/lifecycle regression | PASS (PG17) | PASS | PASS | PASS | PASS |
+| Rollback drill | PASS (PG17) | PASS | PASS | PASS | PASS |
+| Manual request benchmark | PASS (short PG17 run) | PASS | PASS | PASS | PASS |
 
-No pending cell is a pass. CI links and immutable artifact names are added only
-after the reviewed revision executes.
+The required CI run completed 24/24 jobs successfully:
+<https://github.com/baremonconsulting/pg_qi/actions/runs/44047628228>.
+The separate production benchmark completed 4/4 PostgreSQL jobs successfully:
+<https://github.com/baremonconsulting/pg_qi/actions/runs/44051490924>.
+The earlier superseded CI attempt was cancelled after it exposed and prompted
+removal of a non-portable runtime dependency on `rg`.
+
+Five independent final reviews were performed. Their blocking findings were
+iteratively corrected, including scenario completeness, full unordered result
+validation, cleanup ownership, path/connection safety, installed-artifact
+identity, cached-plan rollback, external force provenance, diagnostic
+retention, classifier security coverage and portable tooling.
 
 ## Known limits retained
 
