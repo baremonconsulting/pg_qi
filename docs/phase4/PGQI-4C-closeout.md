@@ -1,7 +1,11 @@
 # PGQI-4C closeout
 
-Status: automated implementation and evidence gates passed; Human Review not
-yet granted.
+Status: **COMPLETE — PASS**. Automated implementation and evidence gates,
+Human Review, merge and post-merge CI have all completed successfully.
+
+Authoritative merged revision:
+`a7592e649bf8b8f345b83d15880c6497cbe65468` (pull request
+[#14](https://github.com/baremonconsulting/pg_qi/pull/14), merged 2026-11-17).
 
 ## Evidence matrix
 
@@ -17,6 +21,9 @@ The required CI run completed 24/24 jobs successfully:
 <https://github.com/baremonconsulting/pg_qi/actions/runs/44047628228>.
 The separate production benchmark completed 4/4 PostgreSQL jobs successfully:
 <https://github.com/baremonconsulting/pg_qi/actions/runs/44051490924>.
+The post-merge `main` run completed successfully against the authoritative
+merge revision:
+<https://github.com/baremonconsulting/pg_qi/actions/runs/44059931763>.
 The earlier superseded CI attempt was cancelled after it exposed and prompted
 removal of a non-portable runtime dependency on `rg`.
 
@@ -36,8 +43,12 @@ retention, classifier security coverage and portable tooling.
 - timing on hosted infrastructure is descriptive, not a universal service
   level or performance certification.
 
-## Human Review gate
+## Human Review and disposition
 
-The reviewer must confirm the exact revision, all required artifact cells,
-open findings, cookbook commands and default-off policy. Merge, deployment and
-pilot activation remain separate explicit decisions.
+Human Review was granted on 2026-11-17 after confirmation of the exact
+revision, required artifact cells, open findings, cookbook commands and the
+default-off policy. Pull request #14 was subsequently merged into `main`, and
+the post-merge CI run passed on the resulting merge revision.
+
+PGQI-4C is therefore closed. This closeout does not authorise deployment or
+pilot activation; either remains a separate explicit operational decision.
