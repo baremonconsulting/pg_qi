@@ -429,8 +429,11 @@ int main(int argc, char **argv) {
                             reason = "prepared_cached_unattributed";
                         }
                         plans[prepared_slot].planned = 1;
-                    } else if (!changed || single_change) reason = "fresh";
-                    else {
+                    } else if (single_change) reason = "fresh";
+                    else if (!changed) {
+                        planning_state = "UNAVAILABLE";
+                        reason = "fresh_planning_unavailable";
+                    } else {
                         planning_state = "UNAVAILABLE";
                         reason = "fresh_plan_activity_unattributed";
                     }

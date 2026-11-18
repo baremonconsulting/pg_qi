@@ -57,12 +57,14 @@ printf 'SELECT 1 / value FROM p5_literal WHERE id = 1;\n' >"$audited_cases/execu
 printf "SELECT ('pgqi_absent_' || id::text)::regclass FROM p5_literal WHERE id = 1;\n" >"$audited_cases/execution_error_42.sql"
 printf 'SELECT value FROM p5_revalidation WHERE id = 1;\n' >"$audited_cases/revalidation_error.sql"
 printf "SELECT query_to_xml('SELECT 1', false, false, '');\n" >"$audited_cases/nested_planning.sql"
+printf 'SHOW work_mem;\n' >"$audited_cases/utility_no_plan.sql"
 cp "$repo/tests/phase5/sql/runtime-error.sql" "$audited_cases/partial_error.sql"
 chmod 600 "$audited_cases/case_a.sql" "$audited_cases/case_b.sql"
 chmod 600 "$audited_cases/planning_error.sql" "$audited_cases/execution_error.sql" "$audited_cases/partial_error.sql"
 chmod 600 "$audited_cases/planning_error_non42.sql" "$audited_cases/execution_error_42.sql"
 chmod 600 "$audited_cases/revalidation_error.sql"
 chmod 600 "$audited_cases/nested_planning.sql"
+chmod 600 "$audited_cases/utility_no_plan.sql"
 PYTHONPATH="$repo" python3 - "$repo" "$conninfo application_name=pgqi_p5_audited" "$audited_cases" "$audited_out" "$pg_bindir/psql" "$conninfo" <<'PY'
 import hashlib, json, pathlib, subprocess, sys
 from tools.phase5.pilot_runtime import AuditedSession, SequenceJournal
@@ -74,6 +76,8 @@ digests["revalidation_error"] = hashlib.sha256(
     (cases / "revalidation_error.sql").read_bytes()).hexdigest()
 digests["nested_planning"] = hashlib.sha256(
     (cases / "nested_planning.sql").read_bytes()).hexdigest()
+digests["utility_no_plan"] = hashlib.sha256(
+    (cases / "utility_no_plan.sql").read_bytes()).hexdigest()
 journal = SequenceJournal(output)
 args = ["--conninfo", conninfo, "--case-root", str(cases), "--output-root", str(output),
         "--session-mode", "lab_allowlist", "--deadline-ms", "8000", "--max-requests", "24",
@@ -82,6 +86,11 @@ args = ["--conninfo", conninfo, "--case-root", str(cases), "--output-root", str(
 session = AuditedSession(repo / "tools/phase5/audited-session-driver", journal, args,
                          digests, hashlib.sha256((repo / "tools/phase5/audited-session-driver").read_bytes()).hexdigest())
 first = session.dispatch("case_a")
+utility_no_plan = session.dispatch("utility_no_plan")
+if (utility_no_plan["reason"], utility_no_plan["planning_state"],
+        utility_no_plan["execution_state"], utility_no_plan["snapshot_state"]) != \
+        ("fresh_planning_unavailable", "UNAVAILABLE", "COMPLETE", "COMPLETE"):
+    raise SystemExit(f"fresh utility reused stale planning evidence: {utility_no_plan}")
 second = session.dispatch("case_a")
 prepared_a = session.prepare("a", "case_a")
 planned_a = session.execute_prepared("a")
@@ -124,7 +133,7 @@ if nested_cached_outer["reason"] != "prepared_plan_activity_unattributed":
     raise SystemExit(f"nested planning was falsely attributed: {nested_cached_outer}")
 session.close(); journal.close()
 if any(item["state"] != "COMPLETE" for item in
-       (first, second, cached_a, replanned_a, cached_replanned_a, reprepared_a,
+       (first, utility_no_plan, second, cached_a, replanned_a, cached_replanned_a, reprepared_a,
         after_all, after_upper)):
     raise SystemExit("audited session did not complete")
 rows = [json.loads(line) for line in (output / "request.journal.jsonl").read_text().splitlines()]
