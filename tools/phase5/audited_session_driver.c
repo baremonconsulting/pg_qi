@@ -116,7 +116,7 @@ static int open_private_directory(const char *path) {
 }
 
 static char *read_case_at(int root_fd, const char *name) {
-    int fd = openat(root_fd, name, O_RDONLY | O_NOFOLLOW);
+    int fd = openat(root_fd, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
     struct stat st; char *data; size_t used = 0;
     if (fd < 0 || fstat(fd, &st) || !S_ISREG(st.st_mode) || st.st_nlink != 1 ||
         st.st_uid != getuid() || (st.st_mode & 0022) != 0 ||

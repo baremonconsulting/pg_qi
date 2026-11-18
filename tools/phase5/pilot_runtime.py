@@ -59,15 +59,20 @@ def _exclusive_file(root: Path, name: str):
 class SequenceJournal:
     """Append-only hash-chained JSONL written by one central sequence owner."""
 
-    def __init__(self, root: Path, name: str = "request.journal.jsonl") -> None:
+    def __init__(self, root: Path, name: str = "request.journal.jsonl",
+                 max_records: int = 100000, max_record_bytes: int = 65536) -> None:
         self._stream, self._root_fd = _exclusive_file(root, name)
         self._sequence = 0
         self._previous = "0" * 64
         self._closed = False
+        self._max_records = max_records
+        self._max_record_bytes = max_record_bytes
 
     def append(self, phase: str, state: str, payload: dict[str, Any]) -> dict[str, Any]:
         if self._closed or phase not in PHASES or state not in TERMINAL | {"STARTED"}:
             raise ValueError("invalid journal transition")
+        if self._sequence >= self._max_records:
+            raise ValueError("journal record limit reached")
         self._sequence += 1
         record = {"schema_version": 1, "sequence": self._sequence,
                   "phase": phase, "state": state, "previous_sha256": self._previous,
@@ -75,6 +80,8 @@ class SequenceJournal:
         digest = hashlib.sha256(_canonical(record)).hexdigest()
         record["record_sha256"] = digest
         data = _canonical(record) + b"\n"
+        if len(data) > self._max_record_bytes:
+            raise ValueError("journal record exceeds limit")
         if self._stream.write(data) != len(data):
             raise OSError("short journal write")
         os.fsync(self._stream.fileno())
@@ -212,18 +219,29 @@ class AuditedSession:
 
     def __init__(self, driver: Path, journal: SequenceJournal,
                  fixed_args: list[str], approved_cases: dict[str, str],
+                 expected_driver_sha256: str,
                  response_timeout_seconds: int = 30) -> None:
-        if not driver.is_file() or driver.is_symlink():
-            raise ValueError("audited driver must be a real file")
+        driver_fd = os.open(driver, os.O_RDONLY | os.O_NOFOLLOW)
+        info = os.fstat(driver_fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid not in (0, os.getuid()) or
+                info.st_mode & 0o022 or not re.fullmatch(r"[0-9a-f]{64}", expected_driver_sha256)):
+            os.close(driver_fd); raise ValueError("audited driver identity is unsafe")
+        digest = hashlib.sha256()
+        while chunk := os.read(driver_fd, 65536):
+            digest.update(chunk)
+        if digest.hexdigest() != expected_driver_sha256:
+            os.close(driver_fd); raise ValueError("audited driver digest mismatch")
         self._journal = journal
         self._approved_cases = dict(approved_cases)
         self._response_timeout = response_timeout_seconds
         self._registry = PreparedRegistry()
         self._closed = False
         self._proc = subprocess.Popen(
-            [str(driver), *fixed_args], stdin=subprocess.PIPE,
+            [f"/proc/self/fd/{driver_fd}", *fixed_args], stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, close_fds=True,
+            pass_fds=(driver_fd,),
             start_new_session=True, env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
+        os.close(driver_fd)
 
     def dispatch(self, case_id: str) -> dict[str, Any]:
         case_digest = self._approved_cases.get(case_id, "")

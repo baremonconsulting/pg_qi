@@ -62,7 +62,7 @@ args = ["--conninfo", conninfo, "--case-root", str(cases), "--output-root", str(
         "--max-rows", "2000", "--max-bytes", "1048576", "--max-columns", "4",
         "--max-field-bytes", "1024", "--max-spool-bytes", "2097152", "--max-messages", "2010"]
 session = AuditedSession(repo / "tools/phase5/audited-session-driver", journal, args,
-                         digests)
+                         digests, hashlib.sha256((repo / "tools/phase5/audited-session-driver").read_bytes()).hexdigest())
 first = session.dispatch("case_a")
 second = session.dispatch("case_a")
 session.prepare("a", "case_a")

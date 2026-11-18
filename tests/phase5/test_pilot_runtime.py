@@ -45,6 +45,21 @@ class JournalTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 SequenceJournal(link)
 
+    def test_record_count_and_size_are_bounded(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); os.chmod(root, 0o700)
+            journal = SequenceJournal(root, max_records=1, max_record_bytes=1024)
+            journal.append("request", "STARTED", {})
+            with self.assertRaises(ValueError):
+                journal.append("request", "STARTED", {})
+            journal.close()
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); os.chmod(root, 0o700)
+            journal = SequenceJournal(root, max_record_bytes=128)
+            with self.assertRaises(ValueError):
+                journal.append("request", "STARTED", {"value": "x" * 1000})
+            journal.close()
+
 
 class RegistryTests(unittest.TestCase):
     def test_a_b_cached_a_and_deallocate_are_distinct(self) -> None:
@@ -80,7 +95,8 @@ class FramedSessionTests(unittest.TestCase):
             fixture = Path(__file__).parent / "fixtures/framed-driver.py"
             driver = Path(sys.executable).resolve()
             journal = SequenceJournal(root)
-            session = AuditedSession(driver, journal, [str(fixture)], {"case_a": "a" * 64})
+            session = AuditedSession(driver, journal, [str(fixture)], {"case_a": "a" * 64},
+                                     hashlib.sha256(driver.read_bytes()).hexdigest())
             response = session.dispatch("case_a")
             session.close(); journal.close()
             self.assertEqual(response["state"], "COMPLETE")
@@ -97,7 +113,8 @@ class FramedSessionTests(unittest.TestCase):
             fixture = Path(__file__).parent / "fixtures/framed-driver.py"
             driver = Path(sys.executable).resolve()
             journal = SequenceJournal(root)
-            session = AuditedSession(driver, journal, [str(fixture), "disconnect"], {"case_a": "a" * 64})
+            session = AuditedSession(driver, journal, [str(fixture), "disconnect"], {"case_a": "a" * 64},
+                                     hashlib.sha256(driver.read_bytes()).hexdigest())
             with self.assertRaisesRegex(RuntimeError, "will not be replayed"):
                 session.dispatch("case_a")
             with self.assertRaises(ValueError):
@@ -114,7 +131,8 @@ class FramedSessionTests(unittest.TestCase):
             fixture = Path(__file__).parent / "fixtures/framed-driver.py"
             driver = Path(sys.executable).resolve()
             journal = SequenceJournal(root)
-            session = AuditedSession(driver, journal, [str(fixture), "mismatch"], {"case_a": "a" * 64})
+            session = AuditedSession(driver, journal, [str(fixture), "mismatch"], {"case_a": "a" * 64},
+                                     hashlib.sha256(driver.read_bytes()).hexdigest())
             with self.assertRaises(RuntimeError):
                 session.dispatch("case_a")
             journal.close()
@@ -125,7 +143,8 @@ class FramedSessionTests(unittest.TestCase):
             fixture = Path(__file__).parent / "fixtures/framed-driver.py"
             journal = SequenceJournal(root)
             session = AuditedSession(Path(sys.executable).resolve(), journal,
-                [str(fixture)], {"case_a": "a" * 64, "case_b": "b" * 64})
+                [str(fixture)], {"case_a": "a" * 64, "case_b": "b" * 64},
+                hashlib.sha256(Path(sys.executable).resolve().read_bytes()).hexdigest())
             session.prepare("a", "case_a")
             session.prepare("b", "case_b")
             session.execute_prepared("a")
