@@ -57,7 +57,7 @@
     },
     "request": {
       "required": ["scope_sha256", "run_id", "session_id", "request_id", "query_id", "execution_status", "planning_evidence", "snapshot_relation"],
-      "optional": ["snapshot_id", "planning_request_id", "prepared_object_id", "prepared_generation", "sqlstate"]
+      "optional": ["snapshot_id", "planning_request_id", "prepared_object_id", "prepared_generation", "sqlstate", "observed_spool"]
     },
     "snapshot": {
       "required": ["scope_sha256", "snapshot_id", "session_id", "planning_request_id", "prepared_object_id", "prepared_generation", "decision_id", "tuple"],

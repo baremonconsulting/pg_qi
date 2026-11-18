@@ -70,6 +70,32 @@ python3 tools/phase5/evidence_tool.py export \
 The input bundle and receipt are never modified. Validation receipts are
 created exclusively, and an export destination must not already exist.
 
+## Corpus qualification and typed oracle
+
+`corpus_oracle.py` is the fail-closed P5-4A boundary. It keeps the natural
+inventory, executable corpus and synthetic controls separate, validates the
+provider-free static PostgreSQL baseline manifest, and compares complete typed
+integer result multisets with an externally sorted, bounded-memory algorithm.
+Raw SHA-256 equality is an integrity check, not an oracle result.
+
+```sh
+python3 tools/phase5/corpus_oracle.py qualify \
+  --manifest qualification.json --output qualification-result.json
+python3 tools/phase5/corpus_oracle.py validate-baseline \
+  --manifest baseline.json --output baseline-result.json
+python3 tools/phase5/corpus_oracle.py compare \
+  --baseline raw/native.spool --observed raw/subject.spool \
+  --scratch-root /private/0700/scratch --max-spool-bytes 1048576 \
+  --max-rows 10000 --max-columns 32 --max-field-bytes 128 \
+  --max-rows-in-memory 64 --output comparison.json
+```
+
+Only PostgreSQL `int2`, `int4`, `int8` and NULL fields are accepted in v1.
+The baseline must come from the `native_baseline` session mode on a separate
+static PostgreSQL instance with no `pg_qi`, `pg_duckdb` or delegating provider.
+See `docs/phase5/PGQI-5-corpus-oracle.md` for the exact evidence contract and
+limitations.
+
 ## Release and site-preflight policy
 
 `site_preflight.py` validates an exact source/build/install/start dossier,

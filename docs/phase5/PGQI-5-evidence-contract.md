@@ -62,6 +62,18 @@ a later, separate gate.
 
 ## Verification
 
+Private evidence that claims a workload result also includes an exact
+`corpus_qualification` input, a `baseline_manifest` payload and both typed
+spool artifacts for every oracle case. The frozen qualification bytes define
+the workload inventory identity. Baseline case identifiers must equal the
+execution corpus; unsupported and unexecuted natural items remain in the
+coverage denominator.
+
+Oracle PASS is recomputed from complete typed result multisets. Artifact
+digests bind bytes but cannot substitute for parsing and comparison. Provider
+off/disabled executions are controls, not provider-free baselines. The exact
+format and limits are defined in [PGQI-5 corpus and oracle](PGQI-5-corpus-oracle.md).
+
 Run `python3 tests/phase5/test_contracts.py`. The suite includes adversarial
 parser inputs, scope mutation, approval mismatch, receipt separation,
 planning-error and cached-plan attribution, dirty failure, false aggregate

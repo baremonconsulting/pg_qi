@@ -8,6 +8,7 @@ import io
 import importlib.util
 import json
 import sys
+import struct
 import tempfile
 import unittest
 import zipfile
@@ -35,6 +36,26 @@ def artifact(root: Path, relative: str) -> dict[str, object]:
     return {"path": relative, "sha256": hashlib.sha256(payload).hexdigest(), "bytes": len(payload)}
 
 
+def write_spool(path: Path, rows: list[tuple[int | None, ...]],
+                columns: list[tuple[str, int]] | None = None) -> None:
+    columns = columns or [("value", 23)]
+    payload = bytearray(b"PGQSP001") + struct.pack(">I", len(columns))
+    for name, oid in columns:
+        encoded = name.encode()
+        payload += struct.pack(">I", len(encoded)) + encoded + struct.pack(">I", oid)
+    for row in rows:
+        payload += struct.pack(">I", len(row))
+        for value in row:
+            if value is None:
+                payload += struct.pack(">I", 0xFFFFFFFF)
+            else:
+                encoded = str(value).encode()
+                payload += struct.pack(">I", len(encoded)) + encoded
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(payload)
+    path.chmod(0o600)
+
+
 def state(result: str = "PASS", complete: bool = True) -> dict[str, str]:
     return {"lifecycle": "VALIDATED", "technical_result": result,
             "evidence_completeness": "COMPLETE" if complete else "PARTIAL",
@@ -56,21 +77,55 @@ def contract(kind: str, identity: str, **fields: object) -> dict[str, object]:
 
 
 def build_private(root: Path, outcome: str = "PASS", missing_cell: bool = False,
-                  raw_retained: bool = True, query_id: str = "q-1") -> None:
+                  raw_retained: bool = True, query_id: str = "q-1",
+                  malformed_spools: bool = False) -> None:
     input_names = ("workload_definition", "release_definition", "target", "limits",
                    "evidence_policy", "recovery_plan", "export_policy", "toolkit",
                    "role_bindings", "window")
     for name in input_names:
         write_json(root / f"inputs/{name}.json", {"name": name, "revision": 1})
     (root / "raw").mkdir()
+    (root / "scratch").mkdir(mode=0o700)
     (root / "raw/q.sql").write_text("SELECT 1\n", encoding="utf-8")
-    (root / "raw/expected.bin").write_bytes(b"one-row")
-    (root / "raw/observed.bin").write_bytes(b"one-row" if outcome != "FAIL" else b"wrong-row")
+    if malformed_spools:
+        for path in (root / "raw/expected.spool", root / "raw/observed.spool"):
+            path.write_bytes(b"same invalid spool bytes"); path.chmod(0o600)
+    else:
+        write_spool(root / "raw/expected.spool", [(1,), (1,), (None,)])
+        write_spool(root / "raw/observed.spool",
+                    [(None,), (1,), (1,)] if outcome != "FAIL" else [(None,), (1,), (2,)])
     (root / "raw/debug.log").write_text("clean diagnostic\n")
+    authority = {"state": "AUTHORISED", "reference": "qualification-approval",
+                 "authorized_before_acquisition": True}
     write_json(root / "inputs/workload_definition.json", {"schema_version": 1,
-        "document_type": "workload_definition", "cases": [{"query_id": query_id,
-        "sql_sha256": artifact(root, "raw/q.sql")["sha256"],
-        "expected_sha256": artifact(root, "raw/expected.bin")["sha256"], "mandatory": True}]})
+        "document_type": "corpus_qualification", "qualification_id": "qualification-1",
+        "authorities": {"inventory": dict(authority), "executed_sql": dict(authority),
+                        "dataset": dict(authority)},
+        "storage_policy": {"authorization_reference": "storage-approval",
+            "raw_root": "/private/raw", "spool_root": "/private/spool",
+            "scratch_root": str(root / "scratch"), "required_mode": "0700",
+            "retention_class": "retention-30d", "retention_authority": "evidence-owner",
+            "authorized_before_acquisition": True},
+        "baseline_authority": {"authorization_reference": "baseline-approval",
+            "authorized_before_acquisition": True, "clean_instance_attested": True,
+            "server_build_sha256": "8" * 64, "schema_sha256": "9" * 64,
+            "data_sha256": "a" * 64, "configuration_sha256": "b" * 64,
+            "provider_identity": "POSTGRESQL_NATIVE_NO_DELEGATING_PROVIDER",
+            "cases": [{"query_id": query_id, "spool_path": "raw/expected.spool",
+                "spool_sha256": artifact(root, "raw/expected.spool")["sha256"],
+                "spool_bytes": artifact(root, "raw/expected.spool")["bytes"]}]},
+        "oracle_limits": {"max_spool_bytes": 1048576, "max_rows": 10000,
+            "max_columns": 32, "max_field_bytes": 128, "max_rows_in_memory": 64,
+            "max_open_runs": 8},
+        "natural_inventory": [{"query_id": query_id, "inventory_origin": "natural_internal",
+            "inventory_source_ref": "inventory-1", "eligibility": "ELIGIBLE",
+            "reason_family": "supported", "frequency_weight": 1,
+            "baseline_time_weight": 1}],
+        "execution_corpus": [{"query_id": query_id, "natural_query_id": query_id,
+            "executed_sql_origin": "natural_internal", "executed_sql_ref": "sql-1",
+            "sql_sha256": artifact(root, "raw/q.sql")["sha256"],
+            "dataset_origin": "synthetic_control", "dataset_ref": "dataset-1",
+            "concurrent_writes": False}], "synthetic_controls": []})
 
     scope = contract("scope", "scope-1",
         scope_inputs={name: artifact(root, f"inputs/{name}.json") for name in input_names},
@@ -88,7 +143,7 @@ def build_private(root: Path, outcome: str = "PASS", missing_cell: bool = False,
         approvals=["operation-owner"], nonce="nonce-1")
     write_json(root / "payload/approval.json", approval)
     workload = contract("workload", "workload-1", scope_sha256=scope_digest,
-        inventory_sha256="2" * 64, entries=[{
+        inventory_sha256=artifact(root, "inputs/workload_definition.json")["sha256"], entries=[{
             "query_id": query_id, "sql": artifact(root, "raw/q.sql"),
             "inventory_origin": "natural_internal", "inventory_authority": "AUTHORISED",
             "executed_sql_origin": "natural_internal", "executed_sql_authority": "AUTHORISED",
@@ -107,10 +162,11 @@ def build_private(root: Path, outcome: str = "PASS", missing_cell: bool = False,
     write_json(root / "payload/request.json", contract("request", "request-1",
         scope_sha256=scope_digest, run_id="run-1", session_id="session-1",
         request_id="request-1", query_id=query_id,
-        execution_status="SUCCEEDED" if outcome == "PASS" else
-                         "FAILED" if outcome == "FAIL" else "NOT_STARTED",
+        execution_status="SUCCEEDED" if outcome in {"PASS", "FAIL"} else "NOT_STARTED",
         planning_evidence="FRESH", snapshot_relation="CURRENT",
-        snapshot_id="snapshot-1", planning_request_id="plan-1"))
+        snapshot_id="snapshot-1", planning_request_id="plan-1",
+        **({"observed_spool": artifact(root, "raw/observed.spool")}
+           if outcome in {"PASS", "FAIL"} else {})))
     write_json(root / "payload/resource.json", contract("resource", "resource-1",
         scope_sha256=scope_digest, run_id="run-1", sample_sequence=1, monotonic_ns=1,
         source_id="proc-stat", values={"rss": 1024}, units={"rss": "bytes"}, source_age_ms=1))
@@ -125,18 +181,28 @@ def build_private(root: Path, outcome: str = "PASS", missing_cell: bool = False,
                          "FAIL" if outcome == "FAIL" else "NOT_RUN", state=current_state))
 
     oracle_result = "PASS" if outcome == "PASS" else "FAIL" if outcome == "FAIL" else "NOT_RUN"
+    write_json(root / "payload/baseline.json", {"schema_version": 1,
+        "document_type": "baseline_manifest", "baseline_id": "baseline-1",
+        "server_build_sha256": "8" * 64, "schema_sha256": "9" * 64,
+        "data_sha256": "a" * 64, "configuration_sha256": "b" * 64,
+        "provider_identity": "POSTGRESQL_NATIVE_NO_DELEGATING_PROVIDER",
+        "provider_absence_verified": True, "static_data": True,
+        "concurrent_writes": False, "cases": [{"query_id": query_id,
+            "spool_path": "raw/expected.spool",
+            "spool_sha256": artifact(root, "raw/expected.spool")["sha256"],
+            "spool_bytes": artifact(root, "raw/expected.spool")["bytes"]}]})
     write_json(root / "payload/oracle.json", {"schema_version": 1, "document_type": "oracle",
         "oracle_id": "oracle-1", "cases": [{"query_id": query_id,
-        "expected_sha256": artifact(root, "raw/expected.bin")["sha256"],
-        "observed_sha256": artifact(root, "raw/observed.bin")["sha256"],
+        "baseline_spool": artifact(root, "raw/expected.spool"),
+        "observed_spool": artifact(root, "raw/observed.spool"),
         "result": oracle_result, "raw_retained": raw_retained,
-        "sqlstate": None if oracle_result == "PASS" else "XX000"}]})
+        "sqlstate": None}]})
     cell_names = sorted(tool.REQUIRED_SITE_CELLS)
     if missing_cell: cell_names.pop()
     cell_result = "PASS" if outcome == "PASS" else "FAIL" if outcome == "FAIL" else "NOT_RUN"
     write_json(root / "payload/site-cells.json", {"schema_version": 1,
         "document_type": "site_cells", "cells": [{"cell_id": name, "result": cell_result,
-        "evidence_sha256": artifact(root, "raw/expected.bin")["sha256"]} for name in cell_names]})
+        "evidence_sha256": artifact(root, "raw/expected.spool")["sha256"]} for name in cell_names]})
 
     payload_names = [path.relative_to(root).as_posix() for path in root.rglob("*")
                      if path.is_file() and path.name != "scope.json"]
@@ -195,10 +261,10 @@ class PrivateValidationTests(unittest.TestCase):
                 root = Path(name); build_private(root)
                 if mutation == "missing": (root / "payload/resource.json").unlink()
                 elif mutation == "extra": (root / "unindexed.txt").write_text("extra")
-                elif mutation == "tampered": (root / "raw/observed.bin").write_bytes(b"tampered")
+                elif mutation == "tampered": (root / "raw/observed.spool").write_bytes(b"tampered")
                 else:
                     oracle = json.loads((root / "payload/oracle.json").read_text())
-                    oracle["cases"][0]["observed_sha256"] = "f" * 64
+                    oracle["cases"][0]["observed_spool"]["sha256"] = "f" * 64
                     write_json(root / "payload/oracle.json", oracle); reseal(root)
                 with self.assertRaises(rules.ContractError): tool.validate_private(root, scope_hash(root))
 
@@ -209,6 +275,75 @@ class PrivateValidationTests(unittest.TestCase):
             terminal["state"] = state("INCONCLUSIVE", False); terminal["aggregate_pass"] = False
             write_json(root / "terminal.json", terminal); reseal(root)
             self.assertEqual(tool.validate_private(root, scope_hash(root))["result"], "INCOMPLETE")
+
+    def test_hash_equality_and_forged_pass_cannot_replace_typed_comparison(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); build_private(root, outcome="FAIL")
+            oracle = json.loads((root / "payload/oracle.json").read_text())
+            oracle["cases"][0]["result"] = "PASS"
+            write_json(root / "payload/oracle.json", oracle); reseal(root)
+            with self.assertRaisesRegex(rules.ContractError, "contradicts complete comparison"):
+                tool.validate_private(root, scope_hash(root))
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); build_private(root)
+            for relative in ("raw/expected.spool", "raw/observed.spool"):
+                (root / relative).write_bytes(b"same invalid non-spool bytes")
+                (root / relative).chmod(0o600)
+            baseline_manifest = json.loads((root / "payload/baseline.json").read_text())
+            baseline_manifest["cases"][0].update({
+                "spool_sha256": artifact(root, "raw/expected.spool")["sha256"],
+                "spool_bytes": artifact(root, "raw/expected.spool")["bytes"]})
+            write_json(root / "payload/baseline.json", baseline_manifest)
+            oracle = json.loads((root / "payload/oracle.json").read_text())
+            oracle["cases"][0]["baseline_spool"] = artifact(root, "raw/expected.spool")
+            oracle["cases"][0]["observed_spool"] = artifact(root, "raw/observed.spool")
+            write_json(root / "payload/oracle.json", oracle)
+            request = json.loads((root / "payload/request.json").read_text())
+            request["observed_spool"] = artifact(root, "raw/observed.spool")
+            write_json(root / "payload/request.json", request)
+            cells = json.loads((root / "payload/site-cells.json").read_text())
+            for cell in cells["cells"]:
+                cell["evidence_sha256"] = artifact(root, "raw/expected.spool")["sha256"]
+            write_json(root / "payload/site-cells.json", cells); reseal(root)
+            with self.assertRaisesRegex(rules.ContractError,
+                                        "baseline cases differ from scope-approved"):
+                tool.validate_private(root, scope_hash(root))
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); build_private(root, malformed_spools=True)
+            with self.assertRaisesRegex(rules.ContractError, "invalid typed oracle evidence"):
+                tool.validate_private(root, scope_hash(root))
+
+    def test_provider_or_static_control_cannot_claim_verified_baseline(self) -> None:
+        for field, value in (("provider_identity", "ROUTING_OFF_CONTROL"),
+                             ("provider_absence_verified", False),
+                             ("static_data", False), ("concurrent_writes", True)):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as name:
+                root = Path(name); build_private(root)
+                manifest = json.loads((root / "payload/baseline.json").read_text())
+                manifest[field] = value
+                write_json(root / "payload/baseline.json", manifest); reseal(root)
+                with self.assertRaisesRegex(rules.ContractError, "invalid baseline manifest"):
+                    tool.validate_private(root, scope_hash(root))
+
+    def test_observed_spool_cannot_alias_scope_approved_baseline(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); build_private(root)
+            baseline_artifact = artifact(root, "raw/expected.spool")
+            oracle = json.loads((root / "payload/oracle.json").read_text())
+            oracle["cases"][0]["observed_spool"] = baseline_artifact
+            write_json(root / "payload/oracle.json", oracle)
+            request = json.loads((root / "payload/request.json").read_text())
+            request["observed_spool"] = baseline_artifact
+            write_json(root / "payload/request.json", request); reseal(root)
+            with self.assertRaisesRegex(rules.ContractError, "cannot alias the baseline"):
+                tool.validate_private(root, scope_hash(root))
+
+    def test_scope_approved_scratch_root_must_itself_be_private(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); build_private(root)
+            scratch = root / "scratch"; scratch.chmod(0o755)
+            with self.assertRaisesRegex(rules.ContractError, "scratch root must be an owned 0700"):
+                tool.validate_private(root, scope_hash(root))
 
     def test_external_scope_anchor_rejects_recomputed_baseline(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -231,6 +366,17 @@ class PrivateValidationTests(unittest.TestCase):
                 document["run_id"] = "foreign-run"
                 write_json(root / relative, document); reseal(root)
                 with self.assertRaisesRegex(rules.ContractError, "another run"):
+                    tool.validate_private(root, scope_hash(root))
+
+    def test_workload_provenance_must_match_scope_frozen_definition(self) -> None:
+        for field, value in (("executed_sql_origin", "derived_reproduction"),
+                             ("dataset_origin", "natural_customer")):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as name:
+                root = Path(name); build_private(root)
+                workload = json.loads((root / "payload/workload.json").read_text())
+                workload["entries"][0][field] = value
+                write_json(root / "payload/workload.json", workload); reseal(root)
+                with self.assertRaisesRegex(rules.ContractError, "frozen definition"):
                     tool.validate_private(root, scope_hash(root))
 
     def test_mandatory_site_not_run_forces_incomplete(self) -> None:
@@ -269,26 +415,45 @@ class PrivateValidationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name); build_private(root)
             (root / "raw/q2.sql").write_text("SELECT 2\n")
-            (root / "raw/expected2.bin").write_bytes(b"two-row")
-            (root / "raw/observed2.bin").write_bytes(b"two-row")
+            write_spool(root / "raw/expected2.spool", [(2,)])
+            write_spool(root / "raw/observed2.spool", [(2,)])
             definition = json.loads((root / "inputs/workload_definition.json").read_text())
-            definition["cases"].append({"query_id": "q-2",
+            definition["natural_inventory"].append({"query_id": "q-2",
+                "inventory_origin": "natural_internal", "inventory_source_ref": "inventory-1",
+                "eligibility": "ELIGIBLE", "reason_family": "supported",
+                "frequency_weight": 1, "baseline_time_weight": 1})
+            definition["execution_corpus"].append({"query_id": "q-2",
+                "natural_query_id": "q-2", "executed_sql_origin": "natural_internal",
+                "executed_sql_ref": "sql-2",
                 "sql_sha256": artifact(root, "raw/q2.sql")["sha256"],
-                "expected_sha256": artifact(root, "raw/expected2.bin")["sha256"], "mandatory": True})
+                "dataset_origin": "synthetic_control", "dataset_ref": "dataset-1",
+                "concurrent_writes": False})
+            definition["baseline_authority"]["cases"].append({"query_id": "q-2",
+                "spool_path": "raw/expected2.spool",
+                "spool_sha256": artifact(root, "raw/expected2.spool")["sha256"],
+                "spool_bytes": artifact(root, "raw/expected2.spool")["bytes"]})
             write_json(root / "inputs/workload_definition.json", definition)
             scope = json.loads((root / "scope.json").read_text())
             scope["scope_inputs"]["workload_definition"] = artifact(root, "inputs/workload_definition.json")
             write_json(root / "scope.json", scope); digest = scope_hash(root)
             workload = json.loads((root / "payload/workload.json").read_text())
+            workload["inventory_sha256"] = artifact(
+                root, "inputs/workload_definition.json")["sha256"]
             second = dict(workload["entries"][0]); second["query_id"] = "q-2"
             second["sql"] = artifact(root, "raw/q2.sql"); workload["entries"].append(second)
             write_json(root / "payload/workload.json", workload)
             oracle = json.loads((root / "payload/oracle.json").read_text())
             oracle["cases"].append({"query_id": "q-2",
-                "expected_sha256": artifact(root, "raw/expected2.bin")["sha256"],
-                "observed_sha256": artifact(root, "raw/observed2.bin")["sha256"],
+                "baseline_spool": artifact(root, "raw/expected2.spool"),
+                "observed_spool": artifact(root, "raw/observed2.spool"),
                 "result": "PASS", "raw_retained": True, "sqlstate": None})
             write_json(root / "payload/oracle.json", oracle)
+            baseline_manifest = json.loads((root / "payload/baseline.json").read_text())
+            baseline_manifest["cases"].append({"query_id": "q-2",
+                "spool_path": "raw/expected2.spool",
+                "spool_sha256": artifact(root, "raw/expected2.spool")["sha256"],
+                "spool_bytes": artifact(root, "raw/expected2.spool")["bytes"]})
+            write_json(root / "payload/baseline.json", baseline_manifest)
             for path in (root / "payload").glob("*.json"):
                 document = json.loads(path.read_text())
                 if "scope_sha256" in document:
@@ -298,7 +463,7 @@ class PrivateValidationTests(unittest.TestCase):
             approval["preflight_sha256"] = rules.canonical_sha256(preflight)
             write_json(root / "payload/approval.json", approval)
             index = json.loads((root / "index.json").read_text()); index["scope_sha256"] = digest
-            for relative in ("raw/q2.sql", "raw/expected2.bin", "raw/observed2.bin"):
+            for relative in ("raw/q2.sql", "raw/expected2.spool", "raw/observed2.spool"):
                 index["payloads"].append(artifact(root, relative))
             write_json(root / "index.json", index); reseal(root)
             self.assertEqual(tool.validate_private(root, digest)["result"], "INCOMPLETE")
@@ -318,7 +483,7 @@ class PrivateValidationTests(unittest.TestCase):
             root = Path(name); build_private(root)
             cells = json.loads((root / "payload/site-cells.json").read_text())
             cells["cells"].append({"cell_id": "CANARY_PRIVATE_SECRET_92847", "result": "PASS",
-                                   "evidence_sha256": artifact(root, "raw/expected.bin")["sha256"]})
+                                   "evidence_sha256": artifact(root, "raw/expected.spool")["sha256"]})
             write_json(root / "payload/site-cells.json", cells); reseal(root)
             with self.assertRaisesRegex(rules.ContractError, "unknown site cell"):
                 tool.validate_private(root, scope_hash(root))

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 repo=$(cd "$(dirname "$0")/../.." && pwd)
 : "${PG_CONFIG:?set PG_CONFIG to a disposable PostgreSQL 16 toolchain}"
@@ -14,9 +15,11 @@ mkdir -m 700 "$out"
 lab=$(mktemp -d "${TMPDIR:-/tmp}/pgqi-p5-XXXXXX")
 socket="$lab/socket"
 data="$lab/data"
+baseline_data="$lab/baseline-data"
 source_copy="$lab/source"
 port=$((55000 + ($$ % 9000)))
 cleanup() {
+  "$pg_bindir/pg_ctl" -D "$baseline_data" -m immediate stop >/dev/null 2>&1 || true
   "$pg_bindir/pg_ctl" -D "$data" -m immediate stop >/dev/null 2>&1 || true
   rm -rf -- "$lab"
 }
@@ -240,6 +243,83 @@ if grep -Eiq 'ALTER[[:space:]]+SYSTEM|CREATE[[:space:]]+ROLE|DROP[[:space:]]+ROL
   exit 1
 fi
 
+# PQ-9 provider-free static baseline and complete typed multiset comparison.
+baseline_socket="$lab/baseline-socket"
+baseline_port=$((port + 1))
+corpus_out="$out/corpus-oracle"
+mkdir -m 700 "$baseline_socket" "$corpus_out" "$corpus_out/raw" "$corpus_out/scratch"
+"$pg_bindir/initdb" -D "$baseline_data" --no-locale --encoding=UTF8 --auth=trust >/dev/null
+printf '%s\n' \
+  "shared_preload_libraries = ''" \
+  "unix_socket_directories = '$baseline_socket'" \
+  "listen_addresses = ''" \
+  "port = $baseline_port" \
+  "max_connections = 10" >>"$baseline_data/postgresql.conf"
+"$pg_bindir/pg_ctl" -D "$baseline_data" -l "$corpus_out/baseline-postgres.log" start >/dev/null
+baseline_conninfo="host=$baseline_socket port=$baseline_port dbname=postgres user=$(id -un) connect_timeout=2"
+"$pg_bindir/psql" "$baseline_conninfo" -X -v ON_ERROR_STOP=1 \
+  -c 'CREATE TABLE p5_literal(id integer PRIMARY KEY, value integer NOT NULL)' \
+  -c 'INSERT INTO p5_literal SELECT g, 1 FROM generate_series(1,1000) AS g' \
+  -c 'ANALYZE p5_literal' >/dev/null
+python3 "$repo/tools/phase5/supervisor.py" \
+  --driver "$repo/tools/phase5/protocol-driver" --run-root "$corpus_out/raw" \
+  --conninfo "$baseline_conninfo" --sql-file "$repo/tests/phase5/sql/literal.sql" \
+  --spool "$corpus_out/raw/baseline.spool" \
+  --snapshot "$corpus_out/raw/baseline.snapshot.tsv" \
+  --protocol extended --session-mode native_baseline \
+  --deadline-ms 8000 --cancel-grace-ms 1000 \
+  --max-address-space-kib 65536 --max-output-bytes 65536 \
+  --max-rows 2000 --max-bytes 1048576 --max-columns 4 \
+  --max-field-bytes 1024 --max-spool-bytes 2097152 \
+  --max-messages 2010 >"$corpus_out/baseline-terminal.json"
+cp "$audited_out/00000000000000000001-case_a.spool" "$corpus_out/raw/observed.spool"
+chmod 600 "$corpus_out/raw/observed.spool"
+python3 - "$corpus_out" "$pg_bindir/psql" "$baseline_conninfo" <<'PY'
+import hashlib, json, os, pathlib, subprocess, sys
+root, psql, conninfo = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+def digest(data): return hashlib.sha256(data).hexdigest()
+def write(name, value):
+    path=root/name; path.write_text(json.dumps(value, sort_keys=True, separators=(",", ":"))+"\n")
+    os.chmod(path, 0o600)
+def query(sql):
+    return subprocess.check_output([psql, conninfo, "-X", "-At", "-v", "ON_ERROR_STOP=1", "-c", sql])
+baseline=(root/"raw/baseline.spool").read_bytes()
+configuration=query("SELECT current_setting('shared_preload_libraries'), current_setting('session_preload_libraries'), current_setting('local_preload_libraries'); SELECT extname FROM pg_extension ORDER BY extname")
+baseline_case={"query_id":"literal-natural","spool_path":"raw/baseline.spool","spool_sha256":digest(baseline),"spool_bytes":len(baseline)}
+authority={"state":"AUTHORISED","reference":"synthetic-lab-approval","authorized_before_acquisition":True}
+qualification={"schema_version":1,"document_type":"corpus_qualification",
+ "qualification_id":"pq9-synthetic-lab","authorities":{"inventory":dict(authority),"executed_sql":dict(authority),"dataset":dict(authority)},
+ "storage_policy":{"authorization_reference":"pq9-ci-storage","raw_root":"/private/raw","spool_root":"/private/spool","scratch_root":"/private/scratch","required_mode":"0700","retention_class":"ci-ephemeral","retention_authority":"ci-owner","authorized_before_acquisition":True},
+ "baseline_authority":{"authorization_reference":"pq9-ci-baseline","authorized_before_acquisition":True,"clean_instance_attested":True,
+  "server_build_sha256":digest(query("SELECT version()")),"schema_sha256":digest(b"p5_literal(id int4 primary key,value int4 not null)"),
+  "data_sha256":digest(query("SELECT id, value FROM p5_literal ORDER BY id")),"configuration_sha256":digest(configuration),
+  "provider_identity":"POSTGRESQL_NATIVE_NO_DELEGATING_PROVIDER","cases":[baseline_case]},
+ "oracle_limits":{"max_spool_bytes":2097152,"max_rows":2000,"max_columns":4,"max_field_bytes":1024,"max_rows_in_memory":64,"max_open_runs":4},
+ "natural_inventory":[{"query_id":"literal-natural","inventory_origin":"natural_internal","inventory_source_ref":"synthetic-fixture","eligibility":"ELIGIBLE","reason_family":"supported","frequency_weight":1,"baseline_time_weight":1},{"query_id":"unsupported-natural","inventory_origin":"natural_internal","inventory_source_ref":"synthetic-fixture","eligibility":"UNSUPPORTED","reason_family":"unsupported-type","frequency_weight":None,"baseline_time_weight":None}],
+ "execution_corpus":[{"query_id":"literal-natural","natural_query_id":"literal-natural","executed_sql_origin":"natural_internal","executed_sql_ref":"literal-sql","sql_sha256":digest(b"SELECT id, value FROM p5_literal WHERE value = 1;\n"),"dataset_origin":"synthetic_control","dataset_ref":"p5-literal-static","concurrent_writes":False}],
+ "synthetic_controls":[]}
+write("qualification.json", qualification)
+manifest={"schema_version":1,"document_type":"baseline_manifest","baseline_id":"pq9-native-pg16",
+ "server_build_sha256":digest(query("SELECT version()")),
+ "schema_sha256":digest(b"p5_literal(id int4 primary key,value int4 not null)"),
+ "data_sha256":digest(query("SELECT id, value FROM p5_literal ORDER BY id")),
+ "configuration_sha256":digest(configuration),
+ "provider_identity":"POSTGRESQL_NATIVE_NO_DELEGATING_PROVIDER","provider_absence_verified":True,
+ "static_data":True,"concurrent_writes":False,
+ "cases":[baseline_case]}
+write("baseline-manifest.json", manifest)
+PY
+python3 "$repo/tools/phase5/corpus_oracle.py" qualify \
+  --manifest "$corpus_out/qualification.json" --output "$corpus_out/qualification-result.json"
+python3 "$repo/tools/phase5/corpus_oracle.py" validate-baseline \
+  --manifest "$corpus_out/baseline-manifest.json" --output "$corpus_out/baseline-validation.json"
+python3 "$repo/tools/phase5/corpus_oracle.py" compare \
+  --baseline "$corpus_out/raw/baseline.spool" --observed "$corpus_out/raw/observed.spool" \
+  --scratch-root "$corpus_out/scratch" --output "$corpus_out/oracle-comparison.json" \
+  --max-spool-bytes 2097152 --max-rows 2000 --max-columns 4 \
+  --max-field-bytes 1024 --max-rows-in-memory 64 --max-open-runs 4
+"$pg_bindir/pg_ctl" -D "$baseline_data" -m fast -w stop >/dev/null
+
 run_case() {
   local name=$1 protocol=$2 sql=$3 expected=$4 session_mode=$5
   shift 5
@@ -285,7 +365,7 @@ run_case column_limit extended literal.sql LIMIT_EXCEEDED off --max-columns 1
 run_case empty_column_limit extended empty-columns.sql LIMIT_EXCEEDED off --max-columns 1
 run_case message_limit extended literal.sql LIMIT_EXCEEDED off --max-messages 10
 run_case max_field extended max-field.sql LIMIT_EXCEEDED off --max-field-bytes 1024
-run_case spool_limit extended large.sql LIMIT_EXCEEDED off --max-spool-bytes 4096
+run_case spool_limit extended large.sql LIMIT_EXCEEDED off --max-spool-bytes 4127
 run_case query_deadline extended slow.sql FAILED off --deadline-ms 250
 run_case multiple_simple simple multiple-simple.sql FAILED off
 

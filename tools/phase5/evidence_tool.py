@@ -23,6 +23,7 @@ from contract_rules import (
     canonical_sha256,
     validate_contract,
 )
+from corpus_oracle import OracleError, compare_spools, validate_baseline, validate_qualification
 
 PRIVATE_REQUIRED_CONTRACTS = {
     "approval_receipt", "preflight", "workload", "release", "request", "snapshot",
@@ -227,8 +228,24 @@ def _assert_no_credentials(payload: bytes, name: str) -> None:
         raise EvidenceError("credential-like bundle path")
 
 
+def _oracle_artifact(value: Any, name: str, indexed: set[str],
+                     captured: dict[str, bytes]) -> dict[str, Any]:
+    artifact = _exact_object(value, {"path", "sha256", "bytes"}, name)
+    if not isinstance(artifact["path"], str) or artifact["path"] not in indexed:
+        raise EvidenceError(f"{name} is not indexed")
+    _digest(artifact["sha256"], f"{name}.sha256")
+    if isinstance(artifact["bytes"], bool) or not isinstance(artifact["bytes"], int) or \
+            artifact["bytes"] < 0:
+        raise EvidenceError(f"invalid {name}.bytes")
+    _verify_captured(artifact, captured)
+    return artifact
+
+
 def _validate_oracle(value: dict[str, Any], workload_ids: set[str],
-                     indexed_hashes: set[str]) -> tuple[str, dict[str, str]]:
+                     indexed: set[str], captured: dict[str, bytes], root: Path,
+                     baseline_cases: dict[str, dict[str, Any]],
+                     requests_by_query: dict[str, dict[str, Any]],
+                     scratch_root: Path, limits: dict[str, int]) -> tuple[str, dict[str, str]]:
     _exact_object(value, {"schema_version", "document_type", "oracle_id", "cases"}, "oracle")
     if value["schema_version"] != 1 or type(value["schema_version"]) is not int:
         raise EvidenceError("oracle schema_version must be integer 1")
@@ -239,14 +256,31 @@ def _validate_oracle(value: dict[str, Any], workload_ids: set[str],
     cases: dict[str, str] = {}
     outcome = "PASS"
     for raw in value["cases"]:
-        case = _exact_object(raw, {"query_id", "expected_sha256", "observed_sha256",
+        case = _exact_object(raw, {"query_id", "baseline_spool", "observed_spool",
                                   "result", "raw_retained", "sqlstate"}, "oracle case")
         query_id = _identifier(case["query_id"], "query_id")
         if query_id in cases:
             raise EvidenceError("duplicate oracle query_id")
-        _digest(case["expected_sha256"], "expected_sha256")
-        _digest(case["observed_sha256"], "observed_sha256")
+        baseline_spool = _oracle_artifact(case["baseline_spool"], "baseline_spool",
+                                          indexed, captured)
+        observed_spool = _oracle_artifact(case["observed_spool"], "observed_spool",
+                                          indexed, captured)
+        frozen_baseline = baseline_cases.get(query_id)
+        if (not frozen_baseline or baseline_spool["path"] != frozen_baseline["spool_path"] or
+                baseline_spool["sha256"] != frozen_baseline["spool_sha256"] or
+                baseline_spool["bytes"] != frozen_baseline["spool_bytes"]):
+            raise EvidenceError("oracle baseline differs from baseline manifest")
+        if observed_spool["path"] == baseline_spool["path"]:
+            raise EvidenceError("observed spool cannot alias the baseline artifact")
         result = _enum(case["result"], {"PASS", "FAIL", "NOT_RUN"}, "oracle result")
+        request = requests_by_query.get(query_id)
+        request_bound = bool(request and request["execution_status"] == "SUCCEEDED" and
+                             request.get("observed_spool") == observed_spool)
+        if (request and request.get("observed_spool") is not None and
+                request.get("observed_spool") != observed_spool):
+            raise EvidenceError("oracle observation contradicts request spool binding")
+        if result != "NOT_RUN" and not request_bound:
+            outcome = _worse(outcome, "INCOMPLETE")
         if not isinstance(case["raw_retained"], bool):
             raise EvidenceError("raw_retained must be boolean")
         if case["sqlstate"] is not None and (not isinstance(case["sqlstate"], str) or
@@ -256,14 +290,21 @@ def _validate_oracle(value: dict[str, Any], workload_ids: set[str],
             raise EvidenceError("successful oracle case carries SQLSTATE")
         cases[query_id] = result
         outcome = _worse(outcome, "INCOMPLETE" if result == "NOT_RUN" else result)
-        if case["raw_retained"]:
-            if (case["expected_sha256"] not in indexed_hashes or
-                    case["observed_sha256"] not in indexed_hashes):
-                raise EvidenceError("retained oracle bytes are not indexed")
+        if case["raw_retained"] and request_bound:
+            if result != "NOT_RUN":
+                try:
+                    computed = compare_spools(root / baseline_spool["path"],
+                                              root / observed_spool["path"], scratch_root,
+                                              **limits)
+                except OracleError as exc:
+                    raise EvidenceError(f"invalid typed oracle evidence: {exc}") from exc
+                if computed["baseline_sha256"] != baseline_spool["sha256"] or \
+                        computed["observed_sha256"] != observed_spool["sha256"]:
+                    raise EvidenceError("oracle spool changed during comparison")
+                if computed["result"] != result:
+                    raise EvidenceError("declared oracle result contradicts complete comparison")
         else:
             outcome = _worse(outcome, "INCOMPLETE")
-        if result == "PASS" and case["expected_sha256"] != case["observed_sha256"]:
-            raise EvidenceError("oracle PASS hashes differ")
     if set(cases) != workload_ids:
         outcome = _worse(outcome, "INCOMPLETE")
     return outcome, cases
@@ -296,25 +337,21 @@ def _validate_site_cells(value: dict[str, Any], indexed_hashes: set[str]) -> tup
     return outcome, cells
 
 
-def _validate_workload_definition(value: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    _exact_object(value, {"schema_version", "document_type", "cases"}, "workload definition")
-    if type(value["schema_version"]) is not int or value["schema_version"] != 1:
-        raise EvidenceError("workload definition schema_version must be integer 1")
-    _enum(value["document_type"], {"workload_definition"}, "document_type")
-    if not isinstance(value["cases"], list) or not value["cases"]:
-        raise EvidenceError("workload definition cases must be non-empty")
+def _validate_workload_definition(value: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    try:
+        coverage = validate_qualification(value)
+    except OracleError as exc:
+        raise EvidenceError(f"invalid corpus qualification: {exc}") from exc
     cases: dict[str, dict[str, Any]] = {}
-    for raw in value["cases"]:
-        case = _exact_object(raw, {"query_id", "sql_sha256", "expected_sha256", "mandatory"},
-                             "workload definition case")
+    for case in value["execution_corpus"]:
         identity = _identifier(case["query_id"], "query_id")
         if identity in cases:
             raise EvidenceError("duplicate workload definition query_id")
-        _digest(case["sql_sha256"], "sql_sha256"); _digest(case["expected_sha256"], "expected_sha256")
-        if case["mandatory"] is not True:
-            raise EvidenceError("pilot workload cases must be mandatory")
+        _digest(case["sql_sha256"], "sql_sha256")
         cases[identity] = case
-    return cases
+    if not cases:
+        raise EvidenceError("execution corpus must be non-empty")
+    return cases, coverage
 
 
 def validate_private(root: Path, trusted_scope_sha256: str) -> dict[str, Any]:
@@ -353,10 +390,12 @@ def validate_private(root: Path, trusted_scope_sha256: str) -> dict[str, Any]:
         _verify_captured(item, captured)
 
     workload_definition_path = scope["scope_inputs"]["workload_definition"]["path"]
-    definition_cases = _validate_workload_definition(_plain_bytes(captured[workload_definition_path]))
+    qualification = _plain_bytes(captured[workload_definition_path])
+    definition_cases, coverage = _validate_workload_definition(qualification)
 
     contracts: dict[str, list[dict[str, Any]]] = {}
     oracle: dict[str, Any] | None = None
+    baseline_manifest: dict[str, Any] | None = None
     site_cells: dict[str, Any] | None = None
     for relative in sorted(indexed):
         if relative in {entry["path"] for entry in scope["scope_inputs"].values()}:
@@ -371,6 +410,13 @@ def validate_private(root: Path, trusted_scope_sha256: str) -> dict[str, Any]:
             if oracle is not None:
                 raise EvidenceError("multiple oracle documents")
             oracle = plain
+        elif plain.get("document_type") == "baseline_manifest":
+            if baseline_manifest is not None:
+                raise EvidenceError("multiple baseline manifests")
+            try:
+                baseline_manifest = validate_baseline(plain)
+            except OracleError as exc:
+                raise EvidenceError(f"invalid baseline manifest: {exc}") from exc
         elif plain.get("document_type") == "site_cells":
             if site_cells is not None:
                 raise EvidenceError("multiple site-cell documents")
@@ -378,7 +424,8 @@ def validate_private(root: Path, trusted_scope_sha256: str) -> dict[str, Any]:
         else:
             raise EvidenceError("unknown indexed payload schema")
     missing_types = PRIVATE_REQUIRED_CONTRACTS - set(contracts)
-    result = "INCOMPLETE" if missing_types or oracle is None or site_cells is None else "PASS"
+    result = ("INCOMPLETE" if missing_types or oracle is None or
+              baseline_manifest is None or site_cells is None else "PASS")
     singleton = {"approval_receipt", "preflight", "workload", "release", "retirement", "recovery"}
     if any(len(contracts.get(kind, [])) != 1 for kind in singleton if kind in contracts):
         raise EvidenceError("singleton contract family count mismatch")
@@ -388,10 +435,15 @@ def validate_private(root: Path, trusted_scope_sha256: str) -> dict[str, Any]:
 
     workload_ids: set[str] = set()
     for workload in contracts.get("workload", []):
+        if workload["inventory_sha256"] != hashlib.sha256(
+                captured[workload_definition_path]).hexdigest():
+            raise EvidenceError("workload inventory digest is not the frozen qualification")
         for entry in workload["entries"]:
             workload_ids.add(entry["query_id"])
             frozen = definition_cases.get(entry["query_id"])
-            if (not frozen or frozen["sql_sha256"] != entry["sql"]["sha256"]):
+            if (not frozen or frozen["sql_sha256"] != entry["sql"]["sha256"] or
+                    frozen["executed_sql_origin"] != entry["executed_sql_origin"] or
+                    frozen["dataset_origin"] != entry["dataset_origin"]):
                 raise EvidenceError("workload differs from frozen definition")
             if any(entry[name] != "AUTHORISED" for name in
                    ("inventory_authority", "executed_sql_authority", "dataset_authority")):
@@ -400,8 +452,32 @@ def validate_private(root: Path, trusted_scope_sha256: str) -> dict[str, Any]:
                 raise EvidenceError("workload execution authority is not OPERATION_GO")
     if workload_ids != set(definition_cases):
         raise EvidenceError("workload definition and execution corpus differ")
+    baseline_cases = ({case["query_id"]: case for case in baseline_manifest["cases"]}
+                      if baseline_manifest is not None else {})
+    if set(baseline_cases) != workload_ids and baseline_manifest is not None:
+        raise EvidenceError("baseline manifest and execution corpus differ")
+    if baseline_manifest is not None:
+        approved = qualification["baseline_authority"]
+        for name in ("server_build_sha256", "schema_sha256", "data_sha256",
+                     "configuration_sha256", "provider_identity"):
+            if baseline_manifest[name] != approved[name]:
+                raise EvidenceError("baseline manifest differs from approved baseline identity")
+        if baseline_manifest["cases"] != approved["cases"]:
+            raise EvidenceError("baseline cases differ from scope-approved artifact identities")
+    requests_by_query: dict[str, dict[str, Any]] = {}
+    for request in contracts.get("request", []):
+        if request["query_id"] in requests_by_query:
+            raise EvidenceError("duplicate request query identity")
+        if "observed_spool" in request:
+            if request["observed_spool"]["path"] not in indexed:
+                raise EvidenceError("request observed spool is not indexed")
+            _verify_captured(request["observed_spool"], captured)
+        requests_by_query[request["query_id"]] = request
+    scratch_root = Path(qualification["storage_policy"]["scratch_root"])
     if oracle is not None:
-        oracle_result, oracle_cases = _validate_oracle(oracle, workload_ids, indexed_hashes)
+        oracle_result, oracle_cases = _validate_oracle(
+            oracle, workload_ids, indexed, captured, root, baseline_cases,
+            requests_by_query, scratch_root, qualification["oracle_limits"])
         result = _worse(result, oracle_result)
     else:
         oracle_cases = {}
@@ -420,11 +496,6 @@ def validate_private(root: Path, trusted_scope_sha256: str) -> dict[str, Any]:
             if entry["sql"]["path"] not in indexed:
                 raise EvidenceError("workload SQL artifact is not indexed")
             _verify_captured(entry["sql"], captured)
-    if oracle is not None:
-        oracle_by_id = {case["query_id"]: case for case in oracle["cases"]}
-        for identity, frozen in definition_cases.items():
-            if oracle_by_id.get(identity, {}).get("expected_sha256") != frozen["expected_sha256"]:
-                raise EvidenceError("oracle baseline differs from frozen definition")
     if contracts.get("approval_receipt") and contracts.get("preflight"):
         approval = contracts["approval_receipt"][0]
         preflight = contracts["preflight"][0]
@@ -486,7 +557,8 @@ def validate_private(root: Path, trusted_scope_sha256: str) -> dict[str, Any]:
         raise EvidenceError("private evidence passes but terminal does not")
     return {"profile": "private_full", "result": result, "scope": scope,
             "scope_sha256": scope_digest, "index": index, "terminal": terminal,
-            "oracle_cases": oracle_cases, "site_cells": cells}
+            "oracle_cases": oracle_cases, "site_cells": cells,
+            "natural_coverage": coverage}
 
 
 def _validation_receipt(validated: dict[str, Any], identity: str) -> dict[str, Any]:

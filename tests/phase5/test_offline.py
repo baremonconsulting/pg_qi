@@ -22,7 +22,9 @@ SPEC.loader.exec_module(VERIFY)
 
 
 def encode_rows(path: Path, values: list[tuple[int, int]], truncate: bool = False) -> None:
-    data = bytearray()
+    data = bytearray(b"PGQSP001") + struct.pack(">I", 2)
+    for name in (b"id", b"value"):
+        data += struct.pack(">I", len(name)) + name + struct.pack(">I", 23)
     for identity, value in values:
         data += struct.pack(">I", 2)
         for field in (str(identity), str(value)):

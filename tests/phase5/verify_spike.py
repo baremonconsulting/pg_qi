@@ -20,6 +20,24 @@ def load_json(path: Path) -> dict:
 
 def rows(path: Path):
     with path.open("rb") as stream:
+        if stream.read(8) != b"PGQSP001":
+            raise ValueError(f"{path.name}: unsupported spool version")
+        encoded = stream.read(4)
+        if len(encoded) != 4:
+            raise ValueError(f"{path.name}: incomplete descriptor")
+        (columns,) = struct.unpack(">I", encoded)
+        if columns > 1024:
+            raise ValueError(f"{path.name}: unreasonable column count")
+        for _ in range(columns):
+            encoded = stream.read(4)
+            if len(encoded) != 4:
+                raise ValueError(f"{path.name}: incomplete column name header")
+            (size,) = struct.unpack(">I", encoded)
+            name = stream.read(size)
+            oid = stream.read(4)
+            if not 0 < size <= 1024 or len(name) != size or len(oid) != 4:
+                raise ValueError(f"{path.name}: incomplete column descriptor")
+            name.decode("utf-8", "strict")
         while True:
             header = stream.read(4)
             if not header:
@@ -27,8 +45,8 @@ def rows(path: Path):
             if len(header) != 4:
                 raise ValueError(f"{path.name}: incomplete row header")
             (count,) = struct.unpack(">I", header)
-            if count > 1024:
-                raise ValueError(f"{path.name}: unreasonable field count")
+            if count != columns:
+                raise ValueError(f"{path.name}: row width differs from descriptor")
             row = []
             for _ in range(count):
                 encoded = stream.read(4)

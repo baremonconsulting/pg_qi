@@ -127,4 +127,7 @@ does not invent people for roles that have not accepted them.
 - [Natural workload inventory](templates/natural-workload-inventory.tsv)
 - [Qualification decision](templates/qualification-decision.md)
 - [Qualification inventory and metrics](qualification-metrics.md)
+- [Corpus qualification and typed oracle](PGQI-5-corpus-oracle.md)
+- [Corpus qualification JSON example](templates/corpus-qualification.example.json)
+- [Provider-free baseline manifest example](templates/baseline-manifest.example.json)
 - [Current implementation qualification](current/implementation-qualification.md)

@@ -362,6 +362,10 @@ def _validate_request(value: dict[str, Any], catalog: dict[str, Any]) -> None:
     if "prepared_generation" in value: _integer(value["prepared_generation"], "prepared_generation", 1)
     if "sqlstate" in value:
         _string(value["sqlstate"], "SQLSTATE", re.compile(r"^[0-9A-Z]{5}$"))
+    if "observed_spool" in value:
+        _artifact(value["observed_spool"], "observed_spool")
+        if value["execution_status"] != "SUCCEEDED":
+            raise ContractError("only a successful request can bind an observed spool")
 
 
 def _validate_snapshot(value: dict[str, Any], catalog: dict[str, Any]) -> None:

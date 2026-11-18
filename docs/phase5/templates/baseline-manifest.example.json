@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "document_type": "baseline_manifest",
+  "baseline_id": "replace-with-baseline-id",
+  "server_build_sha256": "replace-with-64-lowercase-hex",
+  "schema_sha256": "replace-with-64-lowercase-hex",
+  "data_sha256": "replace-with-64-lowercase-hex",
+  "configuration_sha256": "replace-with-64-lowercase-hex",
+  "provider_identity": "POSTGRESQL_NATIVE_NO_DELEGATING_PROVIDER",
+  "provider_absence_verified": true,
+  "static_data": true,
+  "concurrent_writes": false,
+  "cases": [{
+    "query_id": "replace-with-execution-query-id",
+    "spool_path": "raw/replace-with-baseline.spool",
+    "spool_sha256": "replace-with-64-lowercase-hex",
+    "spool_bytes": 12
+  }]
+}

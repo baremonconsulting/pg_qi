@@ -116,6 +116,46 @@ static int write_u32(FILE *f, uint32_t v) {
     return fwrite(b, 1, 4, f) == 4;
 }
 
+static unsigned char *result_metadata(PGresult *r, size_t maximum_columns,
+                                      size_t *length, const char **reason) {
+    static const unsigned char magic[] = "PGQSP001";
+    int fields = PQnfields(r), column;
+    size_t total = sizeof(magic) - 1 + 4;
+    unsigned char *payload, *cursor;
+    if (fields < 0 || (size_t)fields > maximum_columns) {
+        *reason = "max_columns"; return NULL;
+    }
+    for (column = 0; column < fields; column++) {
+        const char *name = PQfname(r, column);
+        size_t name_length;
+        if (!name || !(name_length = strlen(name)) || name_length > 1024 ||
+                name_length > UINT32_MAX || total > SIZE_MAX - 8 - name_length) {
+            *reason = "result_metadata"; return NULL;
+        }
+        total += 8 + name_length;
+    }
+    payload = malloc(total);
+    if (!payload) { *reason = "result_metadata"; return NULL; }
+    cursor = payload;
+    memcpy(cursor, magic, sizeof(magic) - 1); cursor += sizeof(magic) - 1;
+#define PUT_U32(P, V) do { uint32_t put_value = (uint32_t)(V); \
+    *(P)++ = (unsigned char)(put_value >> 24); \
+    *(P)++ = (unsigned char)(put_value >> 16); \
+    *(P)++ = (unsigned char)(put_value >> 8); \
+    *(P)++ = (unsigned char)put_value; } while (0)
+    PUT_U32(cursor, fields);
+    for (column = 0; column < fields; column++) {
+        const char *name = PQfname(r, column);
+        size_t name_length = strlen(name);
+        PUT_U32(cursor, name_length);
+        memcpy(cursor, name, name_length); cursor += name_length;
+        PUT_U32(cursor, PQftype(r, column));
+    }
+#undef PUT_U32
+    *length = total;
+    return payload;
+}
+
 static int spool_row(FILE *spool, PGresult *r, Limits *l, const char **reason) {
     int j, nf = PQnfields(r); uint64_t add = 4, row_payload = 0;
     if ((size_t)nf > l->max_columns) { *reason = "max_columns"; return 0; }
@@ -172,34 +212,48 @@ static int send_subject(PGconn *c, const char *sql, const char *protocol,
 
 static int stream(PGconn *c, FILE *spool, Limits *l, int64_t deadline,
                   const char **reason, char sqlstate[6]) {
-    PGresult *r; unsigned int completions = 0; int expected_fields = -1;
-    if (!PQsetSingleRowMode(c)) { *reason = "single_row_mode"; return 0; }
+    PGresult *r = NULL; unsigned int completions = 0;
+    unsigned char *metadata = NULL; size_t metadata_length = 0;
+    int success = 0;
+    if (!PQsetSingleRowMode(c)) { *reason = "single_row_mode"; goto done; }
     for (;;) {
-        if (now_ms() >= deadline) { *reason = "query_deadline"; return 0; }
+        if (now_ms() >= deadline) { *reason = "query_deadline"; goto done; }
         while (PQisBusy(c)) {
             int w = wait_socket(c, POLLIN, deadline);
-            if (w == 0 || now_ms() >= deadline) { *reason = "query_deadline"; return 0; }
-            if (w > 0 && !PQconsumeInput(c)) { *reason = "connection_error"; return 0; }
+            if (w == 0 || now_ms() >= deadline) { *reason = "query_deadline"; goto done; }
+            if (w > 0 && !PQconsumeInput(c)) { *reason = "connection_error"; goto done; }
         }
         r = PQgetResult(c);
         if (!r) break;
-        if (++l->messages > l->max_messages) { PQclear(r); *reason = "max_messages"; return 0; }
+        if (++l->messages > l->max_messages) { *reason = "max_messages"; goto done; }
         if (PQresultStatus(r) == PGRES_SINGLE_TUPLE ||
             PQresultStatus(r) == PGRES_TUPLES_OK) {
-            int fields = PQnfields(r);
-            if ((size_t)fields > l->max_columns) {
-                PQclear(r); *reason = "max_columns"; return 0;
-            }
-            if (expected_fields < 0) expected_fields = fields;
-            else if (expected_fields != fields) {
-                PQclear(r); *reason = "result_metadata_changed"; return 0;
+            size_t current_length = 0;
+            unsigned char *current = result_metadata(r, l->max_columns,
+                                                     &current_length, reason);
+            if (!current) goto done;
+            if (!metadata) {
+                if (current_length > l->max_spool ||
+                        l->spool_bytes > l->max_spool - current_length) {
+                    free(current); *reason = "max_spool_bytes"; goto done;
+                }
+                if (fwrite(current, 1, current_length, spool) != current_length) {
+                    free(current); *reason = "spool_write"; goto done;
+                }
+                metadata = current; metadata_length = current_length;
+                l->spool_bytes += current_length;
+            } else {
+                int matches = current_length == metadata_length &&
+                              !memcmp(current, metadata, current_length);
+                free(current);
+                if (!matches) { *reason = "result_metadata_changed"; goto done; }
             }
         }
         if (PQresultStatus(r) == PGRES_SINGLE_TUPLE) {
-            if (!spool_row(spool, r, l, reason)) { PQclear(r); return 0; }
+            if (!spool_row(spool, r, l, reason)) goto done;
         } else if (PQresultStatus(r) == PGRES_TUPLES_OK) {
-            if (PQntuples(r) != 0) { PQclear(r); *reason = "not_single_row"; return 0; }
-            if (++completions > 1) { PQclear(r); *reason = "multiple_result_sets"; return 0; }
+            if (PQntuples(r) != 0) { *reason = "not_single_row"; goto done; }
+            if (++completions > 1) { *reason = "multiple_result_sets"; goto done; }
         } else if (PQresultStatus(r) == PGRES_FATAL_ERROR) {
             const char *state = PQresultErrorField(r, PG_DIAG_SQLSTATE);
             if (state) {
@@ -207,14 +261,18 @@ static int stream(PGconn *c, FILE *spool, Limits *l, int64_t deadline,
                 sqlstate[5] = 0;
             }
             *reason = l->rows ? "server_error_after_partial_stream" : "server_error";
-            PQclear(r); return 0;
+            goto done;
         } else {
-            PQclear(r); *reason = "unexpected_result_status"; return 0;
+            *reason = "unexpected_result_status"; goto done;
         }
-        PQclear(r);
+        PQclear(r); r = NULL;
     }
-    if (completions != 1) { *reason = "missing_result_completion"; return 0; }
-    return 1;
+    if (completions != 1 || !metadata) { *reason = "missing_result_completion"; goto done; }
+    success = 1;
+done:
+    if (r) PQclear(r);
+    free(metadata);
+    return success;
 }
 
 static char *show_scalar(PGconn *c, const char *name, int64_t deadline) {
@@ -241,7 +299,34 @@ static char *show_scalar(PGconn *c, const char *name, int64_t deadline) {
 
 static int configure_session(PGconn *c, const char *mode) {
     PGresult *r; const char *sql;
-    if (!strcmp(mode, "lab_allowlist"))
+    const char *preload_names[] = {"shared_preload_libraries",
+                                   "session_preload_libraries",
+                                   "local_preload_libraries"};
+    size_t preload_index;
+    if (!strcmp(mode, "native_baseline")) {
+        if (PQsetnonblocking(c, 0) != 0) return 0;
+        for (preload_index = 0; preload_index < sizeof(preload_names) / sizeof(preload_names[0]);
+             preload_index++) {
+            char check[96];
+            if (snprintf(check, sizeof(check), "SHOW %s", preload_names[preload_index]) >=
+                    (int)sizeof(check)) return 0;
+            r = PQexec(c, check);
+            if (!r || PQresultStatus(r) != PGRES_TUPLES_OK || PQntuples(r) != 1 ||
+                    PQnfields(r) != 1 || PQgetisnull(r, 0, 0) || *PQgetvalue(r, 0, 0)) {
+                if (r) PQclear(r);
+                return 0;
+            }
+            PQclear(r);
+        }
+        r = PQexec(c, "SELECT count(*) FROM pg_extension WHERE extname <> 'plpgsql'");
+        if (!r || PQresultStatus(r) != PGRES_TUPLES_OK || PQntuples(r) != 1 ||
+                PQnfields(r) != 1 || strcmp(PQgetvalue(r, 0, 0), "0")) {
+            if (r) PQclear(r);
+            return 0;
+        }
+        PQclear(r);
+        return PQsetnonblocking(c, 1) == 0;
+    } else if (!strcmp(mode, "lab_allowlist"))
         sql = "SET pg_qi.enabled=on; SET pg_qi.routing_mode=allowlist; SET duckdb.force_execution=off";
     else if (!strcmp(mode, "off"))
         sql = "SET pg_qi.routing_mode=off; SET duckdb.force_execution=off";
@@ -251,6 +336,20 @@ static int configure_session(PGconn *c, const char *mode) {
     if (!r || PQresultStatus(r) != PGRES_COMMAND_OK) { if (r) PQclear(r); return 0; }
     PQclear(r);
     return PQsetnonblocking(c, 1) == 0;
+}
+
+static int write_native_baseline_snapshot(const char *path) {
+    FILE *out = open_exclusive(path);
+    int ok = 1;
+    if (!out) return 0;
+    if (fputs("name\tvalue\n"
+              "provider_identity\tPOSTGRESQL_NATIVE_NO_DELEGATING_PROVIDER\n"
+              "provider_absence_verified\ttrue\n", out) == EOF)
+        ok = 0;
+    if (ok && fflush(out)) ok = 0;
+    if (ok && fsync(fileno(out))) ok = 0;
+    if (fclose(out)) ok = 0;
+    return ok;
 }
 
 static int write_snapshot(PGconn *c, const char *path, const char *before,
@@ -297,7 +396,7 @@ static void usage(const char *p) {
             "--protocol extended|simple --deadline-ms N --max-rows N "
             "--max-bytes N --max-columns N --max-field-bytes N "
             "--max-spool-bytes N --max-messages N --snapshot PATH "
-            "--session-mode off|lab_allowlist [--prepared NAME]\n", p);
+            "--session-mode off|lab_allowlist|native_baseline [--prepared NAME]\n", p);
 }
 
 int main(int argc, char **argv) {
@@ -350,8 +449,9 @@ int main(int argc, char **argv) {
     c = connect_bounded(conninfo, now_ms() + (int64_t)deadline_ms);
     if (!c) { terminal("FAILED", "connect_deadline_or_error", &l, NULL); goto done; }
     if (!configure_session(c, session_mode) ||
-        !(before = show_scalar(c, "pg_qi.shadow_decision_id",
-                               now_ms() + (int64_t)deadline_ms))) {
+        (!(before = !strcmp(session_mode, "native_baseline") ? strdup("0") :
+          show_scalar(c, "pg_qi.shadow_decision_id",
+                      now_ms() + (int64_t)deadline_ms)))) {
         terminal("FAILED", "session_setup", &l, NULL); goto done;
     }
     query_deadline = now_ms() + (int64_t)deadline_ms;
@@ -365,8 +465,9 @@ int main(int argc, char **argv) {
         terminal(!strncmp(reason, "max_", 4) ? "LIMIT_EXCEEDED" : "FAILED",
                  reason, &l, sqlstate[0] ? sqlstate : NULL); goto done;
     }
-    if (!write_snapshot(c, snapshot, before,
-                        now_ms() + (int64_t)deadline_ms)) {
+    if (!(strcmp(session_mode, "native_baseline") ?
+          write_snapshot(c, snapshot, before, now_ms() + (int64_t)deadline_ms) :
+          write_native_baseline_snapshot(snapshot))) {
         terminal("FAILED", "snapshot_write", &l, NULL); goto done;
     }
     if (fflush(spool) || fsync(fileno(spool))) {

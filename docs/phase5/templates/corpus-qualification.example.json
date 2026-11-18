@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "document_type": "corpus_qualification",
+  "qualification_id": "replace-with-approved-id",
+  "authorities": {
+    "inventory": {"state": "AUTHORISED", "reference": "replace-inventory-authority", "authorized_before_acquisition": true},
+    "executed_sql": {"state": "AUTHORISED", "reference": "replace-sql-authority", "authorized_before_acquisition": true},
+    "dataset": {"state": "AUTHORISED", "reference": "replace-data-authority", "authorized_before_acquisition": true}
+  },
+  "storage_policy": {
+    "authorization_reference": "replace-storage-authority",
+    "raw_root": "/replace/private/raw",
+    "spool_root": "/replace/private/spool",
+    "scratch_root": "/replace/private/scratch",
+    "required_mode": "0700",
+    "retention_class": "replace-retention-class",
+    "retention_authority": "replace-retention-authority",
+    "authorized_before_acquisition": true
+  },
+  "baseline_authority": {
+    "authorization_reference": "replace-baseline-authority",
+    "authorized_before_acquisition": true,
+    "clean_instance_attested": true,
+    "server_build_sha256": "replace-with-64-lowercase-hex",
+    "schema_sha256": "replace-with-64-lowercase-hex",
+    "data_sha256": "replace-with-64-lowercase-hex",
+    "configuration_sha256": "replace-with-64-lowercase-hex",
+    "provider_identity": "POSTGRESQL_NATIVE_NO_DELEGATING_PROVIDER",
+    "cases": [{
+      "query_id": "replace-with-execution-query-id",
+      "spool_path": "raw/replace-with-baseline.spool",
+      "spool_sha256": "replace-with-64-lowercase-hex",
+      "spool_bytes": 12
+    }]
+  },
+  "oracle_limits": {
+    "max_spool_bytes": 1048576,
+    "max_rows": 10000,
+    "max_columns": 32,
+    "max_field_bytes": 128,
+    "max_rows_in_memory": 64,
+    "max_open_runs": 8
+  },
+  "natural_inventory": [],
+  "execution_corpus": [],
+  "synthetic_controls": []
+}
