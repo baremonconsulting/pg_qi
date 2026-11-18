@@ -27,6 +27,7 @@ OP_CLOSE = 2
 OP_PREPARE = 3
 OP_EXECUTE_PREPARED = 4
 OP_DEALLOCATE = 5
+OP_BEGIN = 6
 
 
 def _canonical(value: Any) -> bytes:
@@ -160,7 +161,7 @@ class PreparedRegistry:
 def encode_frame(opcode: int, payload: dict[str, Any]) -> bytes:
     """Encode one bounded, versioned local protocol frame."""
     if opcode not in (OP_EXECUTE, OP_CLOSE, OP_PREPARE,
-                      OP_EXECUTE_PREPARED, OP_DEALLOCATE):
+                      OP_EXECUTE_PREPARED, OP_DEALLOCATE, OP_BEGIN):
         raise ValueError("unsupported opcode")
     body = bytes((FRAME_VERSION, opcode)) + _canonical(payload)
     if len(body) > MAX_FRAME_BYTES:
@@ -179,7 +180,7 @@ def read_frame(stream) -> tuple[int, dict[str, Any]]:
     if len(body) != length:
         raise EOFError("truncated frame")
     if body[0] != FRAME_VERSION or body[1] not in (OP_EXECUTE, OP_CLOSE,
-            OP_PREPARE, OP_EXECUTE_PREPARED, OP_DEALLOCATE):
+            OP_PREPARE, OP_EXECUTE_PREPARED, OP_DEALLOCATE, OP_BEGIN):
         raise ValueError("unsupported frame")
     decoded = json.loads(body[2:].decode("ascii"))
     if not isinstance(decoded, dict):
@@ -212,7 +213,7 @@ def read_frame_deadline(stream, timeout_seconds: int) -> tuple[int, dict[str, An
         raise ValueError("invalid frame length")
     body = exact(length)
     if body[0] != FRAME_VERSION or body[1] not in (OP_EXECUTE, OP_CLOSE,
-            OP_PREPARE, OP_EXECUTE_PREPARED, OP_DEALLOCATE):
+            OP_PREPARE, OP_EXECUTE_PREPARED, OP_DEALLOCATE, OP_BEGIN):
         raise ValueError("unsupported frame")
     decoded = json.loads(body[2:].decode("ascii"))
     if not isinstance(decoded, dict):
@@ -291,6 +292,9 @@ class AuditedSession:
         if response["state"] == "COMPLETE":
             self._registry.deallocate(prepared, response["sequence"])
         return response
+
+    def begin(self) -> dict[str, Any]:
+        return self._exchange(OP_BEGIN, {}, {"event": "begin_intent"})
 
     def _exchange(self, opcode_expected: int, payload: dict[str, Any],
                   intent_payload: dict[str, Any]) -> dict[str, Any]:

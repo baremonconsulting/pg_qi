@@ -96,7 +96,7 @@ rows = [json.loads(line) for line in (output / "request.journal.jsonl").read_tex
 if [row["sequence"] for row in rows] != list(range(1, len(rows) + 1)):
     raise SystemExit("journal sequence is not contiguous")
 
-def failure_session(name, prepared=False):
+def failure_session(name, prepared=False, transaction=False):
     target = output / f"failure-{name}"
     target.mkdir(mode=0o700)
     failure_journal = SequenceJournal(target)
@@ -105,6 +105,9 @@ def failure_session(name, prepared=False):
     failed = AuditedSession(repo / "tools/phase5/audited-session-driver",
         failure_journal, failure_args, digests,
         hashlib.sha256((repo / "tools/phase5/audited-session-driver").read_bytes()).hexdigest())
+    if transaction:
+        begin = failed.begin()
+        if begin["state"] != "COMPLETE": raise SystemExit(begin)
     if prepared:
         prepare_result = failed.prepare("failing", name)
         if prepare_result["state"] != "COMPLETE": raise SystemExit(prepare_result)
@@ -126,6 +129,9 @@ if (cached_error["reason"], cached_error["planning_state"], cached_error["execut
 partial_error = failure_session("partial_error")
 if partial_error["state"] != "FAILED" or partial_error["snapshot_state"] != "COMPLETE":
     raise SystemExit(f"partial stream error states are untruthful: {partial_error}")
+aborted = failure_session("execution_error", transaction=True)
+if aborted["reason"] != "aborted_transaction" or aborted["snapshot_state"] != "INCOMPLETE":
+    raise SystemExit(f"aborted transaction states are untruthful: {aborted}")
 PY
 sleep 0.1
 grep 'pgqi_p5_audited|' "$out/postgres.log" >"$audited_out/sql-dispatch.log"

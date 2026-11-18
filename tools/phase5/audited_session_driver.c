@@ -75,6 +75,12 @@ static int parse_prepared_op(const char *json, unsigned long long *generation,
         generation, prepared, sequence, &n) == 3 && !json[n] && *generation && *sequence;
 }
 
+static int parse_sequence(const char *json, unsigned long long *sequence) {
+    int n = 0;
+    return sscanf(json, "{\"sequence\":%llu}%n", sequence, &n) == 1 &&
+           !json[n] && *sequence;
+}
+
 static int command_result(PGconn *conn, int64_t deadline, const char **reason) {
     PGresult *r;
     if (!flush_bounded(conn, deadline)) { *reason = "send_error"; return 0; }
@@ -212,9 +218,21 @@ int main(int argc, char **argv) {
             if (!parse_prepare((char *)body + 2, case_id, digest, &generation, prepared, &sequence)) { free(body); break; }
         } else if (opcode == 4 || opcode == 5) {
             if (!parse_prepared_op((char *)body + 2, &generation, prepared, &sequence)) { free(body); break; }
+        } else if (opcode == 6) {
+            if (!parse_sequence((char *)body + 2, &sequence)) { free(body); break; }
         } else { free(body); break; }
         free(body);
         if (++request_count > max_requests) break;
+        if (opcode == 6) {
+            if (!PQsendQuery(conn, "BEGIN") ||
+                    !command_result(conn, now_ms()+(int64_t)deadline_ms, &reason)) { }
+            else ok = 1;
+            if (!frame_reply(opcode, sequence, ok ? "COMPLETE" : "FAILED",
+                    "NOT_RUN", ok ? "COMPLETE" : "FAILED", "NOT_RUN",
+                    ok ? "ok" : reason)) ok = 0;
+            if (!ok) break;
+            continue;
+        }
         if (opcode == 3) {
             int slot = -1;
             if (plan_index(plans, prepared) >= 0) reason = "prepared_already_active";
@@ -305,6 +323,8 @@ int main(int argc, char **argv) {
                             reason = "planning_error";
                         }
                     } else snapshot_state = "INCOMPLETE";
+                    if (PQtransactionStatus(conn) == PQTRANS_INERROR)
+                        reason = "aborted_transaction";
                 }
             } else {
                 execution_state = "COMPLETE";
