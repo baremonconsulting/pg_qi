@@ -338,10 +338,14 @@ class CanaryRuntimeTests(unittest.TestCase):
     def test_cli_persists_terminal_outcome_and_blocks_retry(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             root = Path(name); build_canary(root)
-            self.assertEqual(main(["--bundle", str(root)]), 0)
+            ledger = root.parent / f"{root.name}-ledger"; ledger.mkdir(mode=0o700)
+            self.assertEqual(main(["--bundle", str(root), "--ledger", str(ledger)]), 0)
             outcome = __import__("json").loads((root / "canary-outcome.json").read_text())
             self.assertEqual(outcome["decision"], "ELIGIBLE_FOR_HUMAN_GRANT")
-            self.assertEqual(main(["--bundle", str(root)]), 1)
+            self.assertEqual(main(["--bundle", str(root), "--ledger", str(ledger)]), 1)
+            (root / "canary-outcome.json").unlink()
+            self.assertEqual(main(["--bundle", str(root), "--ledger", str(ledger)]), 1)
+            self.assertEqual(len(list(ledger.glob("*.json"))), 1)
 
 
 if __name__ == "__main__":

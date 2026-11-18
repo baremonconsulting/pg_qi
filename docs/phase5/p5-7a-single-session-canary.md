@@ -23,9 +23,15 @@ human decision.
    `canary-retirement.json`.
 5. Run the offline validator from outside the evidence directory:
 
-       python3 tools/phase5/canary_runtime.py --bundle /absolute/private/bundle
+       python3 tools/phase5/canary_runtime.py \
+         --bundle /absolute/private/bundle \
+         --ledger /absolute/write-once/canary-ledger
 
-   The command exclusively creates `canary-outcome.json` in the bundle on both
+   The ledger must be the operator-approved, owned `0700` evidence ledger used
+   for every attempt on the target. Before validation, the command exclusively
+   consumes the `(scope, canary_id, OPERATION_GO)` identity there. Moving or
+   copying the bundle therefore cannot authorize a retry. The command also
+   exclusively creates `canary-outcome.json` in the bundle on both
    PASS and refusal. An existing outcome blocks a second attempt under the same
    bundle and identity; never delete or replace it. A successful result is only
    `ELIGIBLE_FOR_HUMAN_GRANT`. The human reviewer

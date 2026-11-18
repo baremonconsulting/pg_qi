@@ -418,9 +418,22 @@ def _write_outcome(path: Path, value: dict[str, Any]) -> None:
         os.close(directory)
 
 
+def _consume_attempt(ledger: Path, plan: dict[str, Any]) -> Path:
+    resolved = _root(ledger)
+    identity = hashlib.sha256(canonical_bytes({"scope_sha256": plan["scope_sha256"],
+        "canary_id": plan["canary_id"],
+        "operation_go_sha256": plan["operation_go_sha256"]})).hexdigest()
+    marker = resolved / f"{identity}.json"
+    _write_outcome(marker, {"schema_version": 1, "document_type": "canary_attempt",
+        "scope_sha256": plan["scope_sha256"], "canary_id": plan["canary_id"],
+        "operation_go_sha256": plan["operation_go_sha256"], "state": "CONSUMED"})
+    return marker
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Validate an operator-executed canary")
     parser.add_argument("--bundle", required=True, type=Path)
+    parser.add_argument("--ledger", required=True, type=Path)
     arguments = parser.parse_args(argv)
     outcome = arguments.bundle / "canary-outcome.json"
     if any(path.name == "canary-outcome.json" for path in arguments.bundle.rglob("canary-outcome.json")):
@@ -429,6 +442,8 @@ def main(argv: list[str] | None = None) -> int:
               file=sys.stderr)
         return 1
     try:
+        plan = _load_contract(_root(arguments.bundle), "canary-plan.json", "canary_plan")
+        _consume_attempt(arguments.ledger, plan)
         result = validate_canary_bundle(arguments.bundle)
         _write_outcome(outcome, {"schema_version": 1, "document_type": "canary_outcome",
             "decision": result["decision"], "result": result["result"],
@@ -436,7 +451,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"decision": result["decision"], "result": result["result"]},
                          sort_keys=True, separators=(",", ":")))
         return 0
-    except (CanaryError, ContractError, MeasurementError, OSError) as exc:
+    except Exception as exc:
         try:
             _write_outcome(outcome, {"schema_version": 1, "document_type": "canary_outcome",
                 "decision": "REFUSED", "result": "FAIL", "reason": str(exc),
