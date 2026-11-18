@@ -351,7 +351,18 @@ class CanaryRuntimeTests(unittest.TestCase):
                 request.update(extra); write_document(root / "positive-request.json", request)
                 run["positive_request"] = artifact(root, "positive-request.json")
                 reseal_run(root, run)
-                with self.assertRaisesRegex(CanaryError, "positive_request_or_snapshot"):
+                with self.assertRaisesRegex(CanaryError,
+                                            "positive_request_or_snapshot|private_validation_failed"):
+                    validate_canary_bundle(root, checked)
+            with self.subTest(private_extra=extra), tempfile.TemporaryDirectory() as name:
+                root = Path(name); checked, _, _, _ = build_canary(root)
+                request = __import__("json").loads(
+                    (root / "private/payload/request.json").read_text())
+                request.update(extra)
+                write_document(root / "private/payload/request.json", request)
+                reseal_private(root / "private")
+                with self.assertRaisesRegex(CanaryError,
+                                            "positive_request_or_snapshot|private_validation_failed"):
                     validate_canary_bundle(root, checked)
 
     def test_cli_persists_terminal_outcome_and_blocks_retry(self) -> None:
