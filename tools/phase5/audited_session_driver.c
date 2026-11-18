@@ -257,10 +257,19 @@ int main(int argc, char **argv) {
                 strcpy(plans[slot].name, prepared); plans[slot].generation = generation;
                 plans[slot].active = 1; ok = 1;
             }
-            if (!frame_reply(opcode, sequence, ok ? "COMPLETE" : "FAILED",
-                    ok ? "COMPLETE" : "FAILED", "NOT_RUN",
-                    ok ? "COMPLETE" : "INCOMPLETE",
-                    reason)) ok = 0;
+            {
+                int uncertain = !strcmp(reason, "connection_error") ||
+                                !strcmp(reason, "snapshot_write") ||
+                                !strcmp(reason, "send_error");
+                const char *terminal = ok ? "COMPLETE" :
+                    (uncertain ? "INCOMPLETE" : "FAILED");
+                const char *planning = ok ? "UNAVAILABLE" :
+                    (!strcmp(reason, "server_error") ? "FAILED" :
+                     (uncertain ? "INCOMPLETE" : "NOT_RUN"));
+                if (!frame_reply(opcode, sequence, terminal, planning, "NOT_RUN",
+                        ok ? "COMPLETE" : "INCOMPLETE",
+                        ok ? "prepared_created" : reason)) ok = 0;
+            }
             free(before); free(sql);
             if (!ok) break;
             continue;
@@ -355,7 +364,7 @@ int main(int argc, char **argv) {
             const char *terminal = ok ? "COMPLETE" : (uncertain ? "INCOMPLETE" : "FAILED");
             if (fsync(output_fd) || !frame_reply(opcode, sequence, terminal,
                     planning_state, execution_state, snapshot_state,
-                    ok ? "ok" : reason)) ok = 0;
+                    reason)) ok = 0;
         }
         if (spool) fclose(spool);
         free(before);
