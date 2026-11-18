@@ -185,7 +185,11 @@ def verify(root: Path) -> dict:
     if (hang.get("supervisor_forced_action") != "deadline_sigkill" or
             hang.get("terminal", {}).get("terminal_state") != "SUPERVISOR_TERMINATED"):
         raise ValueError("bounded supervisor escalation was not proved")
-    if hang["elapsed_ms"] > 750:
+    # The outer supervisor permits the driver's bounded connect/setup/query
+    # phases, its cancel deadline and the final SIGTERM grace period.  With
+    # the 100 ms fixture values this is an 800 ms process envelope; retain a
+    # small scheduler allowance while still proving a one-second hard bound.
+    if hang["elapsed_ms"] > 1000:
         raise ValueError("unresponsive child exceeded its supervisor envelope")
 
     expected_snapshot = {
