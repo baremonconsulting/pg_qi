@@ -98,8 +98,9 @@ def main() -> int:
     counts = {"stdout": 0, "stderr": 0}
     forced = None
     hard_deadline = time.monotonic() + (args.deadline_ms + args.cancel_grace_ms) / 1000
-    while selector.get_map() and time.monotonic() < hard_deadline:
-        for key, _ in selector.select(timeout=0.02):
+    while (selector.get_map() or proc.poll() is None) and time.monotonic() < hard_deadline:
+        ready = selector.select(timeout=0.02) if selector.get_map() else ()
+        for key, _ in ready:
             chunk = os.read(key.fileobj.fileno(), 4096)
             if not chunk:
                 selector.unregister(key.fileobj)

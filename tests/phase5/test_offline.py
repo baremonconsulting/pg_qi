@@ -120,6 +120,16 @@ class SupervisorTests(unittest.TestCase):
             self.assertEqual(report["terminal"]["terminal_state"],
                              "SUPERVISOR_TERMINATED")
 
+    def test_closed_streams_do_not_trigger_false_deadline(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); os.chmod(root, 0o700)
+            command = self.supervisor_command(
+                root, ROOT / "tests/phase5/fixtures/close-streams-driver.sh")
+            result = subprocess.run(command, check=False, capture_output=True, text=True)
+            report = json.loads(result.stdout)
+            self.assertIsNone(report["supervisor_forced_action"])
+            self.assertEqual(report["terminal"]["terminal_state"], "MISSING_TERMINAL")
+
 
 class OracleMutationTests(unittest.TestCase):
     def test_multiset_allows_reordering_but_refuses_duplicates(self) -> None:
