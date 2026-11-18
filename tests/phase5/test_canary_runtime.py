@@ -18,7 +18,7 @@ from test_contracts import snapshot_tuple
 from test_evidence_tool import build_private
 from test_measurement_runtime import (
     artifact, level_one_authorization, measurement_scope, plan, state, write_document)
-from tools.phase5.canary_runtime import CanaryError, build_canary_record, validate_canary_bundle
+from tools.phase5.canary_runtime import CanaryError, build_canary_record, main, validate_canary_bundle
 from tools.phase5.contract_rules import CANARY_CONTROLS, canonical_sha256, validate_contract
 from tools.phase5.recovery_rehearsal import validate_rehearsal_contracts
 
@@ -141,7 +141,7 @@ def build_canary(root: Path) -> tuple[datetime, dict, dict, dict]:
         "maximum_result_bytes": 4096, "session_count": 1, "pool_profile": "DIRECT"}
     validate_contract(plan_doc); write_document(root / "canary-plan.json", plan_doc)
 
-    base = datetime.now(timezone.utc)
+    base = datetime.now(timezone.utc) - timedelta(seconds=10)
     spool = artifact(root, "private/raw/observed.spool")
     request = {"schema_version": 1, "contract_type": "request", "contract_id": "request-1",
         "scope_sha256": scope_sha, "run_id": "canary-1", "session_id": "session-1",
@@ -171,9 +171,12 @@ def build_canary(root: Path) -> tuple[datetime, dict, dict, dict]:
     positive_execution = raw(root, "positive-execution.json", {
         "document_type": "canary_positive_execution", "query_id": "query-a",
         "session_id": "session-1", "executed_sql_sha256": plan_doc["positive_literal_sha256"],
+        "observed_spool": spool,
         "started_at": utc(base + timedelta(seconds=2)),
         "finished_at": utc(base + timedelta(seconds=3)), "result": "PASS"})
-    backend = {"cluster_id": "cluster-1", "start_id": "start-1", "pid": 1234,
+    mandate = __import__("json").loads((root / "operation-mandate.json").read_text())
+    backend = {"cluster_id": mandate["target_cluster_id"],
+        "start_id": mandate["target_initial_start_id"], "pid": 1234,
         "backend_start": utc(base - timedelta(seconds=10)), "session_id": "session-1"}
     run = {"schema_version": 1, "contract_type": "canary_run", "contract_id": "canary-run-1",
         "scope_sha256": scope_sha, "canary_id": "canary-1",
@@ -191,7 +194,8 @@ def build_canary(root: Path) -> tuple[datetime, dict, dict, dict]:
         "observation_complete": True, "backend_present": False,
         "observed_at": utc(base + timedelta(seconds=7)), "result": "PASS"})
     reconnect = raw(root, "fresh-reconnect.json", {"document_type": "canary_fresh_reconnect",
-        "cluster_id": "cluster-1", "start_id": "start-1", "pid": 2345,
+        "cluster_id": mandate["target_cluster_id"],
+        "start_id": mandate["target_initial_start_id"], "pid": 2345,
         "backend_start": utc(base + timedelta(seconds=8)), "session_id": "session-2",
         "connected_at": utc(base + timedelta(seconds=8)),
         "mode": "off", "force_execution": "off", "observed_engine": "postgres",
@@ -321,6 +325,14 @@ class CanaryRuntimeTests(unittest.TestCase):
             reseal_all(root, plan_value, run)
             with self.assertRaisesRegex(CanaryError, "outside_private_scope"):
                 validate_canary_bundle(root, checked)
+
+    def test_cli_persists_terminal_outcome_and_blocks_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); build_canary(root)
+            self.assertEqual(main(["--bundle", str(root)]), 0)
+            outcome = __import__("json").loads((root / "canary-outcome.json").read_text())
+            self.assertEqual(outcome["decision"], "ELIGIBLE_FOR_HUMAN_GRANT")
+            self.assertEqual(main(["--bundle", str(root)]), 1)
 
 
 if __name__ == "__main__":

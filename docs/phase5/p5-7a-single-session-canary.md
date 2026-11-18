@@ -25,7 +25,10 @@ human decision.
 
        python3 tools/phase5/canary_runtime.py --bundle /absolute/private/bundle
 
-   A successful result is only `ELIGIBLE_FOR_HUMAN_GRANT`. The human reviewer
+   The command exclusively creates `canary-outcome.json` in the bundle on both
+   PASS and refusal. An existing outcome blocks a second attempt under the same
+   bundle and identity; never delete or replace it. A successful result is only
+   `ELIGIBLE_FOR_HUMAN_GRANT`. The human reviewer
    must independently inspect the private evidence before granting
    `CANARY_ACCEPTED`.
 

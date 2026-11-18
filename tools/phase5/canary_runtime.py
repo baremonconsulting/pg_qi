@@ -113,6 +113,21 @@ def _pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def _artifact_identity(root: Path, artifact: dict[str, Any]) -> tuple[int, int]:
+    """Return a verified, single-link regular file identity."""
+    verify_artifact(root, artifact)
+    path = resolve_bundle_path(root, Path(artifact["path"]))
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        info = os.fstat(descriptor)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or
+                info.st_nlink != 1 or stat.S_IMODE(info.st_mode) & 0o077):
+            raise CanaryError("unsafe_canary_artifact")
+        return info.st_dev, info.st_ino
+    finally:
+        os.close(descriptor)
+
+
 def validate_canary_bundle(root: Path, now: datetime | None = None) -> dict[str, Any]:
     """Recompute a canary result. This function never grants CANARY_ACCEPTED."""
     _root(root)
@@ -161,6 +176,8 @@ def validate_canary_bundle(root: Path, now: datetime | None = None) -> dict[str,
     except (MeasurementError, ContractError, OSError) as exc:
         raise CanaryError("canary_operation_go_invalid") from exc
     operation_go = _artifact_contract(root, authorization["operation_go"], "approval_receipt")
+    mandate = _artifact_contract(root, authorization["operation_rehearsal_mandate"],
+                                 "rehearsal_mandate")
     if (level["level"] != 1 or level["sessions"] != 1 or
             canonical_sha256(operation_go) != plan["operation_go_sha256"] or
             run["operation_go_sha256"] != plan["operation_go_sha256"]):
@@ -200,7 +217,7 @@ def validate_canary_bundle(root: Path, now: datetime | None = None) -> dict[str,
     request = _artifact_contract(root, run["positive_request"], "request")
     snapshot = _artifact_contract(root, run["positive_snapshot"], "snapshot")
     execution = _raw(root, run["positive_execution_proof"], {"document_type", "query_id",
-        "session_id", "executed_sql_sha256", "started_at", "finished_at", "result"},
+        "session_id", "executed_sql_sha256", "observed_spool", "started_at", "finished_at", "result"},
         "canary_positive_execution")
     interval = request.get("request_interval")
     if (request["scope_sha256"] != scope or request["run_id"] != plan["canary_id"] or
@@ -224,6 +241,7 @@ def validate_canary_bundle(root: Path, now: datetime | None = None) -> dict[str,
     if (execution["query_id"] != plan["positive_query_id"] or
             execution["session_id"] != run["session_id"] or
             execution["executed_sql_sha256"] != plan["positive_literal_sha256"] or
+            execution["observed_spool"] != run["positive_spool"] or
             execution["result"] != "PASS" or not started < positive_started <
             positive_finished < finished):
         raise CanaryError("canary_positive_execution_invalid")
@@ -287,7 +305,16 @@ def validate_canary_bundle(root: Path, now: datetime | None = None) -> dict[str,
                     ("cluster_id", "start_id", "backend_start", "session_id")) or
                 type(proof["pid"]) is not int or proof["pid"] <= 0):
             raise CanaryError("canary_backend_identity_invalid")
+    backend_start = _time(backend["backend_start"], "canary_backend_start")
+    reconnect_backend_start = _time(reconnect["backend_start"], "reconnect_backend_start")
+    reconnect_connected = _time(reconnect["connected_at"], "reconnect_connected")
+    if (_artifact_identity(root, plan["expected_spool"]) ==
+            _artifact_identity(root, run["positive_spool"])):
+        raise CanaryError("canary_observed_spool_aliases_baseline")
     if (retirement["owned_session_id"] != run["session_id"] or
+            backend["cluster_id"] != mandate["target_cluster_id"] or
+            backend["start_id"] != mandate["target_initial_start_id"] or
+            not _time(operation_go["valid_from"], "operation_go_start") <= backend_start <= started or
             exit_proof["session_id"] != run["session_id"] or
             any(exit_proof[name] != backend[name] for name in
                 ("cluster_id", "start_id", "pid", "backend_start", "session_id")) or
@@ -297,7 +324,7 @@ def validate_canary_bundle(root: Path, now: datetime | None = None) -> dict[str,
             reconnect["cluster_id"] != backend["cluster_id"] or
             reconnect["start_id"] != backend["start_id"] or
             reconnect["session_id"] == run["session_id"] or reconnect["pid"] == backend["pid"] or
-            _time(reconnect["backend_start"], "reconnect_backend_start") < exit_time or
+            not exit_time <= reconnect_backend_start <= reconnect_connected or
             reconnect["mode"] != "off" or
             reconnect["force_execution"] != "off" or
             reconnect["observed_engine"] != "postgres" or reconnect["result"] != "PASS" or
@@ -334,16 +361,46 @@ def build_canary_record(validation: dict[str, Any]) -> dict[str, Any]:
             "value_outcome": "NOT_EVALUATED", "project_decision": "UNDECIDED"}}
 
 
+def _write_outcome(path: Path, value: dict[str, Any]) -> None:
+    payload = canonical_bytes(value)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        written = 0
+        while written < len(payload):
+            count = os.write(descriptor, payload[written:])
+            if count <= 0:
+                raise CanaryError("canary_outcome_write_failed")
+            written += count
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Validate an operator-executed canary")
     parser.add_argument("--bundle", required=True, type=Path)
     arguments = parser.parse_args(argv)
+    outcome = arguments.bundle / "canary-outcome.json"
+    if outcome.exists():
+        print(json.dumps({"decision": "REFUSED", "reason": "canary_attempt_already_recorded",
+                          "result": "FAIL"}, sort_keys=True, separators=(",", ":")),
+              file=sys.stderr)
+        return 1
     try:
         result = validate_canary_bundle(arguments.bundle)
+        _write_outcome(outcome, {"schema_version": 1, "document_type": "canary_outcome",
+            "decision": result["decision"], "result": result["result"],
+            "reason": None, "validation": result})
         print(json.dumps({"decision": result["decision"], "result": result["result"]},
                          sort_keys=True, separators=(",", ":")))
         return 0
     except (CanaryError, ContractError, MeasurementError, OSError) as exc:
+        try:
+            _write_outcome(outcome, {"schema_version": 1, "document_type": "canary_outcome",
+                "decision": "REFUSED", "result": "FAIL", "reason": str(exc),
+                "validation": None})
+        except (CanaryError, OSError):
+            pass
         print(json.dumps({"decision": "REFUSED", "reason": str(exc), "result": "FAIL"},
                          sort_keys=True, separators=(",", ":")), file=sys.stderr)
         return 1
