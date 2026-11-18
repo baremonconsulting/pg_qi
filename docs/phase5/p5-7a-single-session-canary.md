@@ -27,8 +27,9 @@ human decision.
          --bundle /absolute/private/bundle \
          --ledger /absolute/write-once/canary-ledger
 
-   The ledger must be the operator-approved, owned `0700` evidence ledger used
-   for every attempt on the target. Before validation, the command exclusively
+   The ledger must be the operator-approved, owned `0700` evidence ledger whose
+   absolute path, device/inode identity and `ledger-id.json` artifact are frozen
+   in `canary-plan.json`. Before validation, the command exclusively
    consumes the `(scope, canary_id, OPERATION_GO)` identity there. Moving or
    copying the bundle therefore cannot authorize a retry. The command also
    exclusively creates `canary-outcome.json` in the bundle on both

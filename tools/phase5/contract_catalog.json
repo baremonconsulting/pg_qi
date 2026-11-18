@@ -161,7 +161,7 @@
       "optional": []
     },
     "canary_plan": {
-      "required": ["scope_sha256", "canary_id", "measurement_plan", "level_authorization", "operation_go_sha256", "private_bundle_path", "positive_query_id", "positive_sql", "positive_literal_sha256", "expected_spool", "negative_controls", "negative_control_sql", "expected_snapshot", "maximum_result_bytes", "session_count", "pool_profile"],
+      "required": ["scope_sha256", "canary_id", "measurement_plan", "level_authorization", "operation_go_sha256", "attempt_ledger", "private_bundle_path", "positive_query_id", "positive_sql", "positive_literal_sha256", "expected_spool", "negative_controls", "negative_control_sql", "expected_snapshot", "maximum_result_bytes", "session_count", "pool_profile"],
       "optional": []
     },
     "canary_run": {

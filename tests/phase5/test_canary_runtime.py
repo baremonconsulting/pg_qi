@@ -144,6 +144,9 @@ def build_canary(root: Path) -> tuple[datetime, dict, dict, dict]:
         "canary_id": "canary-1", "measurement_plan": artifact(root, "measurement-plan.json"),
         "level_authorization": artifact(root, "level-authorization.json"),
         "operation_go_sha256": canonical_sha256(operation_go),
+        "attempt_ledger": {"path": "/not-used-by-library-validation", "device": 1,
+            "inode": 1, "identity": {"path": "ledger-id.json", "sha256": "0" * 64,
+                "bytes": 1}},
         "private_bundle_path": "private", "positive_query_id": "query-a",
         "positive_sql": artifact(root, "private/raw/q.sql"),
         "positive_literal_sha256": artifact(root, "private/raw/q.sql")["sha256"],
@@ -341,20 +344,41 @@ class CanaryRuntimeTests(unittest.TestCase):
 
     def test_cli_persists_terminal_outcome_and_blocks_retry(self) -> None:
         with tempfile.TemporaryDirectory() as name:
-            root = Path(name); build_canary(root)
+            root = Path(name); _, plan_value, run, _ = build_canary(root)
             ledger = root.parent / f"{root.name}-ledger"; ledger.mkdir(mode=0o700)
+            (ledger / "ledger-id.json").write_bytes(b"pgqi-canary-ledger-v1\n")
+            (ledger / "ledger-id.json").chmod(0o600)
+            info = ledger.stat()
+            plan_value["attempt_ledger"] = {"path": str(ledger.resolve()),
+                "device": info.st_dev, "inode": info.st_ino,
+                "identity": artifact(ledger, "ledger-id.json")}
+            reseal_all(root, plan_value, run)
             self.assertEqual(main(["--bundle", str(root), "--ledger", str(ledger)]), 0)
             outcome = __import__("json").loads((root / "canary-outcome.json").read_text())
             self.assertEqual(outcome["decision"], "ELIGIBLE_FOR_HUMAN_GRANT")
             self.assertEqual(main(["--bundle", str(root), "--ledger", str(ledger)]), 1)
             (root / "canary-outcome.json").unlink()
             self.assertEqual(main(["--bundle", str(root), "--ledger", str(ledger)]), 1)
-            self.assertEqual(len(list(ledger.glob("*.json"))), 1)
+            self.assertEqual(len(list(ledger.glob("*.json"))), 2)
+            (root / "canary-outcome.json").unlink()
+            replacement = root.parent / f"{root.name}-replacement-ledger"
+            replacement.mkdir(mode=0o700)
+            (replacement / "ledger-id.json").write_bytes(b"pgqi-canary-ledger-v1\n")
+            (replacement / "ledger-id.json").chmod(0o600)
+            self.assertEqual(main(["--bundle", str(root), "--ledger", str(replacement)]), 1)
+            __import__("shutil").rmtree(replacement)
+            __import__("shutil").rmtree(ledger)
 
     def test_cli_refuses_ledger_inside_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as name:
-            root = Path(name); build_canary(root)
+            root = Path(name); _, plan_value, run, _ = build_canary(root)
             ledger = root / "ledger"; ledger.mkdir(mode=0o700)
+            (ledger / "ledger-id.json").write_bytes(b"pgqi-canary-ledger-v1\n")
+            (ledger / "ledger-id.json").chmod(0o600)
+            info = ledger.stat(); plan_value["attempt_ledger"] = {"path": str(ledger.resolve()),
+                "device": info.st_dev, "inode": info.st_ino,
+                "identity": artifact(ledger, "ledger-id.json")}
+            reseal_all(root, plan_value, run)
             self.assertEqual(main(["--bundle", str(root), "--ledger", str(ledger)]), 1)
 
 

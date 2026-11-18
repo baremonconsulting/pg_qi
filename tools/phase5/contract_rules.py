@@ -967,6 +967,15 @@ def _validate_canary_plan(value: dict[str, Any], catalog: dict[str, Any]) -> Non
     _artifact(value["measurement_plan"], "measurement_plan")
     _artifact(value["level_authorization"], "level_authorization")
     _digest(value["operation_go_sha256"], "operation_go_sha256")
+    ledger = _object(value["attempt_ledger"], "attempt_ledger")
+    if set(ledger) != {"path", "device", "inode", "identity"}:
+        raise ContractError("attempt ledger identity is not exact")
+    if (not isinstance(ledger["path"], str) or not ledger["path"].startswith("/") or
+            "\x00" in ledger["path"]):
+        raise ContractError("attempt ledger path is not absolute")
+    _integer(ledger["device"], "attempt ledger device", 1)
+    _integer(ledger["inode"], "attempt ledger inode", 1)
+    _artifact(ledger["identity"], "attempt ledger identity")
     _string(value["private_bundle_path"], "private_bundle_path",
             re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$"))
     _string(value["positive_query_id"], "positive_query_id")

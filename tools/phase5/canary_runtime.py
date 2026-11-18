@@ -425,6 +425,15 @@ def _write_outcome(path: Path, value: dict[str, Any]) -> None:
 
 def _consume_attempt(ledger: Path, plan: dict[str, Any]) -> Path:
     resolved = _root(ledger)
+    expected = plan["attempt_ledger"]
+    info = resolved.stat()
+    if (str(resolved) != expected["path"] or info.st_dev != expected["device"] or
+            info.st_ino != expected["inode"]):
+        raise CanaryError("canary_attempt_ledger_identity_mismatch")
+    try:
+        verify_artifact(resolved, expected["identity"])
+    except ContractError as exc:
+        raise CanaryError("canary_attempt_ledger_identity_mismatch") from exc
     identity = hashlib.sha256(canonical_bytes({"scope_sha256": plan["scope_sha256"],
         "canary_id": plan["canary_id"],
         "operation_go_sha256": plan["operation_go_sha256"]})).hexdigest()
