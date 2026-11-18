@@ -31,6 +31,21 @@ requires an explicit connection string, session/protocol mode, new spool and
 snapshot paths, positive finite limits and deadlines. A binary spool is valid
 only when the terminal state is `COMPLETE` and the offline verifier passes.
 
+## Audited single-session path
+
+`audited-session-driver` and `pilot_runtime.py` are the separate P5-3A path.
+The coordinator synchronises a hash-chained dispatch intent before sending a
+bounded versioned frame. The C/libpq process holds one connection, accepts only
+execute and close opcodes, resolves an immutable case identifier under a
+private case registry, verifies its SHA-256 digest and never reconnects or
+replays a request. Every request receives new exclusive spool and same-session
+snapshot files. Session loss after intent is `INCOMPLETE`, never proof that the
+request did not execute.
+
+This controlled-pilot path does not install PostgreSQL, alter roles or
+persistent settings, control cluster lifecycle, expose a general SQL CLI, or
+imply `OPERATION_GO`.
+
 ## Offline evidence validation
 
 `evidence_tool.py` validates sealed evidence without database, network or shell

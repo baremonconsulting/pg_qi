@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import tempfile
+import unittest
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+
+from tools.phase5.pilot_runtime import (AuditedSession, PreparedRegistry,
+                                        SequenceJournal, encode_frame, read_frame)
+
+
+class JournalTests(unittest.TestCase):
+    def test_chain_is_durable_ordered_and_exclusive(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); os.chmod(root, 0o700)
+            journal = SequenceJournal(root)
+            first = journal.append("request", "STARTED", {"case_id": "A"})
+            second = journal.append("planning", "COMPLETE", {"decision_before": "1"})
+            journal.close()
+            self.assertEqual(second["sequence"], 2)
+            self.assertEqual(second["previous_sha256"], first["record_sha256"])
+            rows = [json.loads(line) for line in (root / "request.journal.jsonl").read_text().splitlines()]
+            unsigned = dict(rows[0]); digest = unsigned.pop("record_sha256")
+            encoded = json.dumps(unsigned, sort_keys=True, separators=(",", ":"),
+                                 ensure_ascii=True, allow_nan=False).encode("ascii")
+            self.assertEqual(digest, hashlib.sha256(encoded).hexdigest())
+            with self.assertRaises(FileExistsError):
+                SequenceJournal(root)
+
+    def test_symlink_and_permissive_root_are_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); os.chmod(root, 0o755)
+            with self.assertRaises(ValueError):
+                SequenceJournal(root)
+        with tempfile.TemporaryDirectory() as name:
+            parent = Path(name); real = parent / "real"; real.mkdir(mode=0o700)
+            link = parent / "link"; link.symlink_to(real, target_is_directory=True)
+            with self.assertRaises(OSError):
+                SequenceJournal(link)
+
+
+class RegistryTests(unittest.TestCase):
+    def test_a_b_cached_a_and_deallocate_are_distinct(self) -> None:
+        registry = PreparedRegistry()
+        a = registry.prepare("a", b"SELECT 1", 1)
+        b = registry.prepare("b", b"SELECT 2", 2)
+        self.assertEqual(registry.active("a"), a)
+        self.assertNotEqual(a.sql_sha256, b.sql_sha256)
+        retired = registry.deallocate("a", 3)
+        self.assertEqual(retired.deallocated_sequence, 3)
+        with self.assertRaises(ValueError):
+            registry.active("a")
+        reparsed = registry.prepare("a", b"SELECT 3", 4)
+        self.assertEqual(reparsed.generation, 2)
+        self.assertNotEqual(reparsed.sql_sha256, retired.sql_sha256)
+
+
+class FramedSessionTests(unittest.TestCase):
+    def test_audited_driver_has_no_lifecycle_or_shell_dispatch(self) -> None:
+        source = (ROOT / "tools/phase5/audited_session_driver.c").read_text()
+        for forbidden in ("system(", "popen(", "execve(", "pg_ctl", "initdb",
+                          "ALTER SYSTEM", "CREATE ROLE", "DROP ROLE", "ssh "):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, source)
+
+    def test_bounded_protocol_refuses_unknown_opcode(self) -> None:
+        with self.assertRaises(ValueError):
+            encode_frame(99, {})
+
+    def test_intent_precedes_correlated_terminal(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); os.chmod(root, 0o700)
+            fixture = Path(__file__).parent / "fixtures/framed-driver.py"
+            driver = Path(sys.executable).resolve()
+            journal = SequenceJournal(root)
+            session = AuditedSession(driver, journal, [str(fixture)], {"case_a": "a" * 64})
+            response = session.dispatch("case_a")
+            session.close(); journal.close()
+            self.assertEqual(response["state"], "COMPLETE")
+            rows = [json.loads(line) for line in
+                    (root / "request.journal.jsonl").read_text().splitlines()]
+            self.assertEqual(rows[0]["payload"]["event"], "dispatch_intent")
+            self.assertEqual(rows[1]["payload"]["intent_sequence"], 1)
+            self.assertEqual([row["phase"] for row in rows[1:]],
+                             ["planning", "execution", "snapshot"])
+
+    def test_session_loss_is_incomplete_and_never_replayed(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); os.chmod(root, 0o700)
+            fixture = Path(__file__).parent / "fixtures/framed-driver.py"
+            driver = Path(sys.executable).resolve()
+            journal = SequenceJournal(root)
+            session = AuditedSession(driver, journal, [str(fixture), "disconnect"], {"case_a": "a" * 64})
+            with self.assertRaisesRegex(RuntimeError, "will not be replayed"):
+                session.dispatch("case_a")
+            with self.assertRaises(ValueError):
+                session.dispatch("case_a")
+            journal.close()
+            rows = [json.loads(line) for line in
+                    (root / "request.journal.jsonl").read_text().splitlines()]
+            self.assertEqual([r["state"] for r in rows], ["STARTED", "INCOMPLETE"])
+            self.assertEqual(rows[-1]["payload"]["event"], "session_lost_after_dispatch")
+
+    def test_mismatched_response_is_incomplete(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); os.chmod(root, 0o700)
+            fixture = Path(__file__).parent / "fixtures/framed-driver.py"
+            driver = Path(sys.executable).resolve()
+            journal = SequenceJournal(root)
+            session = AuditedSession(driver, journal, [str(fixture), "mismatch"], {"case_a": "a" * 64})
+            with self.assertRaises(RuntimeError):
+                session.dispatch("case_a")
+            journal.close()
+
+    def test_prepared_lifecycle_reprepare_generation(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); os.chmod(root, 0o700)
+            fixture = Path(__file__).parent / "fixtures/framed-driver.py"
+            journal = SequenceJournal(root)
+            session = AuditedSession(Path(sys.executable).resolve(), journal,
+                [str(fixture)], {"case_a": "a" * 64, "case_b": "b" * 64})
+            session.prepare("a", "case_a")
+            session.prepare("b", "case_b")
+            session.execute_prepared("a")
+            session.deallocate("a")
+            session.prepare("a", "case_a")
+            self.assertEqual(session._registry.active("a").generation, 2)
+            session.close(); journal.close()
+
+
+if __name__ == "__main__":
+    unittest.main()

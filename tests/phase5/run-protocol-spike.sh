@@ -42,6 +42,44 @@ conninfo="host=$socket port=$port dbname=postgres user=$(id -un) connect_timeout
   -c 'INSERT INTO p5_literal SELECT g, 1 FROM generate_series(1,1000) AS g' \
   -c 'ANALYZE p5_literal' >/dev/null
 
+audited_cases="$lab/audited-cases"
+audited_out="$out/audited-session"
+mkdir -m 700 "$audited_cases" "$audited_out"
+cp "$repo/tests/phase5/sql/literal.sql" "$audited_cases/case_a.sql"
+cp "$repo/tests/phase5/sql/null-empty.sql" "$audited_cases/case_b.sql"
+chmod 600 "$audited_cases/case_a.sql" "$audited_cases/case_b.sql"
+PYTHONPATH="$repo" python3 - "$repo" "$conninfo" "$audited_cases" "$audited_out" <<'PY'
+import hashlib, json, pathlib, sys
+from tools.phase5.pilot_runtime import AuditedSession, SequenceJournal
+repo, conninfo, cases, output = pathlib.Path(sys.argv[1]), sys.argv[2], pathlib.Path(sys.argv[3]), pathlib.Path(sys.argv[4])
+digests = {name: hashlib.sha256((cases / f"{name}.sql").read_bytes()).hexdigest()
+           for name in ("case_a", "case_b")}
+journal = SequenceJournal(output)
+args = ["--conninfo", conninfo, "--case-root", str(cases), "--output-root", str(output),
+        "--session-mode", "lab_allowlist", "--deadline-ms", "8000", "--max-requests", "10",
+        "--max-rows", "2000", "--max-bytes", "1048576", "--max-columns", "4",
+        "--max-field-bytes", "1024", "--max-spool-bytes", "2097152", "--max-messages", "2010"]
+session = AuditedSession(repo / "tools/phase5/audited-session-driver", journal, args,
+                         digests)
+first = session.dispatch("case_a")
+second = session.dispatch("case_a")
+session.prepare("a", "case_a")
+session.execute_prepared("a")
+session.prepare("b", "case_b")
+session.execute_prepared("b")
+cached_a = session.execute_prepared("a")
+session.deallocate("a")
+session.prepare("a", "case_a")
+reprepared_a = session.execute_prepared("a")
+session.close(); journal.close()
+if any(item["state"] != "COMPLETE" for item in
+       (first, second, cached_a, reprepared_a)):
+    raise SystemExit("audited session did not complete")
+rows = [json.loads(line) for line in (output / "request.journal.jsonl").read_text().splitlines()]
+if [row["sequence"] for row in rows] != list(range(1, len(rows) + 1)):
+    raise SystemExit("journal sequence is not contiguous")
+PY
+
 run_case() {
   local name=$1 protocol=$2 sql=$3 expected=$4 session_mode=$5
   shift 5

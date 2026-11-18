@@ -8,7 +8,7 @@ LDLIBS += -lpq -lcrypto
 
 .PHONY: all clean
 
-all: protocol-driver site-preflight-driver
+all: protocol-driver site-preflight-driver audited-session-driver
 
 protocol-driver: protocol_driver.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $< $(LDFLAGS) $(LDLIBS)
@@ -16,5 +16,8 @@ protocol-driver: protocol_driver.c
 site-preflight-driver: site_preflight_driver.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $< $(LDFLAGS) $(LDLIBS)
 
+audited-session-driver: audited_session_driver.c protocol_driver.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ audited_session_driver.c $(LDFLAGS) $(LDLIBS)
+
 clean:
-	rm -f protocol-driver site-preflight-driver
+	rm -f protocol-driver site-preflight-driver audited-session-driver
