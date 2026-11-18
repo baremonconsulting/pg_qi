@@ -436,20 +436,21 @@ PY
 # backend absence. application_name discovers candidates; PID plus backend_start
 # is the only identity used for the targeted cleanup and absence observation.
 blackhole_identity=$("$pg_bindir/psql" "$conninfo" -X -At -F $'\t' -v ON_ERROR_STOP=1 \
-  -v target_app="$blackhole_app" \
-  -c "SELECT a.pid, a.backend_start, c.system_identifier, pg_postmaster_start_time() FROM pg_stat_activity AS a CROSS JOIN pg_control_system() AS c WHERE a.application_name = :'target_app' AND a.state = 'active'")
+  -c "SELECT a.pid, a.backend_start, c.system_identifier, pg_postmaster_start_time() FROM pg_stat_activity AS a CROSS JOIN pg_control_system() AS c WHERE a.application_name = '$blackhole_app' AND a.state = 'active'")
 test -n "$blackhole_identity"
 test "$(printf '%s\n' "$blackhole_identity" | wc -l)" -eq 1
 printf 'driver_retirement_state\tUNKNOWN\n' >"$out/cancel-blackhole-retirement.tsv"
 IFS=$'\t' read -r blackhole_pid blackhole_start blackhole_cluster blackhole_postmaster_start <<<"$blackhole_identity"
+[[ $blackhole_pid =~ ^[0-9]+$ ]]
+[[ $blackhole_start =~ ^[0-9T:+.\ -]+$ ]]
+[[ $blackhole_cluster =~ ^[0-9]+$ ]]
+[[ $blackhole_postmaster_start =~ ^[0-9T:+.\ -]+$ ]]
 "$pg_bindir/psql" "$conninfo" -X -At -v ON_ERROR_STOP=1 \
-  -v target_pid="$blackhole_pid" -v target_start="$blackhole_start" \
-  -c "SELECT pg_cancel_backend(pid) FROM pg_stat_activity WHERE pid = :'target_pid'::integer AND backend_start = :'target_start'::timestamptz" >/dev/null
+  -c "SELECT pg_cancel_backend(pid) FROM pg_stat_activity WHERE pid = $blackhole_pid AND backend_start = '$blackhole_start'::timestamptz" >/dev/null
 blackhole_active=1
 for _ in $(seq 1 80); do
   blackhole_active=$("$pg_bindir/psql" "$conninfo" -X -At -v ON_ERROR_STOP=1 \
-    -v target_pid="$blackhole_pid" -v target_start="$blackhole_start" \
-    -c "SELECT count(*) FROM pg_stat_activity WHERE pid = :'target_pid'::integer AND backend_start = :'target_start'::timestamptz")
+    -c "SELECT count(*) FROM pg_stat_activity WHERE pid = $blackhole_pid AND backend_start = '$blackhole_start'::timestamptz")
   test "$blackhole_active" = 0 && break
   sleep 0.05
 done
