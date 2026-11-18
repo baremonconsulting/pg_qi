@@ -42,6 +42,8 @@ conninfo="host=$socket port=$port dbname=postgres user=$(id -un) connect_timeout
   -c 'CREATE EXTENSION pg_duckdb' \
   -c 'CREATE TABLE p5_literal(id integer PRIMARY KEY, value integer NOT NULL)' \
   -c 'INSERT INTO p5_literal SELECT g, 1 FROM generate_series(1,1000) AS g' \
+  -c 'CREATE TABLE p5_revalidation(id integer PRIMARY KEY, value integer NOT NULL)' \
+  -c 'INSERT INTO p5_revalidation VALUES (1, 1)' \
   -c 'ANALYZE p5_literal' >/dev/null
 
 audited_cases="$lab/audited-cases"
@@ -53,10 +55,12 @@ printf 'SELECT FROM;\n' >"$audited_cases/planning_error.sql"
 printf 'SELECT 1 / 0;\n' >"$audited_cases/planning_error_non42.sql"
 printf 'SELECT 1 / value FROM p5_literal WHERE id = 1;\n' >"$audited_cases/execution_error.sql"
 printf "SELECT ('pgqi_absent_' || id::text)::regclass FROM p5_literal WHERE id = 1;\n" >"$audited_cases/execution_error_42.sql"
+printf 'SELECT value FROM p5_revalidation WHERE id = 1;\n' >"$audited_cases/revalidation_error.sql"
 cp "$repo/tests/phase5/sql/runtime-error.sql" "$audited_cases/partial_error.sql"
 chmod 600 "$audited_cases/case_a.sql" "$audited_cases/case_b.sql"
 chmod 600 "$audited_cases/planning_error.sql" "$audited_cases/execution_error.sql" "$audited_cases/partial_error.sql"
 chmod 600 "$audited_cases/planning_error_non42.sql" "$audited_cases/execution_error_42.sql"
+chmod 600 "$audited_cases/revalidation_error.sql"
 PYTHONPATH="$repo" python3 - "$repo" "$conninfo application_name=pgqi_p5_audited" "$audited_cases" "$audited_out" "$pg_bindir/psql" "$conninfo" <<'PY'
 import hashlib, json, pathlib, subprocess, sys
 from tools.phase5.pilot_runtime import AuditedSession, SequenceJournal
@@ -64,6 +68,8 @@ repo, conninfo, cases, output, psql, fixture_conninfo = pathlib.Path(sys.argv[1]
 digests = {name: hashlib.sha256((cases / f"{name}.sql").read_bytes()).hexdigest()
            for name in ("case_a", "case_b", "planning_error", "planning_error_non42",
                         "execution_error", "execution_error_42", "partial_error")}
+digests["revalidation_error"] = hashlib.sha256(
+    (cases / "revalidation_error.sql").read_bytes()).hexdigest()
 journal = SequenceJournal(output)
 args = ["--conninfo", conninfo, "--case-root", str(cases), "--output-root", str(output),
         "--session-mode", "lab_allowlist", "--deadline-ms", "8000", "--max-requests", "24",
@@ -162,6 +168,28 @@ execution_error_42 = failure_session("execution_error_42")
 if (execution_error_42["reason"], execution_error_42["planning_state"],
         execution_error_42["execution_state"]) != ("fresh_execution_error", "COMPLETE", "FAILED"):
     raise SystemExit(f"class-42 execution error states are untruthful: {execution_error_42}")
+
+target = output / "failure-revalidation-prepared"
+target.mkdir(mode=0o700)
+revalidation_journal = SequenceJournal(target)
+revalidation_args = list(args)
+revalidation_args[revalidation_args.index(str(output))] = str(target)
+revalidation = AuditedSession(repo / "tools/phase5/audited-session-driver",
+    revalidation_journal, revalidation_args, digests,
+    hashlib.sha256((repo / "tools/phase5/audited-session-driver").read_bytes()).hexdigest())
+if revalidation.prepare("revalidation", "revalidation_error")["state"] != "COMPLETE":
+    raise SystemExit("revalidation prepare failed")
+if revalidation.execute_prepared("revalidation")["state"] != "COMPLETE":
+    raise SystemExit("revalidation prime failed")
+subprocess.run([psql, fixture_conninfo, "-X", "-v", "ON_ERROR_STOP=1", "-c",
+                "ALTER TABLE p5_revalidation DROP COLUMN value"], check=True,
+               stdout=subprocess.DEVNULL)
+revalidation_error = revalidation.execute_prepared("revalidation")
+revalidation.close(); revalidation_journal.close()
+if (revalidation_error["reason"], revalidation_error["planning_state"],
+        revalidation_error["execution_state"], revalidation_error["snapshot_state"]) != \
+        ("planning_error", "FAILED", "NOT_RUN", "UNAVAILABLE"):
+    raise SystemExit(f"failed revalidation states are untruthful: {revalidation_error}")
 cached_error = failure_session("execution_error", prepared=True, prime_cached=True)
 set_error_value(1)
 if (cached_error["reason"], cached_error["planning_state"], cached_error["execution_state"], cached_error["snapshot_state"]) != \

@@ -319,6 +319,17 @@ int main(int argc, char **argv) {
                         "NOT_RUN", "prepared_generation")) break;
                 continue;
             }
+            if (!PQsendDescribePrepared(conn, prepared) ||
+                    !command_result(conn, now_ms()+(int64_t)deadline_ms, &reason)) {
+                int uncertain = !strcmp(reason, "connection_error") ||
+                                !strcmp(reason, "send_error");
+                if (!uncertain) reason = "planning_error";
+                if (!frame_reply(opcode, sequence,
+                        uncertain ? "INCOMPLETE" : "FAILED",
+                        uncertain ? "INCOMPLETE" : "FAILED", "NOT_RUN",
+                        "UNAVAILABLE", reason)) { }
+                break;
+            }
         }
         if (snprintf(sql_path,sizeof(sql_path),"%s.sql",case_id) >= (int)sizeof(sql_path) ||
             snprintf(spool_path,sizeof(spool_path),"/proc/self/fd/%d/%020llu-%s.spool",output_fd,sequence,case_id) >= (int)sizeof(spool_path) ||
