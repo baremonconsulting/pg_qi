@@ -104,3 +104,25 @@ called. It rejects ambient libpq/runtime influences and compiles a fixed
 read-only online query manifest. Its optional execution mode invokes only the
 typed `site-preflight-driver` without a shell; the driver has no activation or
 workload interface. See `docs/phase5/PGQI-5-release-site-preflight.md`.
+
+## Frozen measurement and bounded concurrency
+
+`measurement_runtime.py` executes one explicitly authorised concurrency level
+from a measurement plan that is already part of the approved scope hash. It
+uses three fixed session modes (`disabled`, `off`, and `allowlist`), verifies
+all scenario correctness results before opening a measurement session, writes
+every warm-up, failure, timeout and measured request to an exclusive bounded
+JSONL stream, and retires every owned session. It never escalates concurrency
+itself. A level above one requires the immediately preceding level's sealed
+`private_full` PASS, clean terminal state, retirement evidence, and the exact
+approved server-resource feed.
+
+The raw interval starts immediately before protocol send and ends only after
+the complete result stream is consumed. Snapshot, diagnostics, oracle and
+evidence persistence are outside that interval and are reported separately.
+The offline evidence validator recomputes counts, percentiles, suppression
+status, variability and completeness from the indexed raw stream; a report is
+not accepted as proof by assertion.
+
+See `docs/phase5/PGQI-5-measurement-concurrency.md` and the frozen-plan example
+in `docs/phase5/templates/measurement-plan.example.json`.

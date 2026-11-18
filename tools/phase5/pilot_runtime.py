@@ -396,17 +396,38 @@ class AuditedSession:
                 raise ValueError("response correlation mismatch")
             required = {"sequence", "state", "planning_state", "execution_state",
                         "snapshot_state", "reason", "cancel_attempted",
-                        "cancel_succeeded", "cancel_timed_out"}
+                        "cancel_succeeded", "cancel_timed_out",
+                        "request_started_monotonic_ns", "request_finished_monotonic_ns",
+                        "request_duration_ns", "request_interval_state",
+                        "request_interval_censored"}
             if set(response) != required or not all(isinstance(response[key], str)
                     for key in {"state", "planning_state", "execution_state",
                                 "snapshot_state", "reason"}) or \
                     not all(isinstance(response[key], bool) for key in
-                            {"cancel_attempted", "cancel_succeeded", "cancel_timed_out"}) or \
+                            {"cancel_attempted", "cancel_succeeded", "cancel_timed_out",
+                             "request_interval_censored"}) or \
+                    not all(type(response[key]) is int and response[key] >= 0 for key in
+                            {"request_started_monotonic_ns",
+                             "request_finished_monotonic_ns", "request_duration_ns"}) or \
                     response["state"] not in TERMINAL or \
                     response["planning_state"] not in TERMINAL or \
                     response["execution_state"] not in TERMINAL or \
-                    response["snapshot_state"] not in TERMINAL:
+                    response["snapshot_state"] not in TERMINAL or \
+                    response["request_interval_state"] not in \
+                            {"NOT_RUN", "COMPLETE", "ERROR", "CENSORED_TIMEOUT"}:
                 raise ValueError("invalid driver terminal schema")
+            started = response["request_started_monotonic_ns"]
+            finished = response["request_finished_monotonic_ns"]
+            duration = response["request_duration_ns"]
+            interval_state = response["request_interval_state"]
+            if ((interval_state == "NOT_RUN" and
+                    ((started, finished, duration) != (0, 0, 0) or
+                     response["request_interval_censored"])) or
+                    (interval_state != "NOT_RUN" and
+                     (not started or finished < started or duration != finished - started)) or
+                    response["request_interval_censored"] !=
+                        (interval_state == "CENSORED_TIMEOUT")):
+                raise ValueError("invalid driver request interval")
         except BaseException as exc:
             if intent is None:
                 raise
@@ -438,7 +459,13 @@ class AuditedSession:
                 "reason": response["reason"],
                 "cancel_attempted": response["cancel_attempted"],
                 "cancel_succeeded": response["cancel_succeeded"],
-                "cancel_timed_out": response["cancel_timed_out"]})
+                "cancel_timed_out": response["cancel_timed_out"],
+                "request_interval": {
+                    "started_monotonic_ns": response["request_started_monotonic_ns"],
+                    "finished_monotonic_ns": response["request_finished_monotonic_ns"],
+                    "duration_ns": response["request_duration_ns"],
+                    "state": response["request_interval_state"],
+                    "censored": response["request_interval_censored"]}})
         except BaseException:
             self._closed = True
             if self._admission is not None:

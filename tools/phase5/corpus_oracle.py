@@ -158,8 +158,10 @@ def validate_qualification(value: dict[str, Any]) -> dict[str, Any]:
         raise OracleError("corpus collections must be arrays")
     natural_ids: set[str] = set()
     natural_origins: dict[str, str] = {}
+    frequency_weights: dict[str, int | None] = {}
+    baseline_weights: dict[str, int | None] = {}
     confirmed = unknown = 0
-    frequency_total = frequency_confirmed = 0
+    frequency_total = 0
     frequency_known = True
     for raw in natural:
         item = _exact(raw, {"query_id", "inventory_origin", "inventory_source_ref",
@@ -178,15 +180,15 @@ def validate_qualification(value: dict[str, Any]) -> dict[str, Any]:
             raise OracleError("invalid eligibility")
         _id(item["reason_family"], "reason_family")
         frequency = _weight(item["frequency_weight"], "frequency_weight")
-        _weight(item["baseline_time_weight"], "baseline_time_weight")
+        frequency_weights[query_id] = frequency
+        baseline_weights[query_id] = _weight(item["baseline_time_weight"],
+                                             "baseline_time_weight")
         confirmed += eligibility == "ELIGIBLE"
         unknown += eligibility == "UNKNOWN"
         if frequency is None:
             frequency_known = False
         else:
             frequency_total += frequency
-            if eligibility == "ELIGIBLE":
-                frequency_confirmed += frequency
 
     execution_ids: set[str] = set()
     linked_natural: set[str] = set()
@@ -233,12 +235,20 @@ def validate_qualification(value: dict[str, Any]) -> dict[str, Any]:
         _id(item["dataset_ref"], "dataset_ref")
 
     denominator = len(natural_ids)
+    baseline_known = all(weight is not None for weight in baseline_weights.values())
+    baseline_total = sum(weight or 0 for weight in baseline_weights.values())
+    baseline_measured = sum(baseline_weights[query_id] or 0 for query_id in linked_natural)
+    frequency_measured = sum(frequency_weights[query_id] or 0 for query_id in linked_natural)
     coverage = {"denominator": denominator, "confirmed_eligible": confirmed,
                 "upper_eligible": confirmed + unknown,
                 "confirmed_ratio": None if not denominator else confirmed / denominator,
                 "upper_ratio": None if not denominator else (confirmed + unknown) / denominator,
-                "frequency_ratio": (frequency_confirmed / frequency_total
+                "frequency_ratio": (frequency_measured / frequency_total
                                     if frequency_known and frequency_total else None),
+                "baseline_time_ratio": (baseline_measured / baseline_total
+                                        if baseline_known and baseline_total else None),
+                "measured_natural_ratio": (len(linked_natural) / denominator
+                                           if denominator else None),
                 "execution_items": len(execution_ids), "synthetic_controls": len(control_ids),
                 "natural_items_linked_to_execution": len(linked_natural)}
     return coverage

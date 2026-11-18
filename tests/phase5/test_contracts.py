@@ -53,7 +53,8 @@ def scope() -> dict[str, object]:
     value = base("scope", "scope-1")
     value.update({
         "scope_inputs": {name: artifact(f"inputs/{name}.json") for name in
-                         ("workload_definition", "release_definition", "target", "limits",
+                         ("workload_definition", "measurement_plan", "baseline_manifest", "dataset",
+                          "release_definition", "target", "limits",
                           "evidence_policy", "recovery_plan", "export_policy", "toolkit",
                           "role_bindings", "window")},
         "gates_required": ["SCOPE_AUTHORIZED", "OPERATION_GO"],

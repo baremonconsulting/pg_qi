@@ -22,6 +22,8 @@ typedef struct {
     uint64_t max_rows, max_bytes, max_spool, max_messages;
     size_t max_columns, max_field;
     int cancel_attempted, cancel_succeeded, cancel_timed_out;
+    uint64_t request_started_ns, request_finished_ns, request_duration_ns;
+    int request_interval_state;
 } Limits;
 
 static int64_t now_ms(void) {
@@ -30,20 +32,61 @@ static int64_t now_ms(void) {
     return (int64_t)t.tv_sec * 1000 + t.tv_nsec / 1000000;
 }
 
+static uint64_t now_ns(void) {
+    struct timespec t;
+    if (clock_gettime(CLOCK_MONOTONIC, &t)) return 0;
+    return (uint64_t)t.tv_sec * 1000000000ULL + (uint64_t)t.tv_nsec;
+}
+
+static const char *interval_state(const Limits *l) {
+    switch (l->request_interval_state) {
+        case 1: return "COMPLETE";
+        case 2: return "ERROR";
+        case 3: return "CENSORED_TIMEOUT";
+        default: return "NOT_RUN";
+    }
+}
+
+static void interval_start(Limits *l) {
+    l->request_started_ns = now_ns();
+}
+
+static void interval_finish(Limits *l, int state) {
+    uint64_t finished = now_ns();
+    if (!l->request_started_ns || !finished || finished < l->request_started_ns) {
+        l->request_started_ns = 0;
+        l->request_finished_ns = 0;
+        l->request_duration_ns = 0;
+        l->request_interval_state = 0;
+        return;
+    }
+    l->request_finished_ns = finished;
+    l->request_duration_ns = finished - l->request_started_ns;
+    l->request_interval_state = state;
+}
+
 static void terminal(const char *state, const char *reason, const Limits *l,
                      const char *sqlstate) {
     printf("{\"terminal_state\":\"%s\",\"reason\":\"%s\","
            "\"sqlstate\":\"%s\",\"rows\":%llu,\"bytes\":%llu,"
            "\"spool_bytes\":%llu,\"messages\":%llu,"
            "\"cancel_attempted\":%s,\"cancel_succeeded\":%s,"
-           "\"cancel_timed_out\":%s}\n",
+           "\"cancel_timed_out\":%s,"
+           "\"request_started_monotonic_ns\":%llu,"
+           "\"request_finished_monotonic_ns\":%llu,"
+           "\"request_duration_ns\":%llu,\"request_interval_state\":\"%s\","
+           "\"request_interval_censored\":%s}\n",
            state, reason, sqlstate ? sqlstate : "",
            (unsigned long long)l->rows, (unsigned long long)l->bytes,
            (unsigned long long)l->spool_bytes,
            (unsigned long long)l->messages,
            l->cancel_attempted ? "true" : "false",
            l->cancel_succeeded ? "true" : "false",
-           l->cancel_timed_out ? "true" : "false");
+           l->cancel_timed_out ? "true" : "false",
+           (unsigned long long)l->request_started_ns,
+           (unsigned long long)l->request_finished_ns,
+           (unsigned long long)l->request_duration_ns,
+           interval_state(l), l->request_interval_state == 3 ? "true" : "false");
     fflush(stdout);
 }
 
@@ -361,7 +404,9 @@ static int configure_session(PGconn *c, const char *mode, int64_t deadline) {
     } else if (!strcmp(mode, "lab_allowlist"))
         sql = "SET pg_qi.enabled=on; SET pg_qi.routing_mode=allowlist; SET duckdb.force_execution=off";
     else if (!strcmp(mode, "off"))
-        sql = "SET pg_qi.routing_mode=off; SET duckdb.force_execution=off";
+        sql = "SET pg_qi.enabled=on; SET pg_qi.routing_mode=off; SET duckdb.force_execution=off";
+    else if (!strcmp(mode, "disabled"))
+        sql = "SET pg_qi.enabled=off; SET pg_qi.routing_mode=off; SET duckdb.force_execution=off";
     else return 0;
     return commands_bounded(c, sql, deadline);
 }
@@ -462,7 +507,7 @@ static void usage(const char *p) {
             "--protocol extended|simple --deadline-ms N --cancel-deadline-ms N --max-rows N "
             "--max-bytes N --max-columns N --max-field-bytes N "
             "--max-spool-bytes N --max-messages N --snapshot PATH "
-            "--session-mode off|lab_allowlist|native_baseline [--prepared NAME]\n", p);
+            "--session-mode disabled|off|lab_allowlist|native_baseline [--prepared NAME]\n", p);
 }
 
 int main(int argc, char **argv) {
@@ -523,16 +568,22 @@ int main(int argc, char **argv) {
         terminal("FAILED", "session_setup", &l, NULL); goto done;
     }
     query_deadline = now_ms() + (int64_t)deadline_ms;
+    interval_start(&l);
     if (!send_subject(c, sql, protocol, prepared, query_deadline) ||
         !flush_bounded(c, query_deadline)) {
-        terminal("FAILED", "send_error", &l, NULL); goto done;
+        const char *send_reason = now_ms() >= query_deadline ? "query_deadline" : "send_error";
+        interval_finish(&l, !strcmp(send_reason, "query_deadline") ? 3 : 2);
+        if (!strcmp(send_reason, "query_deadline")) cancel_owned_query(c, &l, cancel_deadline_ms);
+        terminal("FAILED", send_reason, &l, NULL); goto done;
     }
     if (!stream(c, spool, &l, query_deadline, &reason, sqlstate)) {
+        interval_finish(&l, !strcmp(reason, "query_deadline") ? 3 : 2);
         if (!strncmp(reason, "max_", 4) || !strcmp(reason, "query_deadline"))
             cancel_owned_query(c, &l, cancel_deadline_ms);
         terminal(!strncmp(reason, "max_", 4) ? "LIMIT_EXCEEDED" : "FAILED",
                  reason, &l, sqlstate[0] ? sqlstate : NULL); goto done;
     }
+    interval_finish(&l, 1);
     if (!(strcmp(session_mode, "native_baseline") ?
           write_snapshot(c, snapshot, before, now_ms() + (int64_t)deadline_ms) :
           write_native_baseline_snapshot(snapshot))) {

@@ -50,15 +50,24 @@ static int frame_reply(unsigned int opcode, unsigned long long sequence,
                        const char *state, const char *planning,
                        const char *execution, const char *snapshot,
                        const char *reason, const Limits *limits) {
-    char json[512]; unsigned char header[6]; int n;
+    char json[1024]; unsigned char header[6]; int n;
     n = snprintf(json, sizeof(json),
         "{\"cancel_attempted\":%s,\"cancel_succeeded\":%s,"
         "\"cancel_timed_out\":%s,\"execution_state\":\"%s\",\"planning_state\":\"%s\","
+        "\"request_duration_ns\":%llu,\"request_finished_monotonic_ns\":%llu,"
+        "\"request_interval_censored\":%s,\"request_interval_state\":\"%s\","
+        "\"request_started_monotonic_ns\":%llu,"
         "\"reason\":\"%s\",\"sequence\":%llu,\"snapshot_state\":\"%s\","
         "\"state\":\"%s\"}", limits->cancel_attempted ? "true" : "false",
         limits->cancel_succeeded ? "true" : "false",
         limits->cancel_timed_out ? "true" : "false",
-        execution, planning, reason, sequence, snapshot, state);
+        execution, planning,
+        (unsigned long long)limits->request_duration_ns,
+        (unsigned long long)limits->request_finished_ns,
+        limits->request_interval_state == 3 ? "true" : "false",
+        interval_state(limits),
+        (unsigned long long)limits->request_started_ns,
+        reason, sequence, snapshot, state);
     if (n < 0 || (size_t)n >= sizeof(json)) return 0;
     header[0] = (unsigned char)(((unsigned int)n + 2) >> 24);
     header[1] = (unsigned char)(((unsigned int)n + 2) >> 16);
@@ -228,6 +237,7 @@ int main(int argc, char **argv) {
         unsigned long long sequence = 0, generation = 0; char *sql = NULL, *before = NULL, *after = NULL; FILE *spool = NULL;
         int prepared_slot = -1;
         Limits limits = base; const char *reason = "invalid_frame"; char sqlstate[6] = ""; int ok = 0;
+        int64_t request_deadline = 0;
         const char *planning_state = "UNAVAILABLE", *execution_state = "NOT_RUN";
         const char *snapshot_state = "NOT_RUN";
         if (!exact_read(header, 4)) break;
@@ -335,12 +345,20 @@ int main(int argc, char **argv) {
         if (opcode == 1 && (!sql || !digest_matches((unsigned char *)sql, strlen(sql), digest))) reason = "case_digest";
         else if (!(spool = open_exclusive(spool_path))) reason = "spool_open";
         else if (!(before = show_scalar(conn, "pg_qi.shadow_decision_id", now_ms()+(int64_t)deadline_ms))) reason = "snapshot_before";
-        else if (!((opcode == 1 ? PQsendQueryParams(conn, sql, 0, NULL, NULL, NULL, NULL, 0) :
-                              PQsendQueryPrepared(conn, prepared, 0, NULL, NULL, NULL, 0))) ||
-                 !flush_bounded(conn, now_ms()+(int64_t)deadline_ms)) reason = "send_error";
+        else if ((request_deadline = now_ms() + (int64_t)deadline_ms,
+                  interval_start(&limits),
+                  !((opcode == 1 ? PQsendQueryParams(conn, sql, 0, NULL, NULL, NULL, NULL, 0) :
+                               PQsendQueryPrepared(conn, prepared, 0, NULL, NULL, NULL, 0))) ||
+                  !flush_bounded(conn, request_deadline))) {
+            reason = now_ms() >= request_deadline ? "query_deadline" : "send_error";
+            interval_finish(&limits, !strcmp(reason, "query_deadline") ? 3 : 2);
+            if (!strcmp(reason, "query_deadline"))
+                cancel_owned_query(conn, &limits, cancel_deadline_ms);
+        }
         else {
             execution_state = "INCOMPLETE";
-            if (!stream(conn, spool, &limits, now_ms()+(int64_t)deadline_ms, &reason, sqlstate)) {
+            if (!stream(conn, spool, &limits, request_deadline, &reason, sqlstate)) {
+                interval_finish(&limits, !strcmp(reason, "query_deadline") ? 3 : 2);
                 if (!strncmp(reason, "max_", 4) || !strcmp(reason, "query_deadline"))
                     cancel_owned_query(conn, &limits, cancel_deadline_ms);
                 if (!strcmp(reason, "server_error") ||
@@ -399,6 +417,7 @@ int main(int argc, char **argv) {
                         reason = "partial_stream_error";
                 }
             } else {
+                interval_finish(&limits, 1);
                 execution_state = "COMPLETE";
                 after = show_scalar(conn, "pg_qi.shadow_decision_id",
                                     now_ms()+(int64_t)deadline_ms);

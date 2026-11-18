@@ -32,7 +32,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--snapshot", required=True, type=Path)
     p.add_argument("--protocol", required=True, choices=("extended", "simple"))
     p.add_argument("--session-mode", required=True,
-                   choices=("off", "lab_allowlist", "native_baseline"))
+                   choices=("disabled", "off", "lab_allowlist", "native_baseline"))
     p.add_argument("--prepared")
     p.add_argument("--deadline-ms", required=True, type=positive_int)
     p.add_argument("--cancel-grace-ms", required=True, type=positive_int)

@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import stat
@@ -16,14 +17,21 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-from contract_rules import (
-    ContractError,
-    aggregate_pass,
-    canonical_bytes,
-    canonical_sha256,
-    validate_contract,
-)
-from corpus_oracle import OracleError, compare_spools, validate_baseline, validate_qualification
+try:
+    from . import contract_rules as _contract_rules
+    from .corpus_oracle import (OracleError, compare_spools, validate_baseline,
+                                validate_qualification)
+except ImportError:
+    import contract_rules as _contract_rules
+    from corpus_oracle import (OracleError, compare_spools, validate_baseline,
+                               validate_qualification)
+
+ContractError = _contract_rules.ContractError
+aggregate_pass = _contract_rules.aggregate_pass
+canonical_bytes = _contract_rules.canonical_bytes
+canonical_sha256 = _contract_rules.canonical_sha256
+strict_load_bytes = _contract_rules.strict_load_bytes
+validate_contract = _contract_rules.validate_contract
 
 PRIVATE_REQUIRED_CONTRACTS = {
     "approval_receipt", "preflight", "workload", "release", "request", "snapshot",
@@ -80,7 +88,8 @@ def _enum(value: Any, allowed: set[str], name: str) -> str:
 
 
 def _load_plain(path: Path, bundle_root: Path, maximum_bytes: int = 1048576) -> dict[str, Any]:
-    from contract_rules import _duplicate, _finite_float, _reject_surrogates, _depth
+    _duplicate = _contract_rules._duplicate; _finite_float = _contract_rules._finite_float
+    _reject_surrogates = _contract_rules._reject_surrogates; _depth = _contract_rules._depth
 
     relative = path.relative_to(bundle_root)
     descriptor = _open_readonly(bundle_root, relative.as_posix())
@@ -118,8 +127,7 @@ def _load_plain(path: Path, bundle_root: Path, maximum_bytes: int = 1048576) -> 
 
 
 def _open_readonly(root: Path, relative: str) -> int:
-    from contract_rules import _open_bundle_file
-    return _open_bundle_file(root, relative)
+    return _contract_rules._open_bundle_file(root, relative)
 
 
 def _tree_entries(root: Path) -> tuple[set[str], set[str]]:
@@ -187,7 +195,8 @@ def _verify_captured(artifact: dict[str, Any], captured: dict[str, bytes]) -> No
 
 
 def _plain_bytes(payload: bytes) -> dict[str, Any]:
-    from contract_rules import _duplicate, _finite_float, _reject_surrogates, _depth
+    _duplicate = _contract_rules._duplicate; _finite_float = _contract_rules._finite_float
+    _reject_surrogates = _contract_rules._reject_surrogates; _depth = _contract_rules._depth
     try:
         value = json.loads(payload.decode("utf-8", "strict"), object_pairs_hook=_duplicate,
                            parse_constant=lambda token: (_ for _ in ()).throw(
@@ -354,6 +363,286 @@ def _validate_workload_definition(value: dict[str, Any]) -> tuple[dict[str, dict
     return cases, coverage
 
 
+def _nearest_rank(values: list[int], percentile: int) -> int:
+    ordered = sorted(values)
+    if not ordered:
+        raise EvidenceError("empty measurement percentile")
+    return ordered[max(0, math.ceil(percentile / 100 * len(ordered)) - 1)]
+
+
+def _validate_measurement_evidence(report: dict[str, Any], plan: dict[str, Any],
+                                   scope_digest: str, indexed: set[str],
+                                   captured: dict[str, bytes],
+                                   expected_coverage: dict[str, Any],
+                                   indexed_artifacts: list[dict[str, Any]]) -> set[str]:
+    if report["scope_sha256"] != scope_digest or \
+            report["plan_sha256"] != canonical_sha256(plan):
+        raise EvidenceError("measurement report identity differs from frozen scope")
+    sample_artifact = report["sample_file"]
+    if sample_artifact["path"] not in indexed:
+        raise EvidenceError("measurement sample stream is not indexed")
+    _verify_captured(sample_artifact, captured)
+    payload = captured[sample_artifact["path"]]
+    samples: list[dict[str, Any]] = []
+    for line in payload.splitlines(keepends=True):
+        if not line.endswith(b"\n"):
+            raise EvidenceError("measurement sample stream lacks final record delimiter")
+        try:
+            sample = strict_load_bytes(line)
+        except ContractError as exc:
+            raise EvidenceError(f"invalid measurement sample: {exc}") from exc
+        if sample.get("contract_type") != "measurement_sample":
+            raise EvidenceError("measurement sample stream contains another contract type")
+        samples.append(sample)
+    if not samples or len(samples) != report["raw_sample_count"]:
+        raise EvidenceError("measurement raw sample count mismatch")
+    identities = [sample["sample_id"] for sample in samples]
+    contract_ids = [sample["contract_id"] for sample in samples]
+    if len(identities) != len(set(identities)) or len(contract_ids) != len(set(contract_ids)):
+        raise EvidenceError("duplicate measurement sample identity")
+    level = next((item for item in plan["concurrency_levels"]
+                  if item["level"] == report["level"]), None)
+    if level is None:
+        raise EvidenceError("measurement report level is outside frozen plan")
+    scenarios = {item["scenario_id"]: item for item in plan["required_scenarios"]}
+    blocks = {index: item for index, item in enumerate(plan["measurement_blocks"], 1)}
+    expected_sequence: list[tuple[str, int, int, str, str, int]] = []
+    planned_scenarios = plan["required_scenarios"]
+    for block_index, block in blocks.items():
+        for order_index, mode in enumerate(block["order"], 1):
+            for _ in range(plan["warmup_repetitions"]):
+                for scenario in planned_scenarios:
+                    if scenario["cache_state"] == "first_use":
+                        continue
+                    for slot in range(1, level["sessions"] + 1):
+                        expected_sequence.append(("WARMUP", block_index, order_index,
+                                                  mode, scenario["scenario_id"], slot))
+            shift = ((block_index - 1) * 3 + order_index - 1) % len(planned_scenarios)
+            ordered = planned_scenarios[shift:] + planned_scenarios[:shift]
+            for position, scenario in enumerate(ordered):
+                expected_sequence.append(("MEASURE", block_index, order_index, mode,
+                                          scenario["scenario_id"],
+                                          position % level["sessions"] + 1))
+    observed_sequence = [(item["phase"], item["block_index"], item["order_index"],
+                          item["mode"], item["scenario_id"], item["session_slot"])
+                         for item in samples]
+    if report["technical_result"] == "PASS" and observed_sequence != expected_sequence:
+        raise EvidenceError("measurement sample sequence differs from frozen execution order")
+    if report["technical_result"] != "PASS" and \
+            observed_sequence != expected_sequence[:len(observed_sequence)]:
+        raise EvidenceError("partial measurement is not a prefix of frozen execution order")
+    warmup_keys: set[tuple[str, str, int, int, int]] = set()
+    warmup_counts: dict[tuple[str, str, int, int], int] = {}
+    measured_keys: set[tuple[str, str, int]] = set()
+    for sample in samples:
+        if (sample["scope_sha256"] != scope_digest or
+                sample["plan_sha256"] != report["plan_sha256"] or
+                sample["run_id"] != report["run_id"] or
+                sample["level"] != report["level"] or
+                sample["scenario_id"] not in scenarios or
+                sample["protocol"] != scenarios[sample["scenario_id"]]["protocol"] or
+                sample["cache_state"] != scenarios[sample["scenario_id"]]["cache_state"] or
+                sample["session_slot"] > level["sessions"]):
+            raise EvidenceError("measurement sample lies outside frozen report identity")
+        if sample["phase"] == "WARMUP":
+            if scenarios[sample["scenario_id"]]["cache_state"] == "first_use":
+                raise EvidenceError("first-use scenario cannot have a warmup sample")
+            block = blocks.get(sample["block_index"])
+            if block is None or sample["order_index"] > 3 or \
+                    block["order"][sample["order_index"] - 1] != sample["mode"]:
+                raise EvidenceError("measurement warmup order differs from frozen plan")
+            prefix = (sample["scenario_id"], sample["mode"], sample["session_slot"],
+                      sample["block_index"])
+            repetition = warmup_counts.get(prefix, 0)
+            key = (*prefix, repetition)
+            if key in warmup_keys or repetition >= plan["warmup_repetitions"]:
+                raise EvidenceError("measurement warmup multiplicity exceeds frozen plan")
+            warmup_keys.add(key)
+            warmup_counts[prefix] = repetition + 1
+        else:
+            block = blocks.get(sample["block_index"])
+            if block is None or sample["order_index"] > 3 or \
+                    block["order"][sample["order_index"] - 1] != sample["mode"]:
+                raise EvidenceError("measurement sample order differs from frozen plan")
+            key = (sample["scenario_id"], sample["mode"], sample["block_index"])
+            if key in measured_keys:
+                raise EvidenceError("duplicate measured scenario/mode/block")
+            ordered_ids = list(scenarios)
+            shift = ((sample["block_index"] - 1) * 3 +
+                     sample["order_index"] - 1) % len(ordered_ids)
+            ordered_ids = ordered_ids[shift:] + ordered_ids[:shift]
+            expected_slot = ordered_ids.index(sample["scenario_id"]) % level["sessions"] + 1
+            if sample["session_slot"] != expected_slot:
+                raise EvidenceError("measurement scenario/slot assignment differs from plan")
+            measured_keys.add(key)
+    measured = [sample for sample in samples if sample["phase"] == "MEASURE"]
+    warmups = [sample for sample in samples if sample["phase"] == "WARMUP"]
+    if len(measured) != report["sample_count"] or len(warmups) != report["warmup_sample_count"]:
+        raise EvidenceError("measurement phase counts mismatch")
+    group_map = {(item["scenario_id"], item["mode"]): item for item in report["groups"]}
+    expected_groups = {(scenario, mode) for scenario in scenarios
+                       for mode in ("disabled", "off", "allowlist")}
+    if set(group_map) != expected_groups or len(group_map) != len(report["groups"]):
+        raise EvidenceError("measurement report group closure mismatch")
+    minimum = plan["statistics"]["minimum_n"]
+    for key, group in group_map.items():
+        subset = [item for item in measured
+                  if (item["scenario_id"], item["mode"]) == key]
+        counts = {state.lower(): sum(item["terminal_state"] == state for item in subset)
+                  for state in ("PASS", "FAIL", "TIMEOUT", "INCOMPLETE")}
+        values = [item["request_interval"]["duration_ns"] for item in subset
+                  if item["terminal_state"] == "PASS"]
+        postprocess = [item["postprocess_duration_ns"] for item in subset]
+        block_medians = []
+        for block_id in sorted({item["block_index"] for item in subset}):
+            block_values = [item["request_interval"]["duration_ns"] for item in subset
+                            if item["block_index"] == block_id and
+                            item["terminal_state"] == "PASS"]
+            if block_values:
+                block_medians.append(_nearest_rank(block_values, 50))
+        expected = {"n": len(subset), **counts,
+            "p50_ns": _nearest_rank(values, 50) if len(values) >= minimum["p50"] else None,
+            "postprocess_p50_ns": _nearest_rank(postprocess, 50) if postprocess else None,
+            "p95_ns": _nearest_rank(values, 95) if len(values) >= minimum["p95"] else None,
+            "p99_ns": _nearest_rank(values, 99) if len(values) >= minimum["p99"] else None,
+            "p95_status": "REPORTED" if len(values) >= minimum["p95"] else
+                f"SUPPRESSED(N={len(values)},MIN={minimum['p95']})",
+            "p99_status": "REPORTED" if len(values) >= minimum["p99"] else
+                f"SUPPRESSED(N={len(values)},MIN={minimum['p99']})",
+            "block_median_min_ns": min(block_medians) if block_medians else None,
+            "block_median_max_ns": max(block_medians) if block_medians else None}
+        if any(group[name] != value for name, value in expected.items()):
+            raise EvidenceError("measurement report statistics differ from raw samples")
+    by_group = {(item["scenario_id"], item["mode"]): item for item in report["groups"]}
+    expected_contrasts = []
+    for scenario in plan["required_scenarios"]:
+        disabled = by_group[(scenario["scenario_id"], "disabled")]["p50_ns"]
+        off = by_group[(scenario["scenario_id"], "off")]["p50_ns"]
+        allow = by_group[(scenario["scenario_id"], "allowlist")]["p50_ns"]
+        expected_contrasts.append({"scenario_id": scenario["scenario_id"],
+            "extension_overhead_p50_ns": (off - disabled
+                if off is not None and disabled is not None else None),
+            "routing_effect_p50_ns": (allow - off
+                if allow is not None and off is not None else None)})
+    if report["contrasts"] != expected_contrasts:
+        raise EvidenceError("measurement report contrasts differ from raw samples")
+    failures = any(item["terminal_state"] != "PASS" or item["oracle_result"] != "PASS"
+                   for item in samples)
+    warm_cache_unproven = any(
+        item["phase"] == "MEASURE" and item["cache_state"] == "warm_cached" and
+        item["reason_family"] != "cached" for item in samples)
+    warm_scenarios = sum(item["cache_state"] != "first_use"
+                         for item in plan["required_scenarios"])
+    expected_warmups = (warm_scenarios * 3 * plan["warmup_repetitions"] *
+                        level["sessions"] * len(blocks))
+    expected_measured = len(scenarios) * 3 * len(blocks)
+    if report["technical_result"] == "PASS" and (failures or warm_cache_unproven or
+            len(warmups) != expected_warmups or len(measured) != expected_measured):
+        raise EvidenceError("measurement technical PASS contradicts raw completeness")
+    rules = plan["value_rules"]
+    weights: dict[str, dict[str, int]] = {}
+    weight_paths: set[str] = set()
+    for name in ("frequency", "baseline"):
+        digest = rules[f"{name}_weights_sha256"]
+        if digest is None:
+            continue
+        matches = [item for item in indexed_artifacts if item["sha256"] == digest]
+        if len(matches) > 1:
+            raise EvidenceError("measurement value-weight identity is ambiguous")
+        if matches:
+            artifact = matches[0]; _verify_captured(artifact, captured)
+            value = _plain_bytes(captured[artifact["path"]])
+            if not value or any(not SAFE_NAME.fullmatch(key) or
+                    isinstance(weight, bool) or not isinstance(weight, int) or weight < 0
+                    for key, weight in value.items()):
+                raise EvidenceError("measurement value weights are invalid")
+            weights[name] = value
+            weight_paths.add(artifact["path"])
+    planned_natural = {item["natural_query_id"] for item in plan["required_scenarios"]
+                       if item["natural_query_id"] is not None}
+    passed_natural: set[str] = set()
+    expected_per_scenario = 3 * len(blocks)
+    for natural in planned_natural:
+        scenario_ids = [item["scenario_id"] for item in plan["required_scenarios"]
+                        if item["natural_query_id"] == natural]
+        subset = [item for item in measured if item["scenario_id"] in scenario_ids]
+        if (len(subset) == expected_per_scenario * len(scenario_ids) and
+                all(item["terminal_state"] == "PASS" and item["oracle_result"] == "PASS"
+                    for item in subset)):
+            passed_natural.add(natural)
+    denominator = len(planned_natural) + expected_coverage["missing_natural_items"]
+    actual_coverage = dict(expected_coverage)
+    actual_coverage["measured_natural_share"] = (
+        len(passed_natural) / denominator if denominator else None)
+    actual_coverage["missing_natural_items"] = denominator - len(passed_natural)
+    if passed_natural != planned_natural:
+        actual_coverage["frequency_coverage"] = (sum(weights["frequency"].get(key, 0)
+            for key in passed_natural) / sum(weights["frequency"].values())
+            if weights.get("frequency") and sum(weights["frequency"].values()) else None)
+        actual_coverage["baseline_measured_share"] = (sum(weights["baseline"].get(key, 0)
+            for key in passed_natural) / sum(weights["baseline"].values())
+            if weights.get("baseline") and sum(weights["baseline"].values()) else None)
+    if report["coverage"] != actual_coverage:
+        raise EvidenceError("measurement report coverage differs from measured samples")
+    expected_value = "INCONCLUSIVE"
+    complete_coverage = all(report["coverage"][name] == 1 for name in
+        ("frequency_coverage", "baseline_measured_share", "measured_natural_share"))
+    if (rules["threshold_kind"] == "approved_relative_improvement" and
+            report["technical_result"] == "PASS" and complete_coverage and
+            set(weights) == {"frequency", "baseline"}):
+        block_improvements: list[int] = []
+        for block in range(1, len(plan["measurement_blocks"]) + 1):
+            weighted_base = weighted_delta = 0
+            for scenario in plan["required_scenarios"]:
+                natural = scenario["natural_query_id"]
+                if natural is None or natural not in weights["frequency"] or \
+                        natural not in weights["baseline"]:
+                    break
+                pair = {item["mode"]: item["request_interval"]["duration_ns"]
+                        for item in measured if item["block_index"] == block and
+                        item["scenario_id"] == scenario["scenario_id"] and
+                        item["terminal_state"] == "PASS" and
+                        item["mode"] in {"off", "allowlist"}}
+                if set(pair) != {"off", "allowlist"} or pair["off"] <= 0:
+                    break
+                weight = weights["frequency"][natural]
+                weighted_base += pair["off"] * weight
+                weighted_delta += (pair["off"] - pair["allowlist"]) * weight
+            else:
+                if weighted_base > 0:
+                    block_improvements.append(weighted_delta * 10000 // weighted_base)
+                    continue
+            break
+        if len(block_improvements) >= rules["minimum_paired_blocks"]:
+            conservative_bps = _nearest_rank(block_improvements, 5)
+            expected_value = ("POSITIVE" if conservative_bps >=
+                rules["minimum_relative_improvement_bps"] else "NEGATIVE")
+    if report["value_outcome"] != expected_value:
+        raise EvidenceError("measurement value outcome is not reproducible")
+    return {sample_artifact["path"], *weight_paths}
+
+
+def validate_measurement_level(root: Path, index: dict[str, Any], report: dict[str, Any],
+                               plan: dict[str, Any], scope_sha256: str) -> None:
+    """Recompute an escalation candidate's raw measurement evidence."""
+    files, _ = _tree_entries(root)
+    captured = _capture_files(root, files)
+    indexed = {item["path"] for item in index["payloads"]}
+    for item in index["payloads"]:
+        _verify_captured(item, captured)
+    referenced = _validate_measurement_evidence(
+        report, plan, scope_sha256, indexed, captured, report["coverage"],
+        index["payloads"])
+    expected = {report["sample_file"]["path"]}
+    for digest in (plan["value_rules"]["frequency_weights_sha256"],
+                   plan["value_rules"]["baseline_weights_sha256"]):
+        if digest is not None:
+            expected.update(item["path"] for item in index["payloads"]
+                            if item["sha256"] == digest)
+    if referenced != expected:
+        raise EvidenceError("measurement escalation evidence closure mismatch")
+
+
 def validate_private(root: Path, trusted_scope_sha256: str) -> dict[str, Any]:
     _digest(trusted_scope_sha256, "trusted_scope_sha256")
     files, _ = _tree_entries(root)
@@ -363,7 +652,6 @@ def validate_private(root: Path, trusted_scope_sha256: str) -> dict[str, Any]:
     required_root = {"scope.json", "index.json", "terminal.json"}
     if not required_root <= files:
         raise EvidenceError("private bundle lacks root contract files")
-    from contract_rules import strict_load_bytes
     scope = strict_load_bytes(captured["scope.json"])
     index = strict_load_bytes(captured["index.json"])
     terminal = strict_load_bytes(captured["terminal.json"])
@@ -392,15 +680,88 @@ def validate_private(root: Path, trusted_scope_sha256: str) -> dict[str, Any]:
     workload_definition_path = scope["scope_inputs"]["workload_definition"]["path"]
     qualification = _plain_bytes(captured[workload_definition_path])
     definition_cases, coverage = _validate_workload_definition(qualification)
+    measurement_plan_path = scope["scope_inputs"]["measurement_plan"]["path"]
+    try:
+        measurement_plan = strict_load_bytes(captured[measurement_plan_path])
+    except ContractError as exc:
+        raise EvidenceError(f"invalid frozen measurement plan: {exc}") from exc
+    if measurement_plan.get("contract_type") != "measurement_plan":
+        raise EvidenceError("scope measurement_plan input has wrong contract type")
+    natural_ids = {item["query_id"] for item in qualification["natural_inventory"]}
+    planned_queries: set[str] = set()
+    for scenario in measurement_plan["required_scenarios"]:
+        frozen_case = definition_cases.get(scenario["query_id"])
+        if (frozen_case is None or scenario["oracle_case_id"] != scenario["query_id"] or
+                scenario["natural_query_id"] != frozen_case["natural_query_id"] or
+                (scenario["natural_query_id"] is not None and
+                 scenario["natural_query_id"] not in natural_ids)):
+            raise EvidenceError("measurement scenario differs from frozen corpus or oracle")
+        planned_queries.add(scenario["query_id"])
+    if planned_queries != set(definition_cases):
+        raise EvidenceError("measurement scenarios do not cover the frozen execution corpus")
+    qualification_frequency = {item["query_id"]: item["frequency_weight"]
+                               for item in qualification["natural_inventory"]}
+    qualification_baseline = {item["query_id"]: item["baseline_time_weight"]
+                              for item in qualification["natural_inventory"]}
+    if measurement_plan["value_rules"]["threshold_kind"] == \
+            "approved_relative_improvement":
+        if (any(value is None for value in qualification_frequency.values()) or
+                any(value is None for value in qualification_baseline.values()) or
+                hashlib.sha256(canonical_bytes(qualification_frequency)).hexdigest() !=
+                measurement_plan["value_rules"]["frequency_weights_sha256"] or
+                hashlib.sha256(canonical_bytes(qualification_baseline)).hexdigest() !=
+                measurement_plan["value_rules"]["baseline_weights_sha256"]):
+            raise EvidenceError("measurement value weights differ from frozen qualification")
+    if (measurement_plan["closure_inputs"]["workload_definition_sha256"] !=
+            scope["scope_inputs"]["workload_definition"]["sha256"] or
+            measurement_plan["closure_inputs"]["qualification_sha256"] !=
+            scope["scope_inputs"]["workload_definition"]["sha256"] or
+            measurement_plan["closure_inputs"]["baseline_manifest_sha256"] !=
+            scope["scope_inputs"]["baseline_manifest"]["sha256"] or
+            measurement_plan["closure_inputs"]["resource_policy_sha256"] !=
+            scope["scope_inputs"]["limits"]["sha256"] or
+            measurement_plan["closure_inputs"]["release_sha256"] !=
+            scope["scope_inputs"]["release_definition"]["sha256"] or
+            measurement_plan["closure_inputs"]["target_sha256"] !=
+            scope["scope_inputs"]["target"]["sha256"] or
+            measurement_plan["closure_inputs"]["dataset_sha256"] !=
+            scope["scope_inputs"]["dataset"]["sha256"] or
+            measurement_plan["closure_inputs"]["toolkit_sha256"] !=
+            scope["scope_inputs"]["toolkit"]["sha256"]):
+        raise EvidenceError("measurement plan closure differs from frozen scope inputs")
+    try:
+        frozen_baseline = validate_baseline(_plain_bytes(captured[
+            scope["scope_inputs"]["baseline_manifest"]["path"]]))
+    except OracleError as exc:
+        raise EvidenceError(f"invalid frozen baseline manifest: {exc}") from exc
+    frozen_dataset = _plain_bytes(captured[scope["scope_inputs"]["dataset"]["path"]])
+    if (set(frozen_dataset) != {"schema_version", "document_type", "data_sha256"} or
+            frozen_dataset["schema_version"] != 1 or
+            frozen_dataset["document_type"] != "dataset_identity"):
+        raise EvidenceError("invalid frozen dataset identity")
+    _digest(frozen_dataset["data_sha256"], "frozen dataset data_sha256")
+    if frozen_dataset["data_sha256"] != frozen_baseline["data_sha256"]:
+        raise EvidenceError("frozen dataset and baseline identities differ")
 
     contracts: dict[str, list[dict[str, Any]]] = {}
     oracle: dict[str, Any] | None = None
     baseline_manifest: dict[str, Any] | None = None
     site_cells: dict[str, Any] | None = None
+    deferred_jsonl: set[str] = set()
+    weight_digests = {digest for digest in (
+        measurement_plan["value_rules"]["frequency_weights_sha256"],
+        measurement_plan["value_rules"]["baseline_weights_sha256"]) if digest is not None}
+    deferred_weights = {item["path"] for item in index["payloads"]
+                        if item["sha256"] in weight_digests}
     for relative in sorted(indexed):
         if relative in {entry["path"] for entry in scope["scope_inputs"].values()}:
             continue
         if relative.startswith("raw/"):
+            continue
+        if relative.endswith(".jsonl"):
+            deferred_jsonl.add(relative)
+            continue
+        if relative in deferred_weights:
             continue
         plain = _plain_bytes(captured[relative])
         if "contract_type" in plain:
@@ -423,9 +784,27 @@ def validate_private(root: Path, trusted_scope_sha256: str) -> dict[str, Any]:
             site_cells = plain
         else:
             raise EvidenceError("unknown indexed payload schema")
+    referenced_deferred: set[str] = set()
+    expected_measurement_coverage = {
+        "structural_eligibility": coverage["confirmed_ratio"],
+        "frequency_coverage": coverage["frequency_ratio"],
+        "baseline_measured_share": coverage["baseline_time_ratio"],
+        "measured_natural_share": coverage["measured_natural_ratio"],
+        "missing_natural_items": (coverage["denominator"] -
+                                  coverage["natural_items_linked_to_execution"])}
+    for report in contracts.get("measurement_report", []):
+        referenced_deferred.update(_validate_measurement_evidence(
+            report, measurement_plan, scope_digest, indexed, captured,
+            expected_measurement_coverage,
+            index["payloads"]))
+    if deferred_jsonl | deferred_weights != referenced_deferred:
+        raise EvidenceError("unreferenced or misplaced measurement evidence stream")
     missing_types = PRIVATE_REQUIRED_CONTRACTS - set(contracts)
     result = ("INCOMPLETE" if missing_types or oracle is None or
               baseline_manifest is None or site_cells is None else "PASS")
+    for report in contracts.get("measurement_report", []):
+        result = _worse(result, "PASS" if report["technical_result"] == "PASS" else
+                        "FAIL" if report["technical_result"] == "FAIL" else "INCOMPLETE")
     singleton = {"approval_receipt", "preflight", "workload", "release", "retirement", "recovery"}
     if any(len(contracts.get(kind, [])) != 1 for kind in singleton if kind in contracts):
         raise EvidenceError("singleton contract family count mismatch")
@@ -457,6 +836,8 @@ def validate_private(root: Path, trusted_scope_sha256: str) -> dict[str, Any]:
     if set(baseline_cases) != workload_ids and baseline_manifest is not None:
         raise EvidenceError("baseline manifest and execution corpus differ")
     if baseline_manifest is not None:
+        if baseline_manifest != frozen_baseline:
+            raise EvidenceError("executed baseline differs from frozen baseline manifest")
         approved = qualification["baseline_authority"]
         for name in ("server_build_sha256", "schema_sha256", "data_sha256",
                      "configuration_sha256", "provider_identity"):
@@ -504,8 +885,7 @@ def validate_private(root: Path, trusted_scope_sha256: str) -> dict[str, Any]:
                 approval["preflight_sha256"] != canonical_sha256(preflight)):
             raise EvidenceError("approval receipt preflight linkage mismatch")
     if contracts.get("request") and contracts.get("snapshot"):
-        from contract_rules import validate_cached_sequence
-        validate_cached_sequence(contracts["request"], contracts["snapshot"])
+        _contract_rules.validate_cached_sequence(contracts["request"], contracts["snapshot"])
         if any(request["query_id"] not in workload_ids for request in contracts["request"]):
             raise EvidenceError("request query_id is outside workload")
     requests = contracts.get("request", [])
@@ -558,6 +938,15 @@ def validate_private(root: Path, trusted_scope_sha256: str) -> dict[str, Any]:
     return {"profile": "private_full", "result": result, "scope": scope,
             "scope_sha256": scope_digest, "index": index, "terminal": terminal,
             "oracle_cases": oracle_cases, "site_cells": cells,
+            "qualification_coverage": coverage,
+            "frequency_weights": ({item["query_id"]: item["frequency_weight"]
+                for item in qualification["natural_inventory"]}
+                if all(item["frequency_weight"] is not None
+                       for item in qualification["natural_inventory"]) else None),
+            "baseline_weights": ({item["query_id"]: item["baseline_time_weight"]
+                for item in qualification["natural_inventory"]}
+                if all(item["baseline_time_weight"] is not None
+                       for item in qualification["natural_inventory"]) else None),
             "natural_coverage": coverage}
 
 
@@ -861,7 +1250,6 @@ def validate_shared(root: Path, private_receipt_path: Path) -> dict[str, Any]:
                 observed_checks[key] = digest
     if observed_checks != expected_checks:
         raise EvidenceError("shared values are not bound by private receipt")
-    from contract_rules import strict_load_bytes
     index = strict_load_bytes(captured["index.json"])
     terminal = strict_load_bytes(captured["terminal.json"])
     if index["contract_type"] != "index" or terminal["contract_type"] != "terminal":

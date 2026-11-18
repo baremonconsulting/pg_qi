@@ -76,10 +76,48 @@ def contract(kind: str, identity: str, **fields: object) -> dict[str, object]:
     return {"schema_version": 1, "contract_type": kind, "contract_id": identity, **fields}
 
 
+def measurement_plan(root: Path, query_id: str) -> dict[str, object]:
+    input_digest = lambda name: artifact(root, f"inputs/{name}.json")["sha256"]
+    return contract("measurement_plan", "measurement-plan-1",
+        closure_inputs={
+            "workload_definition_sha256": input_digest("workload_definition"),
+            "qualification_sha256": input_digest("workload_definition"),
+            "baseline_manifest_sha256": input_digest("baseline_manifest"),
+            "resource_policy_sha256": input_digest("limits"),
+            "release_sha256": input_digest("release_definition"),
+            "target_sha256": input_digest("target"),
+            "dataset_sha256": input_digest("dataset"),
+            "toolkit_sha256": input_digest("toolkit")},
+        required_scenarios=[{"scenario_id": "scenario-1", "query_id": query_id,
+            "case_id": query_id.replace("-", "_"),
+            "protocol": "extended", "cache_state": "warm_cached",
+            "oracle_case_id": query_id, "natural_query_id": query_id,
+            "expected_result_bytes_max": 1048576}],
+        seed=101, order_algorithm="seeded_balanced_williams_v1",
+        measurement_blocks=[{"block_id": f"block-{index:04d}", "order": order}
+            for index, order in enumerate(rules.measurement_block_orders(101, 6), 1)],
+        measurement_repetitions=1,
+        warmup_repetitions=1, protocols=["extended"], cache_states=["warm_cached"],
+        concurrency_levels=[{"level": 1, "sessions": 1,
+            "approval_reference": "measurement-level-one",
+            "server_resource_feed_sha256": None}],
+        statistics={"percentile_method": "nearest_rank",
+            "minimum_n": {"p50": 1, "p95": 20, "p99": 100},
+            "outlier_policy": "retain_all", "failure_policy": "retain_and_count",
+            "variability": "per_block_median_range"},
+        value_rules={"threshold_kind": "descriptive_only",
+            "minimum_relative_improvement_bps": None,
+            "minimum_paired_blocks": None,
+            "frequency_weights_sha256": None, "baseline_weights_sha256": None,
+            "attribution": "measured_correct_natural_subset_only",
+            "incomplete_weights_outcome": "INCONCLUSIVE"})
+
+
 def build_private(root: Path, outcome: str = "PASS", missing_cell: bool = False,
                   raw_retained: bool = True, query_id: str = "q-1",
                   malformed_spools: bool = False) -> None:
-    input_names = ("workload_definition", "release_definition", "target", "limits",
+    input_names = ("workload_definition", "measurement_plan", "baseline_manifest", "dataset",
+                   "release_definition", "target", "limits",
                    "evidence_policy", "recovery_plan", "export_policy", "toolkit",
                    "role_bindings", "window")
     for name in input_names:
@@ -126,6 +164,20 @@ def build_private(root: Path, outcome: str = "PASS", missing_cell: bool = False,
             "sql_sha256": artifact(root, "raw/q.sql")["sha256"],
             "dataset_origin": "synthetic_control", "dataset_ref": "dataset-1",
             "concurrent_writes": False}], "synthetic_controls": []})
+    baseline_manifest = {"schema_version": 1,
+        "document_type": "baseline_manifest", "baseline_id": "baseline-1",
+        "server_build_sha256": "8" * 64, "schema_sha256": "9" * 64,
+        "data_sha256": "a" * 64, "configuration_sha256": "b" * 64,
+        "provider_identity": "POSTGRESQL_NATIVE_NO_DELEGATING_PROVIDER",
+        "provider_absence_verified": True, "static_data": True,
+        "concurrent_writes": False, "cases": [{"query_id": query_id,
+            "spool_path": "raw/expected.spool",
+            "spool_sha256": artifact(root, "raw/expected.spool")["sha256"],
+            "spool_bytes": artifact(root, "raw/expected.spool")["bytes"]}]}
+    write_json(root / "inputs/baseline_manifest.json", baseline_manifest)
+    write_json(root / "inputs/dataset.json", {"schema_version": 1,
+        "document_type": "dataset_identity", "data_sha256": "a" * 64})
+    write_json(root / "inputs/measurement_plan.json", measurement_plan(root, query_id))
 
     scope = contract("scope", "scope-1",
         scope_inputs={name: artifact(root, f"inputs/{name}.json") for name in input_names},
@@ -181,16 +233,7 @@ def build_private(root: Path, outcome: str = "PASS", missing_cell: bool = False,
                          "FAIL" if outcome == "FAIL" else "NOT_RUN", state=current_state))
 
     oracle_result = "PASS" if outcome == "PASS" else "FAIL" if outcome == "FAIL" else "NOT_RUN"
-    write_json(root / "payload/baseline.json", {"schema_version": 1,
-        "document_type": "baseline_manifest", "baseline_id": "baseline-1",
-        "server_build_sha256": "8" * 64, "schema_sha256": "9" * 64,
-        "data_sha256": "a" * 64, "configuration_sha256": "b" * 64,
-        "provider_identity": "POSTGRESQL_NATIVE_NO_DELEGATING_PROVIDER",
-        "provider_absence_verified": True, "static_data": True,
-        "concurrent_writes": False, "cases": [{"query_id": query_id,
-            "spool_path": "raw/expected.spool",
-            "spool_sha256": artifact(root, "raw/expected.spool")["sha256"],
-            "spool_bytes": artifact(root, "raw/expected.spool")["bytes"]}]})
+    write_json(root / "payload/baseline.json", baseline_manifest)
     write_json(root / "payload/oracle.json", {"schema_version": 1, "document_type": "oracle",
         "oracle_id": "oracle-1", "cases": [{"query_id": query_id,
         "baseline_spool": artifact(root, "raw/expected.spool"),
@@ -226,8 +269,97 @@ def reseal(root: Path) -> None:
     write_json(root / "terminal.json", terminal)
 
 
+def add_measurement_evidence(root: Path) -> None:
+    scope_digest = scope_hash(root)
+    plan = json.loads((root / "inputs/measurement_plan.json").read_text())
+    plan_digest = rules.canonical_sha256(plan)
+    samples = []
+    ordinal = 0
+    def add(scenario: str, mode: str, phase: str, block: int, order: int,
+            duration: int) -> None:
+        nonlocal ordinal
+        ordinal += 1
+        samples.append(contract("measurement_sample", f"measurement-sample-{ordinal}",
+            scope_sha256=scope_digest, plan_sha256=plan_digest,
+            run_id="measurement-run-1", level=1, sample_id=f"sample-{ordinal}",
+            scenario_id=scenario, mode=mode, phase=phase,
+            protocol="extended", cache_state="warm_cached",
+            block_index=block, order_index=order, session_slot=1,
+            request_interval={"started_monotonic_ns": ordinal * 1000000,
+                "finished_monotonic_ns": ordinal * 1000000 + duration,
+                "duration_ns": duration, "state": "COMPLETE", "censored": False},
+            postprocess_duration_ns=100, terminal_state="PASS", reason_family="cached",
+            result_bytes=8, oracle_result="PASS"))
+    for block_index, block in enumerate(plan["measurement_blocks"], 1):
+        for order_index, mode in enumerate(block["order"], 1):
+            duration = {"disabled": 300, "off": 200, "allowlist": 100}[mode]
+            add("scenario-1", mode, "WARMUP", block_index, order_index, duration)
+            add("scenario-1", mode, "MEASURE", block_index, order_index,
+                duration)
+    payload = b"".join(rules.canonical_bytes(sample) for sample in samples)
+    (root / "measurement-samples.jsonl").write_bytes(payload)
+    groups = []
+    measured_n = len(plan["measurement_blocks"])
+    for mode, duration in (("disabled", 300), ("off", 200), ("allowlist", 100)):
+        groups.append({"scenario_id": "scenario-1", "mode": mode, "n": measured_n,
+            "pass": measured_n, "fail": 0, "timeout": 0, "incomplete": 0,
+            "p50_ns": duration,
+            "postprocess_p50_ns": 100,
+            "p95_ns": duration if measured_n >= 20 else None,
+            "p99_ns": duration if measured_n >= 100 else None,
+            "p95_status": "REPORTED" if measured_n >= 20 else
+                f"SUPPRESSED(N={measured_n},MIN=20)",
+            "p99_status": "REPORTED" if measured_n >= 100 else
+                f"SUPPRESSED(N={measured_n},MIN=100)",
+            "block_median_min_ns": duration, "block_median_max_ns": duration})
+    approved_value = plan["value_rules"]["threshold_kind"] == \
+        "approved_relative_improvement"
+    report = contract("measurement_report", "measurement-report-1",
+        scope_sha256=scope_digest, plan_sha256=plan_digest,
+        run_id="measurement-run-1", level=1,
+        sample_file=artifact(root, "measurement-samples.jsonl"),
+        sample_count=measured_n * 3, raw_sample_count=measured_n * 6,
+        warmup_sample_count=measured_n * 3,
+        groups=groups, contrasts=[{"scenario_id": "scenario-1",
+            "extension_overhead_p50_ns": -100,
+            "routing_effect_p50_ns": -100}],
+        coverage={"structural_eligibility": 1.0,
+            "frequency_coverage": 1.0, "baseline_measured_share": 1.0,
+            "measured_natural_share": 1.0, "missing_natural_items": 0},
+        value_outcome="POSITIVE" if approved_value else "INCONCLUSIVE",
+        technical_result="PASS", stop_reason=None,
+        limitations=sorted(rules.MEASUREMENT_LIMITATIONS))
+    write_json(root / "payload/measurement-report.json", report)
+    index = json.loads((root / "index.json").read_text())
+    additions = [artifact(root, "measurement-samples.jsonl"),
+                 artifact(root, "payload/measurement-report.json")]
+    for relative in ("payload/frequency-weights.json", "payload/baseline-weights.json"):
+        if (root / relative).exists():
+            additions.append(artifact(root, relative))
+    index["payloads"].extend(additions)
+    write_json(root / "index.json", index); reseal(root)
+
+
 def scope_hash(root: Path) -> str:
     return rules.canonical_sha256(json.loads((root / "scope.json").read_text()))
+
+
+def rebind_scope(root: Path) -> str:
+    digest = scope_hash(root)
+    for path in (root / "payload").glob("*.json"):
+        document = json.loads(path.read_text())
+        if "scope_sha256" in document:
+            document["scope_sha256"] = digest
+            write_json(path, document)
+    preflight = json.loads((root / "payload/preflight.json").read_text())
+    approval = json.loads((root / "payload/approval.json").read_text())
+    approval["preflight_sha256"] = rules.canonical_sha256(preflight)
+    write_json(root / "payload/approval.json", approval)
+    index = json.loads((root / "index.json").read_text())
+    index["scope_sha256"] = digest
+    write_json(root / "index.json", index)
+    reseal(root)
+    return digest
 
 
 def reseal_shared(root: Path) -> None:
@@ -240,6 +372,90 @@ def reseal_shared(root: Path) -> None:
 
 
 class PrivateValidationTests(unittest.TestCase):
+    def test_correctness_gate_is_issued_only_by_full_private_validation(self) -> None:
+        from measurement_runtime import MeasurementError, validate_correctness_bundle
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); build_private(root)
+            plan = json.loads((root / "inputs/measurement_plan.json").read_text())
+            gate = validate_correctness_bundle(root, scope_hash(root), plan,
+                                               rules.canonical_sha256(plan))
+            self.assertEqual(gate.oracle_cases, {"q-1": "PASS"})
+            changed = json.loads(json.dumps(plan)); changed["seed"] += 1
+            changed["measurement_blocks"] = [
+                {"block_id": f"block-{index:04d}", "order": order}
+                for index, order in enumerate(rules.measurement_block_orders(
+                    changed["seed"], changed["measurement_repetitions"] * 6), 1)]
+            with self.assertRaisesRegex(MeasurementError, "did_not_pass"):
+                validate_correctness_bundle(root, scope_hash(root), changed,
+                                            rules.canonical_sha256(changed))
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); build_private(root, outcome="FAIL")
+            plan = json.loads((root / "inputs/measurement_plan.json").read_text())
+            with self.assertRaisesRegex(MeasurementError, "did_not_pass"):
+                validate_correctness_bundle(root, scope_hash(root), plan,
+                                            rules.canonical_sha256(plan))
+
+    def test_measurement_report_is_recomputed_from_indexed_raw_samples(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); build_private(root); add_measurement_evidence(root)
+            self.assertEqual(tool.validate_private(root, scope_hash(root))["result"], "PASS")
+            report = json.loads((root / "payload/measurement-report.json").read_text())
+            report["groups"][0]["p50_ns"] += 1
+            write_json(root / "payload/measurement-report.json", report); reseal(root)
+            with self.assertRaisesRegex(rules.ContractError, "statistics differ"):
+                tool.validate_private(root, scope_hash(root))
+
+    def test_measurement_pass_refuses_unproven_warm_cache_label(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); build_private(root); add_measurement_evidence(root)
+            lines = (root / "measurement-samples.jsonl").read_bytes().splitlines()
+            sample = rules.strict_load_bytes(lines[1] + b"\n")
+            self.assertEqual(sample["phase"], "MEASURE")
+            sample["reason_family"] = "planned"
+            lines[1] = rules.canonical_bytes(sample).rstrip(b"\n")
+            (root / "measurement-samples.jsonl").write_bytes(
+                b"\n".join(lines) + b"\n")
+            report = json.loads((root / "payload/measurement-report.json").read_text())
+            report["sample_file"] = artifact(root, "measurement-samples.jsonl")
+            write_json(root / "payload/measurement-report.json", report); reseal(root)
+            with self.assertRaisesRegex(rules.ContractError,
+                                        "technical PASS contradicts"):
+                tool.validate_private(root, scope_hash(root))
+
+    def test_positive_measurement_value_requires_indexed_frozen_weights(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); build_private(root)
+            frequency_weights = {"q-1": 1}
+            write_json(root / "payload/frequency-weights.json", frequency_weights)
+            plan = json.loads((root / "inputs/measurement_plan.json").read_text())
+            plan["value_rules"].update(
+                threshold_kind="approved_relative_improvement",
+                minimum_relative_improvement_bps=1000,
+                minimum_paired_blocks=20,
+                frequency_weights_sha256=artifact(
+                    root, "payload/frequency-weights.json")["sha256"],
+                baseline_weights_sha256=artifact(
+                    root, "payload/frequency-weights.json")["sha256"])
+            plan["measurement_repetitions"] = 4
+            plan["measurement_blocks"] = [
+                {"block_id": f"block-{index:04d}", "order": order}
+                for index, order in enumerate(
+                    rules.measurement_block_orders(plan["seed"], 24), 1)]
+            write_json(root / "inputs/measurement_plan.json", plan)
+            scope = json.loads((root / "scope.json").read_text())
+            scope["scope_inputs"]["measurement_plan"] = artifact(
+                root, "inputs/measurement_plan.json")
+            write_json(root / "scope.json", scope); rebind_scope(root)
+            add_measurement_evidence(root)
+            self.assertEqual(tool.validate_private(root, scope_hash(root))["result"], "PASS")
+            (root / "payload/frequency-weights.json").unlink()
+            index = json.loads((root / "index.json").read_text())
+            index["payloads"] = [item for item in index["payloads"]
+                if item["path"] != "payload/frequency-weights.json"]
+            write_json(root / "index.json", index); reseal(root)
+            with self.assertRaisesRegex(rules.ContractError, "not reproducible"):
+                tool.validate_private(root, scope_hash(root))
+
     def test_golden_pass_and_external_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             root = Path(name) / "bundle"; root.mkdir(); build_private(root)
@@ -305,8 +521,7 @@ class PrivateValidationTests(unittest.TestCase):
             for cell in cells["cells"]:
                 cell["evidence_sha256"] = artifact(root, "raw/expected.spool")["sha256"]
             write_json(root / "payload/site-cells.json", cells); reseal(root)
-            with self.assertRaisesRegex(rules.ContractError,
-                                        "baseline cases differ from scope-approved"):
+            with self.assertRaisesRegex(rules.ContractError, "baseline"):
                 tool.validate_private(root, scope_hash(root))
         with tempfile.TemporaryDirectory() as name:
             root = Path(name); build_private(root, malformed_spools=True)
@@ -357,6 +572,25 @@ class PrivateValidationTests(unittest.TestCase):
             write_json(root / "scope.json", scope)
             with self.assertRaisesRegex(rules.ContractError, "not trusted"):
                 tool.validate_private(root, trusted)
+
+    def test_frozen_measurement_plan_is_typed_and_bound_to_scope_inputs(self) -> None:
+        for mutation in ("invalid-order", "wrong-workload-digest"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as name:
+                root = Path(name); build_private(root)
+                plan = json.loads((root / "inputs/measurement_plan.json").read_text())
+                if mutation == "invalid-order":
+                    plan["measurement_blocks"][0]["order"].reverse()
+                else:
+                    plan["closure_inputs"]["workload_definition_sha256"] = "f" * 64
+                write_json(root / "inputs/measurement_plan.json", plan)
+                scope = json.loads((root / "scope.json").read_text())
+                scope["scope_inputs"]["measurement_plan"] = artifact(
+                    root, "inputs/measurement_plan.json")
+                write_json(root / "scope.json", scope)
+                digest = rebind_scope(root)
+                with self.assertRaisesRegex(rules.ContractError,
+                                            "measurement plan|measurement_plan"):
+                    tool.validate_private(root, digest)
 
     def test_cross_run_resources_and_retirement_are_rejected(self) -> None:
         for relative in ("payload/resource.json", "payload/retirement.json"):
@@ -433,8 +667,30 @@ class PrivateValidationTests(unittest.TestCase):
                 "spool_sha256": artifact(root, "raw/expected2.spool")["sha256"],
                 "spool_bytes": artifact(root, "raw/expected2.spool")["bytes"]})
             write_json(root / "inputs/workload_definition.json", definition)
+            frozen_baseline = json.loads((root / "inputs/baseline_manifest.json").read_text())
+            frozen_baseline["cases"].append({"query_id": "q-2",
+                "spool_path": "raw/expected2.spool",
+                "spool_sha256": artifact(root, "raw/expected2.spool")["sha256"],
+                "spool_bytes": artifact(root, "raw/expected2.spool")["bytes"]})
+            write_json(root / "inputs/baseline_manifest.json", frozen_baseline)
+            plan = json.loads((root / "inputs/measurement_plan.json").read_text())
+            plan["closure_inputs"]["workload_definition_sha256"] = artifact(
+                root, "inputs/workload_definition.json")["sha256"]
+            plan["closure_inputs"]["qualification_sha256"] = artifact(
+                root, "inputs/workload_definition.json")["sha256"]
+            plan["closure_inputs"]["baseline_manifest_sha256"] = artifact(
+                root, "inputs/baseline_manifest.json")["sha256"]
+            plan["required_scenarios"].append({"scenario_id": "scenario-2",
+                "query_id": "q-2", "case_id": "q_2", "protocol": "extended",
+                "cache_state": "warm_cached",
+                "oracle_case_id": "q-2", "natural_query_id": "q-2",
+                "expected_result_bytes_max": 1048576})
+            write_json(root / "inputs/measurement_plan.json", plan)
             scope = json.loads((root / "scope.json").read_text())
             scope["scope_inputs"]["workload_definition"] = artifact(root, "inputs/workload_definition.json")
+            scope["scope_inputs"]["measurement_plan"] = artifact(root, "inputs/measurement_plan.json")
+            scope["scope_inputs"]["baseline_manifest"] = artifact(
+                root, "inputs/baseline_manifest.json")
             write_json(root / "scope.json", scope); digest = scope_hash(root)
             workload = json.loads((root / "payload/workload.json").read_text())
             workload["inventory_sha256"] = artifact(

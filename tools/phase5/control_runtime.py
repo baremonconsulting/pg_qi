@@ -32,6 +32,7 @@ STOP_REASONS = frozenset({
     "USER_STOP", "SIGNAL_INT", "SIGNAL_TERM", "RESOURCE_FEED_MISSING",
     "RESOURCE_FEED_STALE", "RESOURCE_FEED_INVALID", "RESOURCE_LIMIT",
     "JOURNAL_FAILURE", "SESSION_FAILURE", "EVIDENCE_LIMIT",
+    "AUTHORIZATION_EXPIRED",
 })
 METRIC_UNITS = {"rss_bytes": "bytes", "cpu_milliseconds": "milliseconds",
                 "evidence_bytes": "bytes", "inflight_requests": "count"}

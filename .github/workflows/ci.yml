@@ -73,6 +73,7 @@ jobs:
           python3 tests/phase5/test_control_runtime.py
           python3 tests/phase5/test_contracts.py
           python3 tests/phase5/test_evidence_tool.py
+          python3 tests/phase5/test_measurement_runtime.py
           python3 tests/phase5/test_site_preflight.py
           python3 tests/phase5/test_corpus_oracle.py
           PG_CONFIG="$pgconfig" tests/phase5/run-site-preflight-integration.sh "${RUNNER_TEMP}/phase5-site-preflight"

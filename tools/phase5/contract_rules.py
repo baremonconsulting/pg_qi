@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import math
 import os
@@ -271,7 +272,8 @@ def _scope_ref(value: dict[str, Any]) -> None:
 
 def _validate_scope(value: dict[str, Any], catalog: dict[str, Any]) -> None:
     inputs = _object(value["scope_inputs"], "scope_inputs")
-    required = {"workload_definition", "release_definition", "target", "limits",
+    required = {"workload_definition", "measurement_plan", "baseline_manifest", "dataset",
+                "release_definition", "target", "limits",
                 "evidence_policy", "recovery_plan", "export_policy", "toolkit",
                 "role_bindings", "window"}
     if set(inputs) != required:
@@ -366,6 +368,8 @@ def _validate_request(value: dict[str, Any], catalog: dict[str, Any]) -> None:
         _artifact(value["observed_spool"], "observed_spool")
         if value["execution_status"] != "SUCCEEDED":
             raise ContractError("only a successful request can bind an observed spool")
+    if "request_interval" in value:
+        _validate_request_interval(value["request_interval"])
 
 
 def _validate_snapshot(value: dict[str, Any], catalog: dict[str, Any]) -> None:
@@ -398,6 +402,296 @@ def _validate_resource(value: dict[str, Any], catalog: dict[str, Any]) -> None:
                 (isinstance(item, float) and not math.isfinite(item))):
             raise ContractError("resource values must be finite numbers")
         _string(units[name], f"units.{name}")
+
+
+MEASUREMENT_MODES = ("disabled", "off", "allowlist")
+MEASUREMENT_LIMITATIONS = {
+    "NO_SLA_CLAIM", "NO_ROI_CLAIM", "NO_INFRASTRUCTURE_GENERALISATION",
+    "NO_GENERAL_SPEEDUP_CLAIM", "HOSTED_CI_NOT_PERFORMANCE_GATE",
+    "VALUE_SEPARATE_FROM_SAFETY",
+}
+
+
+def measurement_block_orders(seed: int, block_count: int) -> list[list[str]]:
+    """Return the versioned balanced order used by measurement plans."""
+    _integer(seed, "seed", 0); _integer(block_count, "block_count", 6)
+    if block_count % 6:
+        raise ContractError("measurement block count must be a multiple of six")
+    orders = [list(order) for order in itertools.permutations(MEASUREMENT_MODES)]
+    result: list[list[str]] = []
+    for group in range(block_count // 6):
+        ranked = sorted(orders, key=lambda order: hashlib.sha256(
+            f"pgqi5-balanced-williams-v1:{seed}:{group}:{','.join(order)}".encode("ascii")
+        ).digest())
+        result.extend([list(order) for order in ranked])
+    return result
+
+
+def _validate_measurement_plan(value: dict[str, Any], catalog: dict[str, Any]) -> None:
+    closure = _object(value["closure_inputs"], "closure_inputs")
+    closure_fields = {"workload_definition_sha256", "qualification_sha256",
+        "baseline_manifest_sha256", "resource_policy_sha256", "release_sha256",
+        "target_sha256", "dataset_sha256", "toolkit_sha256"}
+    if set(closure) != closure_fields:
+        raise ContractError("measurement closure inputs are incomplete or unknown")
+    for name, digest in closure.items():
+        _digest(digest, f"closure_inputs.{name}")
+
+    scenarios = _array(value["required_scenarios"], "required_scenarios", True)
+    scenario_ids: set[str] = set()
+    protocols: set[str] = set()
+    cache_states: set[str] = set()
+    for item in scenarios:
+        scenario = _object(item, "measurement scenario")
+        expected = {"scenario_id", "query_id", "case_id", "protocol", "cache_state",
+                    "oracle_case_id", "natural_query_id", "expected_result_bytes_max"}
+        if set(scenario) != expected:
+            raise ContractError("measurement scenario fields are not exact")
+        scenario_id = _string(scenario["scenario_id"], "scenario_id")
+        if scenario_id in scenario_ids:
+            raise ContractError("duplicate measurement scenario_id")
+        scenario_ids.add(scenario_id)
+        _string(scenario["query_id"], "query_id")
+        _string(scenario["case_id"], "case_id", re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$"))
+        _string(scenario["oracle_case_id"], "oracle_case_id")
+        if scenario["natural_query_id"] is not None:
+            _string(scenario["natural_query_id"], "natural_query_id")
+        protocols.add(_enum(scenario["protocol"], "protocol", {"extended"}))
+        cache_states.add(_enum(scenario["cache_state"], "cache_state",
+            {"first_use", "warm_cached"}))
+        _integer(scenario["expected_result_bytes_max"], "expected_result_bytes_max", 1)
+    declared_protocols = set(_identifier_array(value["protocols"], "protocols", True))
+    declared_caches = set(_identifier_array(value["cache_states"], "cache_states", True))
+    if declared_protocols != protocols or declared_caches != cache_states:
+        raise ContractError("declared protocol or cache-state set does not match scenarios")
+
+    seed = _integer(value["seed"], "seed", 0)
+    if value["order_algorithm"] != "seeded_balanced_williams_v1":
+        raise ContractError("unsupported measurement order algorithm")
+    blocks = _array(value["measurement_blocks"], "measurement_blocks", True)
+    repetitions = _integer(value["measurement_repetitions"],
+                           "measurement_repetitions", 1)
+    if len(blocks) != repetitions * 6:
+        raise ContractError("measurement block count contradicts repetitions")
+    expected_orders = measurement_block_orders(seed, len(blocks))
+    for index, (raw, expected_order) in enumerate(zip(blocks, expected_orders), 1):
+        block = _object(raw, "measurement block")
+        if set(block) != {"block_id", "order"}:
+            raise ContractError("measurement block fields are not exact")
+        if block["block_id"] != f"block-{index:04d}" or block["order"] != expected_order:
+            raise ContractError("measurement block order is not reproducible and balanced")
+    warmup_repetitions = _integer(value["warmup_repetitions"],
+                                  "warmup_repetitions", 0)
+    if "warm_cached" in cache_states and warmup_repetitions < 1:
+        raise ContractError("warm-cached measurement requires a warmup")
+
+    levels = _array(value["concurrency_levels"], "concurrency_levels", True)
+    prior = 0
+    for index, raw in enumerate(levels):
+        level = _object(raw, "concurrency level")
+        expected = {"level", "sessions", "approval_reference",
+                    "server_resource_feed_sha256"}
+        if set(level) != expected:
+            raise ContractError("concurrency level fields are not exact")
+        number = _integer(level["level"], "level", 1)
+        sessions = _integer(level["sessions"], "sessions", 1)
+        _string(level["approval_reference"], "approval_reference")
+        if index == 0 and number != 1 or index and number != prior + 1:
+            raise ContractError("concurrency levels must be consecutive from one")
+        if sessions != number:
+            raise ContractError("each concurrency level must bind the same session count")
+        if len(scenarios) % sessions:
+            raise ContractError("scenario count must be divisible by every concurrency level")
+        server_feed = level["server_resource_feed_sha256"]
+        if number == 1:
+            if server_feed is not None:
+                _digest(server_feed, "server_resource_feed_sha256")
+        elif server_feed is None:
+            raise ContractError("concurrency above one requires an approved server resource feed")
+        else:
+            _digest(server_feed, "server_resource_feed_sha256")
+        prior = number
+    if max(item["sessions"] for item in levels) > len(scenarios):
+        raise ContractError("concurrency level exceeds the scenario set")
+
+    statistics = _object(value["statistics"], "statistics")
+    if set(statistics) != {"percentile_method", "minimum_n", "outlier_policy",
+                           "failure_policy", "variability"}:
+        raise ContractError("statistics fields are not exact")
+    if statistics["percentile_method"] != "nearest_rank" or \
+            statistics["outlier_policy"] != "retain_all" or \
+            statistics["failure_policy"] != "retain_and_count" or \
+            statistics["variability"] != "per_block_median_range":
+        raise ContractError("unsupported statistical rule")
+    minimum_n = _object(statistics["minimum_n"], "minimum_n")
+    if set(minimum_n) != {"p50", "p95", "p99"}:
+        raise ContractError("minimum_n fields are not exact")
+    p50 = _integer(minimum_n["p50"], "minimum_n.p50", 1)
+    p95 = _integer(minimum_n["p95"], "minimum_n.p95", 1)
+    p99 = _integer(minimum_n["p99"], "minimum_n.p99", 1)
+    if not (p50 <= p95 <= p99) or p95 < 20 or p99 < 100:
+        raise ContractError("tail percentile sample thresholds are not conservative")
+
+    rules = _object(value["value_rules"], "value_rules")
+    if set(rules) != {"threshold_kind", "minimum_relative_improvement_bps",
+                      "minimum_paired_blocks",
+                      "frequency_weights_sha256", "baseline_weights_sha256",
+                      "attribution", "incomplete_weights_outcome"}:
+        raise ContractError("value_rules fields are not exact")
+    kind = _enum(rules["threshold_kind"], "threshold_kind",
+                 {"descriptive_only", "approved_relative_improvement"})
+    if rules["attribution"] != "measured_correct_natural_subset_only" or \
+            rules["incomplete_weights_outcome"] != "INCONCLUSIVE":
+        raise ContractError("unsafe value attribution rule")
+    for name in ("frequency_weights_sha256", "baseline_weights_sha256"):
+        if rules[name] is not None:
+            _digest(rules[name], name)
+    threshold = rules["minimum_relative_improvement_bps"]
+    minimum_blocks = rules["minimum_paired_blocks"]
+    if kind == "descriptive_only":
+        if threshold is not None or minimum_blocks is not None:
+            raise ContractError("descriptive measurement cannot define a value threshold")
+    else:
+        _integer(threshold, "minimum_relative_improvement_bps", 1)
+        _integer(minimum_blocks, "minimum_paired_blocks", 20)
+        if rules["frequency_weights_sha256"] is None or rules["baseline_weights_sha256"] is None:
+            raise ContractError("approved value threshold requires complete weight identities")
+
+
+def _validate_request_interval(value: Any) -> None:
+    interval = _object(value, "request_interval")
+    if set(interval) != {"started_monotonic_ns", "finished_monotonic_ns",
+                         "duration_ns", "state", "censored"}:
+        raise ContractError("request_interval fields are not exact")
+    started = _integer(interval["started_monotonic_ns"], "started_monotonic_ns", 0)
+    finished = _integer(interval["finished_monotonic_ns"], "finished_monotonic_ns", 0)
+    duration = _integer(interval["duration_ns"], "duration_ns", 0)
+    state = _enum(interval["state"], "request interval state",
+                  {"NOT_RUN", "COMPLETE", "ERROR", "CENSORED_TIMEOUT"})
+    if not isinstance(interval["censored"], bool):
+        raise ContractError("request interval censored must be boolean")
+    if state == "NOT_RUN":
+        if (started, finished, duration) != (0, 0, 0) or interval["censored"]:
+            raise ContractError("NOT_RUN request interval contains timing")
+    elif not started or finished < started or duration != finished - started:
+        raise ContractError("request interval timing is inconsistent")
+    if interval["censored"] != (state == "CENSORED_TIMEOUT"):
+        raise ContractError("request interval censorship contradicts state")
+
+
+def _validate_measurement_sample(value: dict[str, Any], catalog: dict[str, Any]) -> None:
+    _scope_ref(value); _digest(value["plan_sha256"], "plan_sha256")
+    for name in ("run_id", "sample_id", "scenario_id", "reason_family"):
+        _string(value[name], name)
+    _integer(value["level"], "level", 1)
+    _enum(value["mode"], "mode", set(MEASUREMENT_MODES))
+    _enum(value["protocol"], "protocol", {"extended"})
+    _enum(value["cache_state"], "cache_state",
+          {"first_use", "warm_cached"})
+    phase = _enum(value["phase"], "phase", {"WARMUP", "MEASURE"})
+    block = _integer(value["block_index"], "block_index", 0)
+    order = _integer(value["order_index"], "order_index", 0)
+    _integer(value["session_slot"], "session_slot", 1)
+    if not block or not order:
+        raise ContractError("sample phase and block position contradict")
+    _validate_request_interval(value["request_interval"])
+    _integer(value["postprocess_duration_ns"], "postprocess_duration_ns", 0)
+    terminal = _enum(value["terminal_state"], "terminal_state",
+                     {"PASS", "FAIL", "TIMEOUT", "INCOMPLETE"})
+    oracle = _enum(value["oracle_result"], "oracle_result",
+                   {"PASS", "FAIL", "NOT_RUN", "INCOMPLETE"})
+    _integer(value["result_bytes"], "result_bytes", 0)
+    if terminal == "PASS" and oracle != "PASS":
+        raise ContractError("passing measurement lacks a passing oracle")
+    if terminal == "TIMEOUT" and value["request_interval"]["state"] != "CENSORED_TIMEOUT":
+        raise ContractError("timeout sample is not censored")
+
+
+def _ratio(value: Any, name: str) -> None:
+    if value is None:
+        return
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or \
+            not math.isfinite(value) or value < 0 or value > 1:
+        raise ContractError(f"invalid ratio {name}")
+
+
+def _validate_measurement_report(value: dict[str, Any], catalog: dict[str, Any]) -> None:
+    _scope_ref(value); _digest(value["plan_sha256"], "plan_sha256")
+    _string(value["run_id"], "run_id"); _integer(value["level"], "level", 1)
+    _artifact(value["sample_file"], "sample_file")
+    sample_count = _integer(value["sample_count"], "sample_count", 0)
+    raw_sample_count = _integer(value["raw_sample_count"], "raw_sample_count", 0)
+    warmup_sample_count = _integer(value["warmup_sample_count"],
+                                   "warmup_sample_count", 0)
+    if raw_sample_count != sample_count + warmup_sample_count:
+        raise ContractError("raw, measured and warmup sample counts contradict")
+    groups = _array(value["groups"], "groups", True)
+    total = 0
+    for raw in groups:
+        group = _object(raw, "measurement group")
+        expected = {"scenario_id", "mode", "n", "pass", "fail", "timeout",
+                    "incomplete", "p50_ns", "p95_ns", "p99_ns",
+                    "postprocess_p50_ns",
+                    "p95_status", "p99_status", "block_median_min_ns",
+                    "block_median_max_ns"}
+        if set(group) != expected:
+            raise ContractError("measurement group fields are not exact")
+        _string(group["scenario_id"], "scenario_id")
+        _enum(group["mode"], "mode", set(MEASUREMENT_MODES))
+        counts = [_integer(group[name], name, 0)
+                  for name in ("pass", "fail", "timeout", "incomplete")]
+        n = _integer(group["n"], "n", 0)
+        if n != sum(counts):
+            raise ContractError("measurement group count mismatch")
+        total += n
+        for name in ("p50_ns", "p95_ns", "p99_ns", "postprocess_p50_ns", "block_median_min_ns",
+                     "block_median_max_ns"):
+            if group[name] is not None:
+                _integer(group[name], name, 0)
+        for name in ("p95_status", "p99_status"):
+            if not isinstance(group[name], str) or not re.fullmatch(
+                    r"(?:REPORTED|SUPPRESSED\(N=[0-9]+,MIN=[0-9]+\))", group[name]):
+                raise ContractError("invalid percentile publication status")
+    if total != sample_count:
+        raise ContractError("report sample count does not match groups")
+    contrasts = _array(value["contrasts"], "contrasts", True)
+    contrast_ids: set[str] = set()
+    for raw in contrasts:
+        contrast = _object(raw, "measurement contrast")
+        if set(contrast) != {"scenario_id", "extension_overhead_p50_ns",
+                             "routing_effect_p50_ns"}:
+            raise ContractError("measurement contrast fields are not exact")
+        identity = _string(contrast["scenario_id"], "scenario_id")
+        if identity in contrast_ids:
+            raise ContractError("duplicate measurement contrast")
+        contrast_ids.add(identity)
+        for name in ("extension_overhead_p50_ns", "routing_effect_p50_ns"):
+            if contrast[name] is not None and (isinstance(contrast[name], bool) or
+                    not isinstance(contrast[name], int)):
+                raise ContractError("invalid signed measurement contrast")
+    coverage = _object(value["coverage"], "coverage")
+    expected_coverage = {"structural_eligibility", "frequency_coverage",
+                         "baseline_measured_share", "measured_natural_share",
+                         "missing_natural_items"}
+    if set(coverage) != expected_coverage:
+        raise ContractError("measurement coverage fields are not exact")
+    for name in expected_coverage - {"missing_natural_items"}:
+        _ratio(coverage[name], name)
+    _integer(coverage["missing_natural_items"], "missing_natural_items", 0)
+    technical = _enum(value["technical_result"], "technical_result",
+                      {"PASS", "FAIL", "INCOMPLETE"})
+    if value["stop_reason"] is not None:
+        _string(value["stop_reason"], "stop_reason")
+    if technical == "PASS" and value["stop_reason"] is not None:
+        raise ContractError("technical PASS cannot carry a stop reason")
+    _enum(value["value_outcome"], "value_outcome",
+          {"POSITIVE", "NEGATIVE", "INCONCLUSIVE", "NOT_EVALUATED"})
+    if technical == "PASS" and any(group[name] for group in groups
+                                    for name in ("fail", "timeout", "incomplete")):
+        raise ContractError("technical PASS excludes failed measurement samples")
+    limitations = set(_identifier_array(value["limitations"], "limitations", True))
+    if limitations != MEASUREMENT_LIMITATIONS:
+        raise ContractError("measurement report limitations are incomplete")
 
 
 def _validate_retirement(value: dict[str, Any], catalog: dict[str, Any]) -> None:

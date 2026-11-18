@@ -57,7 +57,7 @@
     },
     "request": {
       "required": ["scope_sha256", "run_id", "session_id", "request_id", "query_id", "execution_status", "planning_evidence", "snapshot_relation"],
-      "optional": ["snapshot_id", "planning_request_id", "prepared_object_id", "prepared_generation", "sqlstate", "observed_spool"]
+      "optional": ["snapshot_id", "planning_request_id", "prepared_object_id", "prepared_generation", "sqlstate", "observed_spool", "request_interval"]
     },
     "snapshot": {
       "required": ["scope_sha256", "snapshot_id", "session_id", "planning_request_id", "prepared_object_id", "prepared_generation", "decision_id", "tuple"],
@@ -65,6 +65,67 @@
     },
     "resource": {
       "required": ["scope_sha256", "run_id", "sample_sequence", "monotonic_ns", "source_id", "values", "units", "source_age_ms"],
+      "optional": []
+    },
+    "measurement_plan": {
+      "required": [
+        "closure_inputs",
+        "required_scenarios",
+        "seed",
+        "order_algorithm",
+        "measurement_blocks",
+        "measurement_repetitions",
+        "warmup_repetitions",
+        "protocols",
+        "cache_states",
+        "concurrency_levels",
+        "statistics",
+        "value_rules"
+      ],
+      "optional": []
+    },
+    "measurement_sample": {
+      "required": [
+        "scope_sha256",
+        "plan_sha256",
+        "run_id",
+        "level",
+        "sample_id",
+        "scenario_id",
+        "protocol",
+        "cache_state",
+        "mode",
+        "phase",
+        "block_index",
+        "order_index",
+        "session_slot",
+        "request_interval",
+        "postprocess_duration_ns",
+        "terminal_state",
+        "reason_family",
+        "result_bytes",
+        "oracle_result"
+      ],
+      "optional": []
+    },
+    "measurement_report": {
+      "required": [
+        "scope_sha256",
+        "plan_sha256",
+        "run_id",
+        "level",
+        "sample_file",
+        "sample_count",
+        "raw_sample_count",
+        "warmup_sample_count",
+        "groups",
+        "contrasts",
+        "coverage",
+        "value_outcome",
+        "technical_result",
+        "stop_reason",
+        "limitations"
+      ],
       "optional": []
     },
     "retirement": {
