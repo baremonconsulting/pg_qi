@@ -7,18 +7,23 @@ import hashlib
 import io
 import importlib.util
 import json
+import shutil
 import sys
 import struct
 import tempfile
 import unittest
 import zipfile
 from contextlib import redirect_stderr, redirect_stdout
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools/phase5"))
 import contract_rules as rules  # noqa: E402
+import recovery_rehearsal  # noqa: E402
+from tests.phase5.test_recovery_rehearsal import build_bundle  # noqa: E402
 
 SPEC = importlib.util.spec_from_file_location("evidence_tool", ROOT / "tools/phase5/evidence_tool.py")
 tool = importlib.util.module_from_spec(SPEC)
@@ -34,6 +39,84 @@ def write_json(path: Path, value: dict) -> None:
 def artifact(root: Path, relative: str) -> dict[str, object]:
     payload = (root / relative).read_bytes()
     return {"path": relative, "sha256": hashlib.sha256(payload).hexdigest(), "bytes": len(payload)}
+
+
+def add_recovery_graph(root: Path, scope_digest: str) -> None:
+    staging = root / "recovery-stage"; staging.mkdir(mode=0o700)
+    mandate, r1, r2, walkthrough, incident = build_bundle(staging)
+    proof_names = ("positive.json", "off.json", "pool.json", "exit.json",
+                   "r1-control.json", "r2-source.json", "r2-identity.json", "r2-control.json",
+                   "incident-exit.json")
+    for name in proof_names:
+        destination = root / f"raw/recovery-{name}"
+        shutil.copyfile(staging / name, destination); destination.chmod(0o600)
+    mapping = {name: f"raw/recovery-{name}" for name in proof_names}
+    mandate["scope_sha256"] = scope_digest
+    scope = json.loads((root / "scope.json").read_text())
+    mandate["recovery_plan_sha256"] = scope["scope_inputs"]["recovery_plan"]["sha256"]
+    mandate["source_environment_identity_sha256"] = scope["scope_inputs"]["target"]["sha256"]
+    baseline_identity = rules.canonical_sha256({"server_build_sha256": "8" * 64,
+        "pg_qi_sha256": "9" * 64, "pg_duckdb_sha256": "a" * 64})
+    mandate["approved_artifact_sha256"] = baseline_identity
+    mandate["approved_configuration_sha256"] = "b" * 64
+    mandate["candidate_artifact_sha256"] = rules.canonical_sha256({
+        "server_build_sha256": "3" * 64, "pg_qi_sha256": "4" * 64,
+        "pg_duckdb_sha256": "5" * 64})
+    mandate["candidate_configuration_sha256"] = "6" * 64
+    mandate_sha = rules.canonical_sha256(mandate)
+    r1["scope_sha256"] = scope_digest; r1["mandate_sha256"] = mandate_sha
+    for field, name in (("positive_probe", "positive.json"), ("off_proof", "off.json"),
+                        ("pool_proof", "pool.json"),
+                        ("backend_exit_proof", "exit.json"),
+                        ("fresh_control", "r1-control.json")):
+        r1[field] = artifact(root, mapping[name])
+    r1_sha = rules.canonical_sha256(r1)
+    r2["scope_sha256"] = scope_digest; r2["mandate_sha256"] = mandate_sha
+    r2["r1_terminal_sha256"] = r1_sha
+    r2["source_identity_proof"] = artifact(root, mapping["r2-source.json"])
+    r2["source_artifact_sha256"] = rules.canonical_sha256({
+        "server_build_sha256": "3" * 64, "pg_qi_sha256": "4" * 64,
+        "pg_duckdb_sha256": "5" * 64})
+    r2["source_configuration_sha256"] = "6" * 64
+    source = json.loads((root / mapping["r2-source.json"]).read_text())
+    source["artifact_sha256"] = r2["source_artifact_sha256"]
+    source["configuration_sha256"] = "6" * 64
+    write_json(root / mapping["r2-source.json"], source)
+    r2["source_identity_proof"] = artifact(root, mapping["r2-source.json"])
+    r2["result_artifact_sha256"] = baseline_identity
+    r2["result_configuration_sha256"] = "b" * 64
+    identity = json.loads((root / mapping["r2-identity.json"]).read_text())
+    identity["artifact_sha256"] = baseline_identity
+    identity["configuration_sha256"] = "b" * 64
+    write_json(root / mapping["r2-identity.json"], identity)
+    r2["identity_proof"] = artifact(root, mapping["r2-identity.json"])
+    r2["fresh_control"] = artifact(root, mapping["r2-control.json"])
+    r2_sha = rules.canonical_sha256(r2)
+    walkthrough.update(scope_sha256=scope_digest, mandate_sha256=mandate_sha,
+                       r1_terminal_sha256=r1_sha, r2_terminal_sha256=r2_sha)
+    incident["scope_sha256"] = scope_digest; incident["mandate_sha256"] = mandate_sha
+    incident["backend_exit_proof"] = artifact(root, mapping["incident-exit.json"])
+    validation = recovery_rehearsal.validate_rehearsal_contracts(
+        root, mandate, r1, r2, walkthrough, incident,
+        datetime(2026, 11, 18, 11, 0, tzinfo=timezone.utc))
+    aggregate = recovery_rehearsal.build_recovery_record(validation, r2, walkthrough)
+    for name, value in (("mandate", mandate), ("r1", r1), ("r2", r2),
+                        ("walkthrough", walkthrough), ("incident", incident),
+                        ("recovery-validation", validation), ("recovery", aggregate)):
+        write_json(root / f"payload/{name}.json", value)
+    approval_path = root / "payload/approval.json"
+    if approval_path.exists():
+        approval = json.loads(approval_path.read_text())
+        approval["recovery_validation_sha256"] = rules.canonical_sha256(validation)
+        write_json(approval_path, approval)
+    site_path = root / "payload/site-cells.json"
+    if site_path.exists():
+        sites = json.loads(site_path.read_text())
+        for cell in sites["cells"]:
+            if cell["cell_id"] == "recovery_rehearsal":
+                cell["evidence_sha256"] = rules.canonical_sha256(validation)
+        write_json(site_path, sites)
+    shutil.rmtree(staging)
 
 
 def write_spool(path: Path, rows: list[tuple[int | None, ...]],
@@ -78,6 +161,10 @@ def contract(kind: str, identity: str, **fields: object) -> dict[str, object]:
 
 def measurement_plan(root: Path, query_id: str) -> dict[str, object]:
     input_digest = lambda name: artifact(root, f"inputs/{name}.json")["sha256"]
+    release_identity = rules.canonical_sha256({"server_build_sha256": "3" * 64,
+        "pg_qi_sha256": "4" * 64, "pg_duckdb_sha256": "5" * 64})
+    baseline_identity = rules.canonical_sha256({"server_build_sha256": "8" * 64,
+        "pg_qi_sha256": "9" * 64, "pg_duckdb_sha256": "a" * 64})
     return contract("measurement_plan", "measurement-plan-1",
         closure_inputs={
             "workload_definition_sha256": input_digest("workload_definition"),
@@ -86,6 +173,11 @@ def measurement_plan(root: Path, query_id: str) -> dict[str, object]:
             "resource_policy_sha256": input_digest("limits"),
             "release_sha256": input_digest("release_definition"),
             "target_sha256": input_digest("target"),
+            "recovery_plan_sha256": input_digest("recovery_plan"),
+            "release_artifact_sha256": release_identity,
+            "release_configuration_sha256": "6" * 64,
+            "baseline_artifact_sha256": baseline_identity,
+            "baseline_configuration_sha256": "b" * 64,
             "dataset_sha256": input_digest("dataset"),
             "toolkit_sha256": input_digest("toolkit")},
         required_scenarios=[{"scenario_id": "scenario-1", "query_id": query_id,
@@ -116,6 +208,7 @@ def measurement_plan(root: Path, query_id: str) -> dict[str, object]:
 def build_private(root: Path, outcome: str = "PASS", missing_cell: bool = False,
                   raw_retained: bool = True, query_id: str = "q-1",
                   malformed_spools: bool = False) -> None:
+    root.chmod(0o700)
     input_names = ("workload_definition", "measurement_plan", "baseline_manifest", "dataset",
                    "release_definition", "target", "limits",
                    "evidence_policy", "recovery_plan", "export_policy", "toolkit",
@@ -177,6 +270,12 @@ def build_private(root: Path, outcome: str = "PASS", missing_cell: bool = False,
     write_json(root / "inputs/baseline_manifest.json", baseline_manifest)
     write_json(root / "inputs/dataset.json", {"schema_version": 1,
         "document_type": "dataset_identity", "data_sha256": "a" * 64})
+    write_json(root / "inputs/recovery_plan.json", {"schema_version": 1,
+        "document_type": "recovery_plan_identity",
+        "artifact_identity_scheme": "PGQI_STACK_SHA256_V1",
+        "server_build_sha256": "8" * 64, "pg_qi_sha256": "9" * 64,
+        "pg_duckdb_sha256": "a" * 64,
+        "approved_configuration_sha256": "b" * 64})
     write_json(root / "inputs/measurement_plan.json", measurement_plan(root, query_id))
 
     scope = contract("scope", "scope-1",
@@ -191,7 +290,8 @@ def build_private(root: Path, outcome: str = "PASS", missing_cell: bool = False,
     write_json(root / "payload/preflight.json", preflight)
     approval = contract("approval_receipt", "approval-1", receipt_kind="OPERATION_GO",
         scope_sha256=scope_digest, preflight_sha256=rules.canonical_sha256(preflight),
-        valid_from="2026-11-17T00:00:00Z", valid_through="2026-11-18T00:00:00Z",
+        recovery_validation_sha256="0" * 64,
+        valid_from="2026-11-18T11:30:00Z", valid_through="2026-11-19T00:00:00Z",
         approvals=["operation-owner"], nonce="nonce-1")
     write_json(root / "payload/approval.json", approval)
     workload = contract("workload", "workload-1", scope_sha256=scope_digest,
@@ -226,11 +326,7 @@ def build_private(root: Path, outcome: str = "PASS", missing_cell: bool = False,
         scope_sha256=scope_digest, run_id="run-1", owned_sessions=["session-1"],
         backend_absence_verified=True, cached_plans_retired=True,
         default_off_reconnect=True, state=current_state))
-    write_json(root / "payload/recovery.json", contract("recovery", "recovery-1",
-        scope_sha256=scope_digest, strategy="VERIFIED_ENVIRONMENT_RESTORE",
-        artifact_sha256="7" * 64, configuration_sha256="6" * 64,
-        rehearsal_result="PASS" if outcome == "PASS" else
-                         "FAIL" if outcome == "FAIL" else "NOT_RUN", state=current_state))
+    add_recovery_graph(root, scope_digest)
 
     oracle_result = "PASS" if outcome == "PASS" else "FAIL" if outcome == "FAIL" else "NOT_RUN"
     write_json(root / "payload/baseline.json", baseline_manifest)
@@ -243,9 +339,11 @@ def build_private(root: Path, outcome: str = "PASS", missing_cell: bool = False,
     cell_names = sorted(tool.REQUIRED_SITE_CELLS)
     if missing_cell: cell_names.pop()
     cell_result = "PASS" if outcome == "PASS" else "FAIL" if outcome == "FAIL" else "NOT_RUN"
+    recovery_digest = artifact(root, "payload/recovery-validation.json")["sha256"]
     write_json(root / "payload/site-cells.json", {"schema_version": 1,
         "document_type": "site_cells", "cells": [{"cell_id": name, "result": cell_result,
-        "evidence_sha256": artifact(root, "raw/expected.spool")["sha256"]} for name in cell_names]})
+        "evidence_sha256": recovery_digest if name == "recovery_rehearsal" else
+        artifact(root, "raw/expected.spool")["sha256"]} for name in cell_names]})
 
     payload_names = [path.relative_to(root).as_posix() for path in root.rglob("*")
                      if path.is_file() and path.name != "scope.json"]
@@ -355,6 +453,7 @@ def rebind_scope(root: Path) -> str:
     approval = json.loads((root / "payload/approval.json").read_text())
     approval["preflight_sha256"] = rules.canonical_sha256(preflight)
     write_json(root / "payload/approval.json", approval)
+    add_recovery_graph(root, digest)
     index = json.loads((root / "index.json").read_text())
     index["scope_sha256"] = digest
     write_json(root / "index.json", index)
@@ -372,6 +471,55 @@ def reseal_shared(root: Path) -> None:
 
 
 class PrivateValidationTests(unittest.TestCase):
+    def test_recovery_graph_site_cell_and_go_linkage_are_fail_closed(self) -> None:
+        for mutation, reason in (("aggregate", "aggregate differs"),
+                                 ("site", "site cell is not bound"),
+                                 ("approval", "preflight linkage"),
+                                 ("nonce", "not renewed")):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as name:
+                root = Path(name); build_private(root)
+                if mutation == "aggregate":
+                    path = root / "payload/recovery.json"
+                    value = json.loads(path.read_text())
+                    value["limitations"].remove("CACHED_PLAN_PERSISTENCE_OBSERVED")
+                elif mutation == "site":
+                    path = root / "payload/site-cells.json"
+                    value = json.loads(path.read_text())
+                    next(cell for cell in value["cells"]
+                         if cell["cell_id"] == "recovery_rehearsal")["evidence_sha256"] = \
+                        artifact(root, "raw/expected.spool")["sha256"]
+                else:
+                    path = root / "payload/approval.json"
+                    value = json.loads(path.read_text())
+                    if mutation == "approval":
+                        value["recovery_validation_sha256"] = "f" * 64
+                    else:
+                        value["nonce"] = "prior-operation-go"
+                write_json(path, value); reseal(root)
+                with self.assertRaisesRegex(rules.ContractError, reason):
+                    tool.validate_private(root, scope_hash(root))
+
+    def test_recovery_bare_claim_and_unindexed_raw_proof_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); build_private(root)
+            graph = {"payload/mandate.json", "payload/r1.json", "payload/r2.json",
+                     "payload/walkthrough.json", "payload/incident.json",
+                     "payload/recovery-validation.json"}
+            index = json.loads((root / "index.json").read_text())
+            index["payloads"] = [item for item in index["payloads"]
+                                 if item["path"] not in graph]
+            for relative in graph: (root / relative).unlink()
+            write_json(root / "index.json", index); reseal(root)
+            with self.assertRaisesRegex(rules.ContractError, "lacks its complete"):
+                tool.validate_private(root, scope_hash(root))
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); build_private(root)
+            index = json.loads((root / "index.json").read_text())
+            index["payloads"] = [item for item in index["payloads"]
+                                 if item["path"] != "raw/recovery-exit.json"]
+            write_json(root / "index.json", index); reseal(root)
+            with self.assertRaisesRegex(rules.ContractError, "unindexed file|outside the sealed index"):
+                tool.validate_private(root, scope_hash(root))
     def test_correctness_gate_is_issued_only_by_full_private_validation(self) -> None:
         from measurement_runtime import MeasurementError, validate_correctness_bundle
         with tempfile.TemporaryDirectory() as name:
@@ -519,7 +667,8 @@ class PrivateValidationTests(unittest.TestCase):
             write_json(root / "payload/request.json", request)
             cells = json.loads((root / "payload/site-cells.json").read_text())
             for cell in cells["cells"]:
-                cell["evidence_sha256"] = artifact(root, "raw/expected.spool")["sha256"]
+                if cell["cell_id"] != "recovery_rehearsal":
+                    cell["evidence_sha256"] = artifact(root, "raw/expected.spool")["sha256"]
             write_json(root / "payload/site-cells.json", cells); reseal(root)
             with self.assertRaisesRegex(rules.ContractError, "baseline"):
                 tool.validate_private(root, scope_hash(root))
@@ -718,6 +867,7 @@ class PrivateValidationTests(unittest.TestCase):
             approval = json.loads((root / "payload/approval.json").read_text())
             approval["preflight_sha256"] = rules.canonical_sha256(preflight)
             write_json(root / "payload/approval.json", approval)
+            add_recovery_graph(root, digest)
             index = json.loads((root / "index.json").read_text()); index["scope_sha256"] = digest
             for relative in ("raw/q2.sql", "raw/expected2.spool", "raw/observed2.spool"):
                 index["payloads"].append(artifact(root, relative))

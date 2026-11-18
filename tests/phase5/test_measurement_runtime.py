@@ -25,8 +25,14 @@ from tools.phase5.measurement_runtime import (AuditedMeasurementSession,
     load_measurement_plan, resource_feed_sha256, validate_level_authorization)
 from tools.phase5.pilot_runtime import SequenceJournal
 import tools.phase5.measurement_runtime as measurement_runtime
+from tools.phase5.recovery_rehearsal import validate_rehearsal_contracts
+from tests.phase5.test_recovery_rehearsal import build_bundle
 
 ZERO = "0" * 64
+RELEASE_STACK = canonical_sha256({"server_build_sha256": "3" * 64,
+    "pg_qi_sha256": "4" * 64, "pg_duckdb_sha256": "5" * 64})
+BASELINE_STACK = canonical_sha256({"server_build_sha256": "8" * 64,
+    "pg_qi_sha256": "9" * 64, "pg_duckdb_sha256": "a" * 64})
 
 
 def write_document(path: Path, value: dict) -> None:
@@ -88,7 +94,12 @@ def plan(value_mode: str = "descriptive", levels: int = 2,
             ("workload_definition_sha256", "1"), ("qualification_sha256", "1"),
             ("baseline_manifest_sha256", "3"), ("resource_policy_sha256", "4"),
             ("release_sha256", "5"), ("target_sha256", "6"),
-            ("dataset_sha256", "7"), ("toolkit_sha256", "8"))},
+            ("dataset_sha256", "7"), ("toolkit_sha256", "8"),
+            ("recovery_plan_sha256", "a"),
+            ("release_configuration_sha256", "6"),
+            ("baseline_configuration_sha256", "b"))} | {
+                "release_artifact_sha256": RELEASE_STACK,
+                "baseline_artifact_sha256": BASELINE_STACK},
         "required_scenarios": scenarios, "seed": 8241,
         "order_algorithm": "seeded_balanced_williams_v1",
         "measurement_blocks": [{"block_id": f"block-{index:04d}", "order": order}
@@ -112,7 +123,7 @@ def measurement_scope(value: dict) -> tuple[dict, str]:
         "release_definition": closure["release_sha256"],
         "target": closure["target_sha256"], "limits": closure["resource_policy_sha256"],
         "toolkit": closure["toolkit_sha256"], "evidence_policy": "9" * 64,
-        "recovery_plan": "a" * 64, "export_policy": "b" * 64,
+        "recovery_plan": closure["recovery_plan_sha256"], "export_policy": "b" * 64,
         "role_bindings": "c" * 64, "window": "d" * 64}
     scope = {"schema_version": 1, "contract_type": "scope",
         "contract_id": "measurement-scope-1",
@@ -156,13 +167,82 @@ def operation_preflight(root: Path, scope_sha256: str) -> dict:
     return artifact(root, "operation-preflight.json")
 
 
+def operation_recovery_artifacts(root: Path, scope_sha256: str) -> dict[str, dict]:
+    names = {"operation_rehearsal_mandate": "operation-mandate.json",
+        "operation_recovery_r1": "operation-r1.json",
+        "operation_recovery_r2": "operation-r2.json",
+        "operation_operator_walkthrough": "operation-walkthrough.json",
+        "operation_recovery_incident": "operation-incident.json",
+        "operation_recovery_validation": "operation-recovery-validation.json"}
+    if not (root / names["operation_recovery_validation"]).exists():
+        staging = root / "operation-recovery-stage"
+        staging.mkdir(mode=0o700)
+        mandate, r1, r2, walkthrough, incident = build_bundle(staging)
+        proof_names = ("positive.json", "off.json", "pool.json", "exit.json",
+                       "r1-control.json", "r2-source.json", "r2-identity.json", "r2-control.json",
+                       "incident-exit.json")
+        for name in proof_names:
+            shutil.copyfile(staging / name, root / name)
+            (root / name).chmod(0o600)
+        mandate["scope_sha256"] = scope_sha256
+        mandate["recovery_plan_sha256"] = "a" * 64
+        mandate["source_environment_identity_sha256"] = "6" * 64
+        mandate["approved_artifact_sha256"] = BASELINE_STACK
+        mandate["approved_configuration_sha256"] = "b" * 64
+        mandate["candidate_artifact_sha256"] = RELEASE_STACK
+        mandate["candidate_configuration_sha256"] = "6" * 64
+        mandate_sha = canonical_sha256(mandate)
+        r1.update(scope_sha256=scope_sha256, mandate_sha256=mandate_sha)
+        r1_sha = canonical_sha256(r1)
+        r2.update(scope_sha256=scope_sha256, mandate_sha256=mandate_sha,
+                  r1_terminal_sha256=r1_sha)
+        r2["source_artifact_sha256"] = RELEASE_STACK
+        r2["source_configuration_sha256"] = "6" * 64
+        source = json.loads((root / "r2-source.json").read_text())
+        source["artifact_sha256"] = RELEASE_STACK
+        source["configuration_sha256"] = "6" * 64
+        write_document(root / "r2-source.json", source)
+        r2["source_identity_proof"] = artifact(root, "r2-source.json")
+        r2["result_artifact_sha256"] = BASELINE_STACK
+        r2["result_configuration_sha256"] = "b" * 64
+        identity = json.loads((root / "r2-identity.json").read_text())
+        identity["artifact_sha256"] = BASELINE_STACK
+        identity["configuration_sha256"] = "b" * 64
+        write_document(root / "r2-identity.json", identity)
+        r2["identity_proof"] = artifact(root, "r2-identity.json")
+        r2_sha = canonical_sha256(r2)
+        walkthrough.update(scope_sha256=scope_sha256, mandate_sha256=mandate_sha,
+                           r1_terminal_sha256=r1_sha, r2_terminal_sha256=r2_sha)
+        incident.update(scope_sha256=scope_sha256, mandate_sha256=mandate_sha)
+        validation = validate_rehearsal_contracts(
+            root, mandate, r1, r2, walkthrough, incident,
+            datetime(2026, 11, 18, 11, 0, tzinfo=timezone.utc))
+        for key, value in (("operation_rehearsal_mandate", mandate),
+                           ("operation_recovery_r1", r1),
+                           ("operation_recovery_r2", r2),
+                           ("operation_operator_walkthrough", walkthrough),
+                           ("operation_recovery_incident", incident),
+                           ("operation_recovery_validation", validation)):
+            write_document(root / names[key], value)
+        shutil.rmtree(staging)
+    return {key: artifact(root, name) for key, name in names.items()}
+
+
+def operation_recovery_validation(root: Path, scope_sha256: str) -> dict:
+    return operation_recovery_artifacts(root, scope_sha256)[
+        "operation_recovery_validation"]
+
+
 def operation_go(root: Path, scope_sha256: str) -> dict:
     operation_preflight(root, scope_sha256)
+    operation_recovery_validation(root, scope_sha256)
     preflight = json.loads((root / "operation-preflight.json").read_text())
+    recovery = json.loads((root / "operation-recovery-validation.json").read_text())
     instant = datetime.now(timezone.utc)
     value = {"schema_version": 1, "contract_type": "approval_receipt",
         "contract_id": "operation-go-1", "receipt_kind": "OPERATION_GO",
         "scope_sha256": scope_sha256, "preflight_sha256": canonical_sha256(preflight),
+        "recovery_validation_sha256": canonical_sha256(recovery),
         "valid_from": (instant - timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
         "valid_through": (instant + timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
         "approvals": ["operation-owner"], "nonce": "measurement-window-1"}
@@ -176,6 +256,7 @@ def level_one_authorization(root: Path, plan_digest: str, scope_sha256: str) -> 
         "approval_reference": "level-one-approval",
         "operation_go": operation_go(root, scope_sha256),
         "operation_preflight": operation_preflight(root, scope_sha256),
+        **operation_recovery_artifacts(root, scope_sha256),
         "previous_level": None}
 
 
@@ -356,7 +437,6 @@ class PlanTests(unittest.TestCase):
             with self.assertRaisesRegex(MeasurementError, "invalid_document"):
                 validate_level_authorization(authorization, value, digest,
                                              scope_digest, root)
-
             authorization = level_one_authorization(root, digest, scope_digest)
             receipt = json.loads(receipt_path.read_text())
             receipt["approvals"] = ["operation-owner"]
@@ -367,6 +447,25 @@ class PlanTests(unittest.TestCase):
                 validate_level_authorization(authorization, value, digest,
                                              scope_digest, root)
 
+    def test_operation_go_must_have_new_nonce_and_postdate_incident(self) -> None:
+        for mutation in ("nonce", "time"):
+            with self.subTest(mutation=mutation):
+                with tempfile.TemporaryDirectory() as name:
+                    root = Path(name); root.chmod(0o700)
+                    value = plan(); digest = canonical_sha256(value)
+                    _scope, scope_digest = measurement_scope(value)
+                    authorization = level_one_authorization(root, digest, scope_digest)
+                    receipt_path = root / "operation-go.json"
+                    receipt = json.loads(receipt_path.read_text())
+                    if mutation == "nonce":
+                        receipt["nonce"] = "prior-operation-go"
+                    else:
+                        receipt["valid_from"] = "2026-11-18T10:04:00Z"
+                    write_document(receipt_path, receipt)
+                    authorization["operation_go"] = artifact(root, "operation-go.json")
+                    with self.assertRaisesRegex(MeasurementError, "not_renewed"):
+                        validate_level_authorization(authorization, value, digest,
+                                                     scope_digest, root)
     def test_changed_plan_is_rejected_by_old_scope_before_operation_go(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             root = Path(name); root.chmod(0o700)
@@ -618,6 +717,7 @@ class EscalationTests(unittest.TestCase):
                 "approval_reference": "level-two-approval",
                 "operation_go": operation_go(evidence2, scope_digest),
                 "operation_preflight": operation_preflight(evidence2, scope_digest),
+                **operation_recovery_artifacts(evidence2, scope_digest),
                 "previous_level": previous}
             control_root = second / "control"; control_root.mkdir(mode=0o700)
             output = second / "output"; output.mkdir(mode=0o700)
@@ -677,6 +777,7 @@ class EscalationTests(unittest.TestCase):
                 "approval_reference": "level-two-approval",
                 "operation_go": operation_go(root, scope_digest),
                 "operation_preflight": operation_preflight(root, scope_digest),
+                **operation_recovery_artifacts(root, scope_digest),
                 "previous_level": None}
             with self.assertRaises(MeasurementError):
                 validate_level_authorization(auth, value, digest, scope_digest, root)

@@ -14,6 +14,7 @@ import stat
 import sys
 import tempfile
 import zipfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -21,10 +22,14 @@ try:
     from . import contract_rules as _contract_rules
     from .corpus_oracle import (OracleError, compare_spools, validate_baseline,
                                 validate_qualification)
+    from .recovery_rehearsal import (RehearsalError, build_recovery_record,
+        validate_rehearsal_contracts)
 except ImportError:
     import contract_rules as _contract_rules
     from corpus_oracle import (OracleError, compare_spools, validate_baseline,
                                validate_qualification)
+    from recovery_rehearsal import (RehearsalError, build_recovery_record,
+        validate_rehearsal_contracts)
 
 ContractError = _contract_rules.ContractError
 aggregate_pass = _contract_rules.aggregate_pass
@@ -724,6 +729,8 @@ def validate_private(root: Path, trusted_scope_sha256: str) -> dict[str, Any]:
             scope["scope_inputs"]["release_definition"]["sha256"] or
             measurement_plan["closure_inputs"]["target_sha256"] !=
             scope["scope_inputs"]["target"]["sha256"] or
+            measurement_plan["closure_inputs"]["recovery_plan_sha256"] !=
+            scope["scope_inputs"]["recovery_plan"]["sha256"] or
             measurement_plan["closure_inputs"]["dataset_sha256"] !=
             scope["scope_inputs"]["dataset"]["sha256"] or
             measurement_plan["closure_inputs"]["toolkit_sha256"] !=
@@ -805,12 +812,95 @@ def validate_private(root: Path, trusted_scope_sha256: str) -> dict[str, Any]:
     for report in contracts.get("measurement_report", []):
         result = _worse(result, "PASS" if report["technical_result"] == "PASS" else
                         "FAIL" if report["technical_result"] == "FAIL" else "INCOMPLETE")
-    singleton = {"approval_receipt", "preflight", "workload", "release", "retirement", "recovery"}
+    singleton = {"approval_receipt", "preflight", "workload", "release", "retirement",
+        "recovery", "rehearsal_mandate", "recovery_r1", "recovery_r2",
+        "operator_walkthrough", "recovery_incident", "recovery_validation"}
     if any(len(contracts.get(kind, [])) != 1 for kind in singleton if kind in contracts):
         raise EvidenceError("singleton contract family count mismatch")
     contract_ids = [document["contract_id"] for family in contracts.values() for document in family]
     if len(contract_ids) != len(set(contract_ids)):
         raise EvidenceError("duplicate contract identity")
+
+    recovery_graph = {kind: contracts.get(kind, []) for kind in
+        ("rehearsal_mandate", "recovery_r1", "recovery_r2", "operator_walkthrough",
+         "recovery_incident", "recovery_validation")}
+    if contracts.get("recovery"):
+        aggregate = contracts["recovery"][0]
+        if any(len(recovery_graph[kind]) != 1 for kind in recovery_graph):
+            if aggregate["rehearsal_result"] == "PASS":
+                raise EvidenceError("recovery PASS lacks its complete rehearsal graph")
+            result = _worse(result, "INCOMPLETE")
+        else:
+            mandate = recovery_graph["rehearsal_mandate"][0]
+            r1 = recovery_graph["recovery_r1"][0]
+            r2 = recovery_graph["recovery_r2"][0]
+            walkthrough = recovery_graph["operator_walkthrough"][0]
+            incident = recovery_graph["recovery_incident"][0]
+            stored_validation = recovery_graph["recovery_validation"][0]
+            if (mandate["recovery_plan_sha256"] !=
+                    scope["scope_inputs"]["recovery_plan"]["sha256"] or
+                    mandate["source_environment_identity_sha256"] !=
+                    scope["scope_inputs"]["target"]["sha256"] or
+                    mandate["target_copy_identity_sha256"] ==
+                    scope["scope_inputs"]["target"]["sha256"]):
+                raise EvidenceError("recovery mandate differs from frozen scope")
+            closure = measurement_plan["closure_inputs"]
+            release = contracts.get("release", [None])[0]
+            release_identity = None if release is None else canonical_sha256({
+                "server_build_sha256": release["server_build_sha256"],
+                "pg_qi_sha256": release["pg_qi_sha256"],
+                "pg_duckdb_sha256": release["pg_duckdb_sha256"]})
+            frozen_recovery = _plain_bytes(captured[
+                scope["scope_inputs"]["recovery_plan"]["path"]])
+            if (release is None or
+                    release_identity != closure["release_artifact_sha256"] or
+                    release["configuration_sha256"] !=
+                    closure["release_configuration_sha256"] or
+                    set(frozen_recovery) != {"schema_version", "document_type",
+                        "artifact_identity_scheme", "server_build_sha256", "pg_qi_sha256",
+                        "pg_duckdb_sha256", "approved_configuration_sha256"} or
+                    frozen_recovery["schema_version"] != 1 or
+                    frozen_recovery["document_type"] != "recovery_plan_identity" or
+                    frozen_recovery["artifact_identity_scheme"] != "PGQI_STACK_SHA256_V1" or
+                    canonical_sha256({name: frozen_recovery[name] for name in
+                        ("server_build_sha256", "pg_qi_sha256", "pg_duckdb_sha256")}) !=
+                    closure["baseline_artifact_sha256"] or
+                    frozen_recovery["approved_configuration_sha256"] !=
+                    closure["baseline_configuration_sha256"]):
+                raise EvidenceError("release or baseline identity differs from frozen closure")
+            if (r2["source_artifact_sha256"] != closure["release_artifact_sha256"] or
+                    r2["source_configuration_sha256"] !=
+                    closure["release_configuration_sha256"] or
+                    mandate["approved_artifact_sha256"] !=
+                    closure["baseline_artifact_sha256"] or
+                    mandate["approved_configuration_sha256"] !=
+                    closure["baseline_configuration_sha256"]):
+                raise EvidenceError("recovery identities differ from frozen scope")
+            checked = datetime.fromisoformat(
+                stored_validation["checked_at"].replace("Z", "+00:00"))
+            try:
+                recomputed = validate_rehearsal_contracts(
+                    root, mandate, r1, r2, walkthrough, incident, checked)
+            except RehearsalError as exc:
+                raise EvidenceError(f"recovery rehearsal evidence invalid: {exc}") from exc
+            if (recomputed != stored_validation or
+                    aggregate["scope_sha256"] != scope_digest or
+                    aggregate != build_recovery_record(stored_validation, r2, walkthrough)):
+                raise EvidenceError("recovery aggregate differs from recomputed rehearsal")
+            recovery_cell = next((cell for cell in (site_cells or {}).get("cells", [])
+                                  if cell.get("cell_id") == "recovery_rehearsal"), None)
+            if (recovery_cell is None or recovery_cell.get("evidence_sha256") !=
+                    canonical_sha256(stored_validation)):
+                raise EvidenceError("recovery site cell is not bound to validated rehearsal")
+            proof_paths = {r1[name]["path"] for name in
+                           ("pool_proof", "positive_probe", "off_proof",
+                            "backend_exit_proof", "fresh_control")}
+            proof_paths.add(r2["identity_proof"]["path"])
+            proof_paths.add(r2["source_identity_proof"]["path"])
+            proof_paths.add(r2["fresh_control"]["path"])
+            proof_paths.add(incident["backend_exit_proof"]["path"])
+            if not proof_paths <= indexed:
+                raise EvidenceError("recovery raw proof is outside the sealed index")
 
     workload_ids: set[str] = set()
     for workload in contracts.get("workload", []):
@@ -882,8 +972,20 @@ def validate_private(root: Path, trusted_scope_sha256: str) -> dict[str, Any]:
         preflight = contracts["preflight"][0]
         if (approval["receipt_kind"] != "OPERATION_GO" or
                 approval["scope_sha256"] != scope_digest or
-                approval["preflight_sha256"] != canonical_sha256(preflight)):
+                approval["preflight_sha256"] != canonical_sha256(preflight) or
+                not contracts.get("recovery_validation") or
+                approval["recovery_validation_sha256"] != canonical_sha256(
+                    contracts["recovery_validation"][0])):
             raise EvidenceError("approval receipt preflight linkage mismatch")
+        incident = contracts.get("recovery_incident", [None])[0]
+        if incident is not None:
+            approval_start = datetime.fromisoformat(
+                approval["valid_from"].replace("Z", "+00:00"))
+            incident_time = datetime.fromisoformat(
+                incident["performed_at"].replace("Z", "+00:00"))
+            if approval["nonce"] == incident["invalidated_go_nonce"] or \
+                    approval_start <= incident_time:
+                raise EvidenceError("operation GO was not renewed after recovery incident")
     if contracts.get("request") and contracts.get("snapshot"):
         _contract_rules.validate_cached_sequence(contracts["request"], contracts["snapshot"])
         if any(request["query_id"] not in workload_ids for request in contracts["request"]):

@@ -9,6 +9,11 @@
     "resource_policy_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
     "release_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
     "target_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+    "recovery_plan_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "release_artifact_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "release_configuration_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "baseline_artifact_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "baseline_configuration_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
     "dataset_sha256": "6666666666666666666666666666666666666666666666666666666666666666",
     "toolkit_sha256": "7777777777777777777777777777777777777777777777777777777777777777"
   },

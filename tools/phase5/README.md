@@ -126,3 +126,25 @@ not accepted as proof by assertion.
 
 See `docs/phase5/PGQI-5-measurement-concurrency.md` and the frozen-plan example
 in `docs/phase5/templates/measurement-plan.example.json`.
+
+## Recovery rehearsal and site readiness
+
+`recovery_rehearsal.py` is an offline validator for evidence produced by human
+operators on an explicitly approved recoverable copy. It has no database,
+process-control, pool-administration or restart interface. R1 session/cache
+retirement, R2 binary/config downgrade or environment restore, the independent
+operator walkthrough and incident handoff remain separate typed terminals.
+The result can be only `ELIGIBLE_FOR_HUMAN_GRANT` or `REFUSED`; it never grants
+`RECOVERY_REHEARSED` or `OPERATION_GO`.
+
+Run it only after the five typed input documents and their referenced private
+proofs have been collected:
+
+```sh
+python3 tools/phase5/recovery_rehearsal.py \
+  --bundle /private/rehearsal-bundle \
+  --output /private/recovery-validation.json
+```
+
+See `docs/phase5/PGQI-5-recovery-rehearsal.md` for the operator boundary,
+ordered runbook and refusal conditions.

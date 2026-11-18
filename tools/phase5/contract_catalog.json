@@ -40,7 +40,7 @@
       "optional": []
     },
     "approval_receipt": {
-      "required": ["receipt_kind", "scope_sha256", "preflight_sha256", "valid_from", "valid_through", "approvals", "nonce"],
+      "required": ["receipt_kind", "scope_sha256", "preflight_sha256", "recovery_validation_sha256", "valid_from", "valid_through", "approvals", "nonce"],
       "optional": []
     },
     "preflight": {
@@ -133,7 +133,31 @@
       "optional": []
     },
     "recovery": {
-      "required": ["scope_sha256", "strategy", "artifact_sha256", "configuration_sha256", "rehearsal_result", "state"],
+      "required": ["scope_sha256", "rehearsal_id", "strategy", "artifact_sha256", "configuration_sha256", "r1_terminal_sha256", "r2_terminal_sha256", "walkthrough_sha256", "validation_sha256", "rehearsal_result", "eligibility", "limitations", "state"],
+      "optional": []
+    },
+    "rehearsal_mandate": {
+      "required": ["scope_sha256", "rehearsal_id", "target_copy_identity_sha256", "target_cluster_id", "target_initial_start_id", "source_environment_identity_sha256", "recovery_plan_sha256", "runbook_sha256", "artifact_identity_scheme", "candidate_artifact_sha256", "candidate_configuration_sha256", "approved_artifact_sha256", "approved_configuration_sha256", "approved_restore_source_sha256", "pool_profile", "valid_from", "valid_through", "primary_operator", "second_operator", "implementer", "approvals", "allowed_strategies", "allowed_actions", "recoverable_copy_verified", "lifecycle_executor"],
+      "optional": []
+    },
+    "recovery_r1": {
+      "required": ["scope_sha256", "rehearsal_id", "mandate_sha256", "run_id", "steps", "pool_profile", "pool_action", "pool_proof", "owned_sessions", "positive_probe", "off_proof", "backend_exit_proof", "fresh_control", "started_at", "finished_at", "duration_ms", "result", "state"],
+      "optional": []
+    },
+    "recovery_r2": {
+      "required": ["scope_sha256", "rehearsal_id", "mandate_sha256", "strategy", "r1_terminal_sha256", "steps", "source_artifact_sha256", "source_configuration_sha256", "result_artifact_sha256", "result_configuration_sha256", "restore_source_sha256", "before_cluster_id", "before_start_id", "after_cluster_id", "after_start_id", "same_data_continuity", "source_identity_proof", "identity_proof", "fresh_control", "started_at", "finished_at", "duration_ms", "result", "state"],
+      "optional": []
+    },
+    "operator_walkthrough": {
+      "required": ["scope_sha256", "rehearsal_id", "mandate_sha256", "primary_operator", "second_operator", "implementer", "runbook_sha256", "r1_terminal_sha256", "r2_terminal_sha256", "actions_performed", "signed_at", "result", "state"],
+      "optional": []
+    },
+    "recovery_incident": {
+      "required": ["scope_sha256", "rehearsal_id", "mandate_sha256", "incident_id", "steps", "poisoned_backend", "backend_exit_proof", "performed_at", "invalidated_go_sha256", "invalidated_go_nonce", "current_go_invalidated", "restart_requires_new_go", "result", "state"],
+      "optional": []
+    },
+    "recovery_validation": {
+      "required": ["scope_sha256", "rehearsal_id", "mandate_sha256", "r1_terminal_sha256", "r2_terminal_sha256", "walkthrough_sha256", "incident_sha256", "checked_at", "result", "decision", "checks", "limitations"],
       "optional": []
     },
     "index": {

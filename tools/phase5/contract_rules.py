@@ -10,14 +10,14 @@ import math
 import os
 import re
 import stat
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 CATALOG_PATH = Path(__file__).with_name("contract_catalog.json")
 DIGEST = re.compile(r"^[0-9a-f]{64}$")
 IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
-UTC = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$")
+UTC = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.(?:\d{3}|\d{6}))?Z$")
 COMMON = {"schema_version", "contract_type", "contract_id"}
 
 
@@ -289,6 +289,7 @@ def _validate_approval_receipt(value: dict[str, Any], catalog: dict[str, Any]) -
     _enum(value["receipt_kind"], "approval receipt kind",
           catalog["receipt_kinds"]["approval_receipt"])
     _scope_ref(value); _digest(value["preflight_sha256"], "preflight_sha256")
+    _digest(value["recovery_validation_sha256"], "recovery_validation_sha256")
     start = _timestamp(value["valid_from"], "valid_from")
     end = _timestamp(value["valid_through"], "valid_through")
     _identifier_array(value["approvals"], "approvals", True); _string(value["nonce"], "nonce")
@@ -431,7 +432,9 @@ def _validate_measurement_plan(value: dict[str, Any], catalog: dict[str, Any]) -
     closure = _object(value["closure_inputs"], "closure_inputs")
     closure_fields = {"workload_definition_sha256", "qualification_sha256",
         "baseline_manifest_sha256", "resource_policy_sha256", "release_sha256",
-        "target_sha256", "dataset_sha256", "toolkit_sha256"}
+        "target_sha256", "dataset_sha256", "toolkit_sha256", "recovery_plan_sha256",
+        "release_artifact_sha256", "release_configuration_sha256",
+        "baseline_artifact_sha256", "baseline_configuration_sha256"}
     if set(closure) != closure_fields:
         raise ContractError("measurement closure inputs are incomplete or unknown")
     for name, digest in closure.items():
@@ -704,12 +707,233 @@ def _validate_retirement(value: dict[str, Any], catalog: dict[str, Any]) -> None
 
 def _validate_recovery(value: dict[str, Any], catalog: dict[str, Any]) -> None:
     _scope_ref(value)
+    _string(value["rehearsal_id"], "rehearsal_id")
     _enum(value["strategy"], "recovery strategy",
           {"EXACT_BINARY_CONFIG_DOWNGRADE", "VERIFIED_ENVIRONMENT_RESTORE"})
-    _digest(value["artifact_sha256"], "artifact_sha256")
-    _digest(value["configuration_sha256"], "configuration_sha256")
-    _enum(value["rehearsal_result"], "rehearsal_result", {"PASS", "FAIL", "NOT_RUN"})
+    for name in ("artifact_sha256", "configuration_sha256", "r1_terminal_sha256",
+                 "r2_terminal_sha256", "walkthrough_sha256", "validation_sha256"):
+        _digest(value[name], name)
+    rehearsal_result = _enum(value["rehearsal_result"], "rehearsal_result",
+                             {"PASS", "FAIL", "NOT_RUN"})
+    eligibility = _enum(value["eligibility"], "recovery eligibility",
+                        {"ELIGIBLE_FOR_HUMAN_GRANT", "REFUSED"})
+    limitations = set(_identifier_array(value["limitations"], "recovery limitations", True))
+    if not RECOVERY_LIMITATIONS <= limitations or not limitations <= \
+            RECOVERY_LIMITATIONS | {"CACHED_PLAN_PERSISTENCE_OBSERVED"}:
+        raise ContractError("recovery limitations are incomplete")
+    if (value["rehearsal_result"] == "PASS") != \
+            (eligibility == "ELIGIBLE_FOR_HUMAN_GRANT"):
+        raise ContractError("recovery PASS and eligibility disagree")
     _state(value["state"], catalog)
+    if value["state"]["technical_result"] != {
+            "PASS": "PASS", "FAIL": "FAIL", "NOT_RUN": "NOT_RUN"}[rehearsal_result]:
+        raise ContractError("recovery result and state disagree")
+    if rehearsal_result == "PASS" and not aggregate_pass(value["state"]):
+        raise ContractError("passing recovery state is not clean and complete")
+
+
+REHEARSAL_ACTIONS = ["STOP_ADMISSION", "ROUTING_OFF", "RETIRE_OWNED_SESSIONS",
+    "RECYCLE_POOL_IF_APPLICABLE", "OBSERVE_BACKEND_EXIT", "RESTART_ENVIRONMENT",
+    "RESTORE_APPROVED_ARTIFACTS", "RUN_FRESH_SAFE_CONTROL"]
+R1_STEPS = ["STOP_ADMISSION", "ROUTING_OFF", "RETIRE_OR_DEALLOCATE",
+            "POOL_RECYCLE_OR_NOT_APPLICABLE", "SERVER_EXIT_PROOF", "FRESH_DEFAULT_OFF_CONTROL"]
+R2_STEPS = ["R1_CONFIRMED", "STOP_SERVER", "APPLY_APPROVED_RECOVERY",
+            "START_SERVER", "VERIFY_START_AND_IDENTITY", "FRESH_DEFAULT_OFF_CONTROL"]
+INCIDENT_STEPS = ["STOP_LATCHED", "EVIDENCE_PRESERVED", "POISONED_BACKEND_ISOLATED",
+                  "SERVER_EXIT_PROVEN", "GO_INVALIDATED"]
+RECOVERY_LIMITATIONS = {"NO_SLA_CLAIM", "NO_RTO_CLAIM", "NO_AUTOMATIC_GATE_GRANT"}
+RECOVERY_CHECKS = ["MANDATE_CURRENT", "RECOVERABLE_COPY", "R1_ORDER_AND_PROOFS",
+    "R2_STRATEGY_AND_IDENTITY", "SECOND_OPERATOR_WALKTHROUGH",
+    "INCIDENT_HANDOFF_AND_NEW_GO", "FRESH_DEFAULT_OFF_CONTROLS"]
+
+
+def _exact_sequence(value: Any, expected: list[str], name: str) -> None:
+    if value != expected:
+        raise ContractError(f"{name} is incomplete or out of order")
+
+
+def _timed_terminal(value: dict[str, Any], catalog: dict[str, Any]) -> None:
+    start = _timestamp(value["started_at"], "started_at")
+    finish = _timestamp(value["finished_at"], "finished_at")
+    duration = _integer(value["duration_ms"], "duration_ms")
+    if start >= finish or duration != (finish - start) // timedelta(milliseconds=1):
+        raise ContractError("terminal duration does not match observed timestamps")
+    result = _enum(value["result"], "rehearsal terminal result",
+                   {"PASS", "FAIL", "INCOMPLETE"})
+    _state(value["state"], catalog)
+    technical = value["state"]["technical_result"]
+    expected = {"PASS": "PASS", "FAIL": "FAIL", "INCOMPLETE": "INCONCLUSIVE"}[result]
+    if technical != expected:
+        raise ContractError("terminal result and state disagree")
+    if result == "PASS" and not aggregate_pass(value["state"]):
+        raise ContractError("passing terminal state is not clean and complete")
+
+
+def _validate_rehearsal_mandate(value: dict[str, Any], catalog: dict[str, Any]) -> None:
+    _scope_ref(value); _string(value["rehearsal_id"], "rehearsal_id")
+    _string(value["target_cluster_id"], "target_cluster_id")
+    _string(value["target_initial_start_id"], "target_initial_start_id")
+    if value["artifact_identity_scheme"] != "PGQI_STACK_SHA256_V1":
+        raise ContractError("unknown recovery artifact identity scheme")
+    _enum(value["pool_profile"], "pool_profile",
+          {"DIRECT", "SESSION_POOL", "TRANSACTION_POOL"})
+    for name in ("target_copy_identity_sha256", "source_environment_identity_sha256",
+                 "recovery_plan_sha256", "runbook_sha256", "approved_artifact_sha256",
+                 "approved_configuration_sha256", "candidate_artifact_sha256",
+                 "candidate_configuration_sha256"):
+        _digest(value[name], name)
+    if value["approved_restore_source_sha256"] is not None:
+        _digest(value["approved_restore_source_sha256"], "approved_restore_source_sha256")
+    start = _timestamp(value["valid_from"], "valid_from")
+    finish = _timestamp(value["valid_through"], "valid_through")
+    if start >= finish:
+        raise ContractError("rehearsal mandate window is empty or reversed")
+    primary = _string(value["primary_operator"], "primary_operator")
+    second = _string(value["second_operator"], "second_operator")
+    implementer = _string(value["implementer"], "implementer")
+    if len({primary, second, implementer}) != 3:
+        raise ContractError("rehearsal roles must be independent")
+    approvals = set(_identifier_array(value["approvals"], "approvals", True))
+    if len(approvals) < 3:
+        raise ContractError("rehearsal mandate requires three approvals")
+    if approvals & {primary, second, implementer}:
+        raise ContractError("rehearsal approvers must be independent from execution roles")
+    strategies = set(_identifier_array(value["allowed_strategies"],
+                                       "allowed_strategies", True))
+    if not strategies <= {"EXACT_BINARY_CONFIG_DOWNGRADE", "VERIFIED_ENVIRONMENT_RESTORE"}:
+        raise ContractError("unknown rehearsal recovery strategy")
+    if ("VERIFIED_ENVIRONMENT_RESTORE" in strategies) != \
+            (value["approved_restore_source_sha256"] is not None):
+        raise ContractError("restore strategy and approved source disagree")
+    _exact_sequence(value["allowed_actions"], REHEARSAL_ACTIONS, "allowed_actions")
+    if value["recoverable_copy_verified"] is not True or \
+            value["target_copy_identity_sha256"] == value["source_environment_identity_sha256"]:
+        raise ContractError("rehearsal target is not a verified distinct recoverable copy")
+    if value["lifecycle_executor"] != "HUMAN_OPERATOR_ONLY":
+        raise ContractError("rehearsal lifecycle cannot be delegated to tooling")
+
+
+def _validate_recovery_r1(value: dict[str, Any], catalog: dict[str, Any]) -> None:
+    _scope_ref(value)
+    for name in ("rehearsal_id", "run_id"):
+        _string(value[name], name)
+    _digest(value["mandate_sha256"], "mandate_sha256")
+    _exact_sequence(value["steps"], R1_STEPS, "R1 steps")
+    pool = _enum(value["pool_profile"], "pool_profile",
+                 {"DIRECT", "SESSION_POOL", "TRANSACTION_POOL"})
+    action = _enum(value["pool_action"], "pool_action", {"NOT_APPLICABLE", "RECYCLED"})
+    if (pool == "DIRECT") != (action == "NOT_APPLICABLE"):
+        raise ContractError("pool profile and action disagree")
+    _identifier_array(value["owned_sessions"], "owned_sessions", True)
+    for name in ("pool_proof", "positive_probe", "off_proof", "backend_exit_proof", "fresh_control"):
+        _artifact(value[name], name)
+    _timed_terminal(value, catalog)
+
+
+def _validate_recovery_r2(value: dict[str, Any], catalog: dict[str, Any]) -> None:
+    _scope_ref(value); _string(value["rehearsal_id"], "rehearsal_id")
+    for name in ("mandate_sha256", "r1_terminal_sha256", "source_artifact_sha256",
+                 "source_configuration_sha256", "result_artifact_sha256",
+                 "result_configuration_sha256"):
+        _digest(value[name], name)
+    strategy = _enum(value["strategy"], "recovery strategy",
+                     {"EXACT_BINARY_CONFIG_DOWNGRADE", "VERIFIED_ENVIRONMENT_RESTORE"})
+    if value["restore_source_sha256"] is not None:
+        _digest(value["restore_source_sha256"], "restore_source_sha256")
+    for name in ("before_cluster_id", "before_start_id", "after_cluster_id", "after_start_id"):
+        _string(value[name], name)
+    if not isinstance(value["same_data_continuity"], bool):
+        raise ContractError("same_data_continuity must be boolean")
+    if value["before_start_id"] == value["after_start_id"]:
+        raise ContractError("R2 requires a new server start identity")
+    if strategy == "EXACT_BINARY_CONFIG_DOWNGRADE":
+        if (value["restore_source_sha256"] is not None or
+                value["before_cluster_id"] != value["after_cluster_id"] or
+                not value["same_data_continuity"]):
+            raise ContractError("downgrade evidence has restore semantics")
+    elif value["restore_source_sha256"] is None:
+        raise ContractError("environment restore lacks its approved source")
+    if (value["source_artifact_sha256"] == value["result_artifact_sha256"] and
+            value["source_configuration_sha256"] == value["result_configuration_sha256"]):
+        raise ContractError("R2 recovery must change artifact or configuration identity")
+    _exact_sequence(value["steps"], R2_STEPS, "R2 steps")
+    _artifact(value["source_identity_proof"], "source_identity_proof")
+    _artifact(value["identity_proof"], "identity_proof")
+    _artifact(value["fresh_control"], "fresh_control")
+    _timed_terminal(value, catalog)
+
+
+def _validate_operator_walkthrough(value: dict[str, Any], catalog: dict[str, Any]) -> None:
+    _scope_ref(value); _string(value["rehearsal_id"], "rehearsal_id")
+    for name in ("mandate_sha256", "runbook_sha256", "r1_terminal_sha256",
+                 "r2_terminal_sha256"):
+        _digest(value[name], name)
+    roles = [_string(value[name], name) for name in
+             ("primary_operator", "second_operator", "implementer")]
+    if len(set(roles)) != 3:
+        raise ContractError("walkthrough roles must be independent")
+    actions = set(_identifier_array(value["actions_performed"],
+                                    "actions_performed", True))
+    if actions != {"R1_SESSION_RETIREMENT", "INCIDENT_HANDOFF"}:
+        raise ContractError("second-operator walkthrough is incomplete")
+    _timestamp(value["signed_at"], "signed_at")
+    result = _enum(value["result"], "walkthrough result", {"PASS", "FAIL", "INCOMPLETE"})
+    _state(value["state"], catalog)
+    if value["state"]["technical_result"] != {
+            "PASS": "PASS", "FAIL": "FAIL", "INCOMPLETE": "INCONCLUSIVE"}[result]:
+        raise ContractError("walkthrough result and state disagree")
+    if result == "PASS" and not aggregate_pass(value["state"]):
+        raise ContractError("passing walkthrough state is not clean and complete")
+
+
+def _validate_recovery_incident(value: dict[str, Any], catalog: dict[str, Any]) -> None:
+    _scope_ref(value)
+    for name in ("rehearsal_id", "incident_id"):
+        _string(value[name], name)
+    _digest(value["mandate_sha256"], "mandate_sha256")
+    _exact_sequence(value["steps"], INCIDENT_STEPS, "incident steps")
+    backend = _object(value["poisoned_backend"], "poisoned_backend")
+    if set(backend) != {"cluster_id", "start_id", "pid", "backend_start", "session_id"}:
+        raise ContractError("poisoned backend identity is not exact")
+    for name in ("cluster_id", "start_id", "backend_start", "session_id"):
+        _string(backend[name], name, UTC if name == "backend_start" else IDENTIFIER)
+    _integer(backend["pid"], "backend pid", 1)
+    _artifact(value["backend_exit_proof"], "backend_exit_proof")
+    _timestamp(value["performed_at"], "performed_at")
+    _digest(value["invalidated_go_sha256"], "invalidated_go_sha256")
+    _string(value["invalidated_go_nonce"], "invalidated_go_nonce")
+    if value["current_go_invalidated"] is not True or value["restart_requires_new_go"] is not True:
+        raise ContractError("incident must consume the current GO")
+    result = _enum(value["result"], "incident result", {"PASS", "FAIL", "INCOMPLETE"})
+    _state(value["state"], catalog)
+    if value["state"]["technical_result"] != {
+            "PASS": "PASS", "FAIL": "FAIL", "INCOMPLETE": "INCONCLUSIVE"}[result]:
+        raise ContractError("incident result and state disagree")
+    if result == "PASS" and not aggregate_pass(value["state"]):
+        raise ContractError("passing incident state is not clean and complete")
+
+
+def _validate_recovery_validation(value: dict[str, Any], catalog: dict[str, Any]) -> None:
+    _scope_ref(value); _string(value["rehearsal_id"], "rehearsal_id")
+    for name in ("mandate_sha256", "r1_terminal_sha256", "r2_terminal_sha256",
+                 "walkthrough_sha256"):
+        _digest(value[name], name)
+    if value["incident_sha256"] is not None:
+        _digest(value["incident_sha256"], "incident_sha256")
+    _timestamp(value["checked_at"], "checked_at")
+    result = _enum(value["result"], "recovery validation result", {"PASS", "FAIL"})
+    decision = _enum(value["decision"], "recovery validation decision",
+                     {"ELIGIBLE_FOR_HUMAN_GRANT", "REFUSED"})
+    _identifier_array(value["checks"], "recovery validation checks", True)
+    limitations = set(_identifier_array(value["limitations"], "recovery limitations", True))
+    if not RECOVERY_LIMITATIONS <= limitations or not limitations <= \
+            RECOVERY_LIMITATIONS | {"CACHED_PLAN_PERSISTENCE_OBSERVED"}:
+        raise ContractError("recovery validation limitations are incomplete")
+    if (result == "PASS") != (decision == "ELIGIBLE_FOR_HUMAN_GRANT"):
+        raise ContractError("recovery validation result and decision disagree")
+    if result == "PASS" and (value["incident_sha256"] is None or
+            value["checks"] != RECOVERY_CHECKS):
+        raise ContractError("passing recovery validation is incomplete")
 
 
 def _validate_index(value: dict[str, Any], catalog: dict[str, Any]) -> None:

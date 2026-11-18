@@ -21,11 +21,13 @@ try:
         canonical_bytes, canonical_sha256, strict_load_bytes, validate_contract,
         verify_artifact, verify_seal)
     from .control_runtime import ResourcePolicy, StopController
+    from .recovery_rehearsal import RehearsalError, validate_rehearsal_contracts
 except ImportError:  # direct script/tool execution
     from contract_rules import (ContractError, MEASUREMENT_LIMITATIONS,
         canonical_bytes, canonical_sha256, strict_load_bytes, validate_contract,
         verify_artifact, verify_seal)
     from control_runtime import ResourcePolicy, StopController
+    from recovery_rehearsal import RehearsalError, validate_rehearsal_contracts
 
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 DIGEST = re.compile(r"[0-9a-f]{64}\Z")
@@ -236,7 +238,11 @@ def validate_level_authorization(value: dict[str, Any], plan: dict[str, Any],
     """Validate the current GO and, above level one, the previous clean level."""
     auth = _exact(value, {"schema_version", "document_type", "scope_sha256",
         "plan_sha256", "requested_level", "approval_reference",
-        "operation_go", "operation_preflight", "previous_level"},
+        "operation_go", "operation_preflight", "operation_recovery_validation",
+        "operation_rehearsal_mandate", "operation_recovery_r1",
+        "operation_recovery_r2", "operation_operator_walkthrough",
+        "operation_recovery_incident",
+        "previous_level"},
         "level_authorization")
     if auth["schema_version"] != 1 or auth["document_type"] != "measurement_level_authorization":
         raise MeasurementError("invalid_level_authorization")
@@ -257,9 +263,22 @@ def validate_level_authorization(value: dict[str, Any], plan: dict[str, Any],
     operation_go = _read_contract_artifact(evidence_root, auth["operation_go"])
     operation_preflight = _read_contract_artifact(evidence_root,
                                                   auth["operation_preflight"])
+    recovery_validation = _read_contract_artifact(
+        evidence_root, auth["operation_recovery_validation"])
+    recovery_documents = {
+        name: _read_contract_artifact(evidence_root, auth[artifact_name])
+        for name, artifact_name in (
+            ("mandate", "operation_rehearsal_mandate"),
+            ("r1", "operation_recovery_r1"),
+            ("r2", "operation_recovery_r2"),
+            ("walkthrough", "operation_operator_walkthrough"),
+            ("incident", "operation_recovery_incident"))}
     try:
         validate_contract(operation_go)
         validate_contract(operation_preflight)
+        validate_contract(recovery_validation)
+        for document in recovery_documents.values():
+            validate_contract(document)
     except ContractError as exc:
         raise MeasurementError("operation_go_contract_invalid") from exc
     if (operation_go.get("contract_type") != "approval_receipt" or
@@ -268,8 +287,42 @@ def validate_level_authorization(value: dict[str, Any], plan: dict[str, Any],
             operation_preflight.get("contract_type") != "preflight" or
             operation_preflight.get("scope_sha256") != scope_sha256 or
             operation_preflight.get("state", {}).get("technical_result") != "PASS" or
-            operation_go.get("preflight_sha256") != canonical_sha256(operation_preflight)):
+            operation_go.get("preflight_sha256") != canonical_sha256(operation_preflight) or
+            recovery_validation.get("contract_type") != "recovery_validation" or
+            recovery_validation.get("scope_sha256") != scope_sha256 or
+            recovery_validation.get("result") != "PASS" or
+            recovery_validation.get("decision") != "ELIGIBLE_FOR_HUMAN_GRANT" or
+            operation_go.get("recovery_validation_sha256") !=
+            canonical_sha256(recovery_validation)):
         raise MeasurementError("operation_go_does_not_authorize_scope")
+    try:
+        checked = datetime.fromisoformat(
+            recovery_validation["checked_at"].replace("Z", "+00:00"))
+        recomputed_recovery = validate_rehearsal_contracts(
+            evidence_root, recovery_documents["mandate"], recovery_documents["r1"],
+            recovery_documents["r2"], recovery_documents["walkthrough"],
+            recovery_documents["incident"], checked)
+    except (KeyError, TypeError, ValueError, RehearsalError) as exc:
+        raise MeasurementError("operation_recovery_graph_invalid") from exc
+    if recomputed_recovery != recovery_validation:
+        raise MeasurementError("operation_recovery_validation_not_reproducible")
+    mandate = recovery_documents["mandate"]
+    if (mandate["recovery_plan_sha256"] !=
+            plan["closure_inputs"]["recovery_plan_sha256"] or
+            mandate["source_environment_identity_sha256"] !=
+            plan["closure_inputs"]["target_sha256"] or
+            mandate["target_copy_identity_sha256"] ==
+            plan["closure_inputs"]["target_sha256"]):
+        raise MeasurementError("operation_recovery_mandate_differs_from_frozen_scope")
+    r2 = recovery_documents["r2"]
+    if (r2["source_artifact_sha256"] != plan["closure_inputs"]["release_artifact_sha256"] or
+            r2["source_configuration_sha256"] !=
+            plan["closure_inputs"]["release_configuration_sha256"] or
+            mandate["approved_artifact_sha256"] !=
+            plan["closure_inputs"]["baseline_artifact_sha256"] or
+            mandate["approved_configuration_sha256"] !=
+            plan["closure_inputs"]["baseline_configuration_sha256"]):
+        raise MeasurementError("operation_recovery_identity_differs_from_frozen_scope")
     try:
         start = datetime.fromisoformat(operation_go["valid_from"].replace("Z", "+00:00"))
         finish = datetime.fromisoformat(operation_go["valid_through"].replace("Z", "+00:00"))
@@ -280,6 +333,11 @@ def validate_level_authorization(value: dict[str, Any], plan: dict[str, Any],
         raise MeasurementError("authorization_clock_is_not_utc_aware")
     if not start <= instant.astimezone(timezone.utc) < finish:
         raise MeasurementError("operation_go_is_not_current")
+    incident_time = datetime.fromisoformat(
+        recovery_documents["incident"]["performed_at"].replace("Z", "+00:00"))
+    if (operation_go["nonce"] == recovery_documents["incident"]["invalidated_go_nonce"] or
+            start <= incident_time):
+        raise MeasurementError("operation_go_was_not_renewed_after_incident")
     previous = auth["previous_level"]
     if auth["requested_level"] == 1:
         if previous is not None:
@@ -473,7 +531,7 @@ class MeasurementRunner:
             "baseline_manifest_sha256": "baseline_manifest",
             "resource_policy_sha256": "limits", "release_sha256": "release_definition",
             "target_sha256": "target", "dataset_sha256": "dataset",
-            "toolkit_sha256": "toolkit"}
+            "toolkit_sha256": "toolkit", "recovery_plan_sha256": "recovery_plan"}
         plan_artifact = scope["scope_inputs"]["measurement_plan"]
         if (plan_artifact["sha256"] != plan_sha256 or
                 plan_artifact["bytes"] != len(canonical_bytes(plan))) or any(
