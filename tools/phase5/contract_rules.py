@@ -745,6 +745,14 @@ RECOVERY_LIMITATIONS = {"NO_SLA_CLAIM", "NO_RTO_CLAIM", "NO_AUTOMATIC_GATE_GRANT
 RECOVERY_CHECKS = ["MANDATE_CURRENT", "RECOVERABLE_COPY", "R1_ORDER_AND_PROOFS",
     "R2_STRATEGY_AND_IDENTITY", "SECOND_OPERATOR_WALKTHROUGH",
     "INCIDENT_HANDOFF_AND_NEW_GO", "FRESH_DEFAULT_OFF_CONTROLS"]
+CANARY_CONTROLS = ["AMBIENT_FORCE_OFF", "UNSUPPORTED_QUERY", "PARAMETERIZED_QUERY"]
+CANARY_CHECKS = ["OPERATION_GO_CURRENT", "SINGLE_DEDICATED_SESSION",
+    "POSITIVE_LITERAL_COMPLETE", "NEGATIVE_CONTROLS_COMPLETE", "FULL_ORACLE_PASS",
+    "FRESH_SAME_SESSION_SNAPSHOT", "R1_RETIREMENT_COMPLETE",
+    "FRESH_DEFAULT_OFF_RECONNECT"]
+CANARY_LIMITATIONS = {"NO_CUSTOMER_AUTHORIZATION", "NO_PRODUCTION_AUTHORIZATION",
+    "NO_PUBLICATION_AUTHORIZATION", "NO_PERSISTENT_SETTING_AUTHORIZATION",
+    "NO_AUTOMATIC_GATE_GRANT"}
 
 
 def _exact_sequence(value: Any, expected: list[str], name: str) -> None:
@@ -934,6 +942,102 @@ def _validate_recovery_validation(value: dict[str, Any], catalog: dict[str, Any]
     if result == "PASS" and (value["incident_sha256"] is None or
             value["checks"] != RECOVERY_CHECKS):
         raise ContractError("passing recovery validation is incomplete")
+
+
+def _snapshot_tuple(value: Any, name: str) -> None:
+    snapshot = _object(value, name)
+    expected = {"contract_version", "context", "policy_intent", "reason",
+                "force_origin", "classifier_status", "classifier_reason",
+                "observed_engine", "verification", "observation",
+                "request_applied", "duckdb_force_execution"}
+    if set(snapshot) != expected:
+        raise ContractError(f"{name} fields are not exact")
+    for field, item in snapshot.items():
+        _string(item, f"{name}.{field}")
+
+
+def _validate_canary_plan(value: dict[str, Any], catalog: dict[str, Any]) -> None:
+    _scope_ref(value); _string(value["canary_id"], "canary_id")
+    _artifact(value["measurement_plan"], "measurement_plan")
+    _artifact(value["level_authorization"], "level_authorization")
+    _digest(value["operation_go_sha256"], "operation_go_sha256")
+    _string(value["positive_query_id"], "positive_query_id")
+    _artifact(value["positive_sql"], "positive_sql")
+    _digest(value["positive_literal_sha256"], "positive_literal_sha256")
+    _exact_sequence(value["negative_controls"], CANARY_CONTROLS, "negative_controls")
+    _snapshot_tuple(value["expected_snapshot"], "expected_snapshot")
+    _integer(value["maximum_result_bytes"], "maximum_result_bytes", 1)
+    if value["session_count"] != 1 or type(value["session_count"]) is not int:
+        raise ContractError("canary requires exactly one session")
+    if value["pool_profile"] != "DIRECT":
+        raise ContractError("canary does not permit a pool")
+
+
+def _validate_canary_run(value: dict[str, Any], catalog: dict[str, Any]) -> None:
+    _scope_ref(value)
+    for name in ("canary_id", "session_id"):
+        _string(value[name], name)
+    for name in ("plan_sha256", "operation_go_sha256"):
+        _digest(value[name], name)
+    for name in ("positive_request", "positive_snapshot", "positive_spool",
+                 "ambient_force_off_proof", "oracle_proof"):
+        _artifact(value[name], name)
+    controls = _array(value["control_proofs"], "control_proofs", True)
+    if len(controls) != len(CANARY_CONTROLS):
+        raise ContractError("canary control proof count differs from plan")
+    for control in controls:
+        _artifact(control, "control_proof")
+    _timed_terminal(value, catalog)
+
+
+def _validate_canary_retirement(value: dict[str, Any], catalog: dict[str, Any]) -> None:
+    _scope_ref(value)
+    for name in ("canary_id", "owned_session_id"):
+        _string(value[name], name)
+    for name in ("plan_sha256", "run_sha256"):
+        _digest(value[name], name)
+    _artifact(value["backend_exit_proof"], "backend_exit_proof")
+    _artifact(value["fresh_reconnect_proof"], "fresh_reconnect_proof")
+    _timestamp(value["performed_at"], "performed_at")
+    result = _enum(value["result"], "canary retirement result",
+                   {"PASS", "FAIL", "INCOMPLETE"})
+    _state(value["state"], catalog)
+    expected = {"PASS": "PASS", "FAIL": "FAIL", "INCOMPLETE": "INCONCLUSIVE"}[result]
+    if value["state"]["technical_result"] != expected or \
+            (result == "PASS" and not aggregate_pass(value["state"])):
+        raise ContractError("canary retirement result and state disagree")
+
+
+def _validate_canary_validation(value: dict[str, Any], catalog: dict[str, Any]) -> None:
+    _scope_ref(value); _string(value["canary_id"], "canary_id")
+    for name in ("plan_sha256", "run_sha256", "retirement_sha256"):
+        _digest(value[name], name)
+    _timestamp(value["checked_at"], "checked_at")
+    result = _enum(value["result"], "canary validation result", {"PASS", "FAIL"})
+    decision = _enum(value["decision"], "canary validation decision",
+                     {"ELIGIBLE_FOR_HUMAN_GRANT", "REFUSED"})
+    _exact_sequence(value["checks"], CANARY_CHECKS, "canary checks")
+    limitations = set(_identifier_array(value["limitations"], "canary limitations", True))
+    if limitations != CANARY_LIMITATIONS:
+        raise ContractError("canary limitations are incomplete")
+    if (result == "PASS") != (decision == "ELIGIBLE_FOR_HUMAN_GRANT"):
+        raise ContractError("canary validation result and decision disagree")
+
+
+def _validate_canary(value: dict[str, Any], catalog: dict[str, Any]) -> None:
+    _scope_ref(value); _string(value["canary_id"], "canary_id")
+    for name in ("plan_sha256", "run_sha256", "retirement_sha256", "validation_sha256"):
+        _digest(value[name], name)
+    result = _enum(value["result"], "canary result", {"PASS", "FAIL", "NOT_RUN"})
+    eligibility = _enum(value["eligibility"], "canary eligibility",
+                        {"ELIGIBLE_FOR_HUMAN_GRANT", "REFUSED"})
+    limitations = set(_identifier_array(value["limitations"], "canary limitations", True))
+    if limitations != CANARY_LIMITATIONS:
+        raise ContractError("canary limitations are incomplete")
+    _state(value["state"], catalog)
+    if ((result == "PASS") != (eligibility == "ELIGIBLE_FOR_HUMAN_GRANT") or
+            (result == "PASS" and not aggregate_pass(value["state"]))):
+        raise ContractError("canary result, eligibility and state disagree")
 
 
 def _validate_index(value: dict[str, Any], catalog: dict[str, Any]) -> None:
