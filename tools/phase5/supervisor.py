@@ -36,6 +36,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--prepared")
     p.add_argument("--deadline-ms", required=True, type=positive_int)
     p.add_argument("--cancel-grace-ms", required=True, type=positive_int)
+    p.add_argument("--cancel-deadline-ms", required=True, type=positive_int)
     p.add_argument("--max-address-space-kib", required=True, type=positive_int)
     p.add_argument("--max-output-bytes", required=True, type=positive_int)
     for name in ("rows", "bytes", "columns", "field-bytes", "spool-bytes", "messages"):
@@ -70,6 +71,7 @@ def main() -> int:
         "--sql-file", str(args.sql_file), "--spool", str(args.spool),
         "--snapshot", str(args.snapshot),
         "--protocol", args.protocol, "--deadline-ms", str(args.deadline_ms),
+        "--cancel-deadline-ms", str(args.cancel_deadline_ms),
         "--session-mode", args.session_mode,
         "--max-rows", str(args.max_rows), "--max-bytes", str(args.max_bytes),
         "--max-columns", str(args.max_columns),
@@ -98,7 +100,8 @@ def main() -> int:
     captured = bytearray()
     counts = {"stdout": 0, "stderr": 0}
     forced = None
-    hard_deadline = time.monotonic() + (args.deadline_ms + args.cancel_grace_ms) / 1000
+    hard_deadline = time.monotonic() + (
+        5 * args.deadline_ms + args.cancel_deadline_ms + args.cancel_grace_ms) / 1000
     while (selector.get_map() or proc.poll() is None) and time.monotonic() < hard_deadline:
         ready = selector.select(timeout=0.02) if selector.get_map() else ()
         for key, _ in ready:
@@ -171,7 +174,8 @@ def main() -> int:
                     isinstance(candidate.get("sqlstate"), str) and
                     len(candidate["sqlstate"]) in (0, 5) and
                     isinstance(candidate.get("cancel_attempted"), bool) and
-                    isinstance(candidate.get("cancel_succeeded"), bool)):
+                    isinstance(candidate.get("cancel_succeeded"), bool) and
+                    isinstance(candidate.get("cancel_timed_out"), bool)):
                 terminal = candidate
             else:
                 terminal = {"terminal_state": "INVALID_DRIVER_OUTPUT",

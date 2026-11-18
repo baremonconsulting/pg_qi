@@ -7,6 +7,7 @@ import os
 import tempfile
 import unittest
 import sys
+from contextlib import contextmanager
 from unittest import mock
 from pathlib import Path
 
@@ -15,6 +16,16 @@ sys.path.insert(0, str(ROOT))
 
 from tools.phase5.pilot_runtime import (AuditedSession, PreparedRegistry,
                                         SequenceJournal, encode_frame, read_frame)
+
+
+class TestAdmissionController:
+    """Explicit unit-test gate; production callers cannot omit admission."""
+    @contextmanager
+    def admission(self):
+        yield
+    def intent_started(self, _sequence): pass
+    def intent_finished(self, _sequence): pass
+    def journal_failed(self): pass
 
 
 class JournalTests(unittest.TestCase):
@@ -114,7 +125,8 @@ class FramedSessionTests(unittest.TestCase):
             driver = Path(sys.executable).resolve()
             journal = SequenceJournal(root)
             session = AuditedSession(driver, journal, [str(fixture)], {"case_a": "a" * 64},
-                                     hashlib.sha256(driver.read_bytes()).hexdigest())
+                                     hashlib.sha256(driver.read_bytes()).hexdigest(),
+                                     TestAdmissionController())
             response = session.dispatch("case_a")
             session.close(); journal.close()
             self.assertEqual(response["state"], "COMPLETE")
@@ -133,7 +145,8 @@ class FramedSessionTests(unittest.TestCase):
             driver = Path(sys.executable).resolve()
             journal = SequenceJournal(root)
             session = AuditedSession(driver, journal, [str(fixture), "disconnect"], {"case_a": "a" * 64},
-                                     hashlib.sha256(driver.read_bytes()).hexdigest())
+                                     hashlib.sha256(driver.read_bytes()).hexdigest(),
+                                     TestAdmissionController())
             with self.assertRaisesRegex(RuntimeError, "will not be replayed"):
                 session.dispatch("case_a")
             with self.assertRaises(ValueError):
@@ -151,7 +164,8 @@ class FramedSessionTests(unittest.TestCase):
             driver = Path(sys.executable).resolve()
             journal = SequenceJournal(root)
             session = AuditedSession(driver, journal, [str(fixture), "mismatch"], {"case_a": "a" * 64},
-                                     hashlib.sha256(driver.read_bytes()).hexdigest())
+                                     hashlib.sha256(driver.read_bytes()).hexdigest(),
+                                     TestAdmissionController())
             with self.assertRaises(RuntimeError):
                 session.dispatch("case_a")
             journal.close()
@@ -164,7 +178,8 @@ class FramedSessionTests(unittest.TestCase):
             journal = SequenceJournal(root)
             session = AuditedSession(driver, journal, [str(fixture)],
                                      {"safe": "a" * 64},
-                                     hashlib.sha256(driver.read_bytes()).hexdigest())
+                                     hashlib.sha256(driver.read_bytes()).hexdigest(),
+                                     TestAdmissionController())
             with self.assertRaises(ValueError):
                 session.dispatch("pg_terminate_backend")
             session.close(); journal.close()
@@ -177,7 +192,8 @@ class FramedSessionTests(unittest.TestCase):
             journal = SequenceJournal(root)
             session = AuditedSession(Path(sys.executable).resolve(), journal,
                 [str(fixture)], {"case_a": "a" * 64, "case_b": "b" * 64},
-                hashlib.sha256(Path(sys.executable).resolve().read_bytes()).hexdigest())
+                hashlib.sha256(Path(sys.executable).resolve().read_bytes()).hexdigest(),
+                TestAdmissionController())
             session.prepare("a", "case_a")
             session.prepare("b", "case_b")
             session.execute_prepared("a")

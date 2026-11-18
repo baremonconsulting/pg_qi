@@ -118,7 +118,8 @@ def require_case(cases: dict[str, dict], name: str, state: str, reason: str,
     if sqlstate is not None and terminal.get("sqlstate") != sqlstate:
         raise ValueError(f"{name}: incorrect SQLSTATE")
     if cancel is not None and (terminal.get("cancel_attempted") is not cancel or
-                               terminal.get("cancel_succeeded") is not cancel):
+                               terminal.get("cancel_succeeded") is not cancel or
+                               terminal.get("cancel_timed_out") is not False):
         raise ValueError(f"{name}: incorrect cancel evidence")
 
 
@@ -134,6 +135,18 @@ def atomic_write(path: Path, data: bytes) -> None:
 def verify(root: Path) -> dict:
     cases = {p.stem: load_json(p) for p in root.glob("*.json")
              if p.name not in {"summary.json", "verification.json"}}
+    cancel_blackhole = load_json(root / "cancel-blackhole.terminal")
+    if (cancel_blackhole.get("terminal_state") != "FAILED" or
+            cancel_blackhole.get("reason") != "query_deadline" or
+            cancel_blackhole.get("cancel_attempted") is not True or
+            cancel_blackhole.get("cancel_timed_out") is not True):
+        raise ValueError("cancel blackhole is not bounded truthfully")
+    blackhole_retirement = dict(line.split("\t", 1) for line in
+        (root / "cancel-blackhole-retirement.tsv").read_text().splitlines())
+    if blackhole_retirement != {"driver_retirement_state": "UNKNOWN",
+                                "observer_cluster_start_unchanged": "true",
+                                "observer_exact_backend_absent": "true"}:
+        raise ValueError("cancel blackhole retirement evidence is invalid")
     for name in ("extended_literal", "prepared_literal", "simple_literal"):
         require_case(cases, name, "COMPLETE", "ok", 1000)
         verify_literal(root / f"{name}.spool", 1000)

@@ -29,6 +29,13 @@ mkdir -m 700 "$socket" "$source_copy"
 git -C "$repo" archive HEAD | tar -x -C "$source_copy"
 make -C "$source_copy" PG_CONFIG="$pg_config" -j2 >/dev/null
 make -C "$repo/tools/phase5" PG_CONFIG="$pg_config" clean all >/dev/null
+make -C "$repo/tools/phase5" PG_CONFIG="$pg_config" protocol-driver-fault >/dev/null
+if grep -a -F -q PGQI5_CANCEL_BLACKHOLE "$repo/tools/phase5/protocol-driver" ||
+   grep -a -F -q PGQI5_CANCEL_BLACKHOLE "$repo/tools/phase5/audited-session-driver"; then
+  echo "production driver contains a test fault point" >&2
+  exit 1
+fi
+grep -a -F -q PGQI5_CANCEL_BLACKHOLE "$repo/tools/phase5/protocol-driver-fault"
 
 "$pg_bindir/initdb" -D "$data" --no-locale --encoding=UTF8 --auth=trust >/dev/null
 printf '%s\n' \
@@ -71,6 +78,7 @@ chmod 600 "$audited_cases/utility_no_plan.sql"
 PYTHONPATH="$repo" python3 - "$repo" "$conninfo application_name=pgqi_p5_audited" "$audited_cases" "$audited_out" "$pg_bindir/psql" "$conninfo" <<'PY'
 import hashlib, json, pathlib, subprocess, sys
 from tools.phase5.pilot_runtime import AuditedSession, SequenceJournal
+from tools.phase5.control_runtime import DispatchStopped, PilotControlRuntime, ResourcePolicy
 repo, conninfo, cases, output, psql, fixture_conninfo = pathlib.Path(sys.argv[1]), sys.argv[2], pathlib.Path(sys.argv[3]), pathlib.Path(sys.argv[4]), sys.argv[5], sys.argv[6]
 digests = {name: hashlib.sha256((cases / f"{name}.sql").read_bytes()).hexdigest()
            for name in ("case_a", "case_b", "planning_error", "planning_error_non42",
@@ -82,12 +90,26 @@ digests["nested_planning"] = hashlib.sha256(
 digests["utility_no_plan"] = hashlib.sha256(
     (cases / "utility_no_plan.sql").read_bytes()).hexdigest()
 journal = SequenceJournal(output)
+scope_sha256 = hashlib.sha256(json.dumps(digests, sort_keys=True,
+    separators=(",", ":")).encode("ascii")).hexdigest()
+resource_policy = ResourcePolicy.parse({"schema_version": 1,
+    "document_type": "resource_policy", "policy_id": "pgqi-p5-lab-policy",
+    "scope_sha256": scope_sha256, "feed_version": 1,
+    "source_id": "local-proc-feed", "interval_ms": 50, "max_age_ms": 500,
+    "stop_overshoot_ms": 50,
+    "limits": {"rss_bytes": 2147483648, "cpu_milliseconds": 3600000,
+               "evidence_bytes": 1073741824, "inflight_requests": 4},
+    "units": {"rss_bytes": "bytes", "cpu_milliseconds": "milliseconds",
+              "evidence_bytes": "bytes", "inflight_requests": "count"}})
+control = PilotControlRuntime(journal, resource_policy, output); control.start()
 args = ["--conninfo", conninfo, "--case-root", str(cases), "--output-root", str(output),
-        "--session-mode", "lab_allowlist", "--deadline-ms", "8000", "--max-requests", "24",
+        "--session-mode", "lab_allowlist", "--deadline-ms", "8000",
+        "--cancel-deadline-ms", "1000", "--max-requests", "24",
         "--max-rows", "2000", "--max-bytes", "1048576", "--max-columns", "4",
         "--max-field-bytes", "1024", "--max-spool-bytes", "2097152", "--max-messages", "2010"]
 session = AuditedSession(repo / "tools/phase5/audited-session-driver", journal, args,
-                         digests, hashlib.sha256((repo / "tools/phase5/audited-session-driver").read_bytes()).hexdigest())
+                         digests, hashlib.sha256((repo / "tools/phase5/audited-session-driver").read_bytes()).hexdigest(),
+                         admission_controller=control.controller)
 first = session.dispatch("case_a")
 utility_no_plan = session.dispatch("utility_no_plan")
 if (utility_no_plan["reason"], utility_no_plan["planning_state"],
@@ -134,7 +156,13 @@ if (first_nested["reason"], first_nested["planning_state"]) != \
 nested_cached_outer = session.execute_prepared("nested")
 if nested_cached_outer["reason"] != "prepared_plan_activity_unattributed":
     raise SystemExit(f"nested planning was falsely attributed: {nested_cached_outer}")
-session.close(); journal.close()
+control.controller.stop("USER_STOP")
+try:
+    session.dispatch("case_a")
+    raise SystemExit("dispatch succeeded after central stop")
+except DispatchStopped:
+    pass
+session.close(); control.close(); journal.close()
 if any(item["state"] != "COMPLETE" for item in
        (first, utility_no_plan, second, cached_a, replanned_a, cached_replanned_a, reprepared_a,
         after_all, after_upper)):
@@ -159,11 +187,14 @@ def failure_session(name, prepared=False, transaction=False, prime_cached=False)
     target = output / f"failure-{name}-{'prepared' if prepared else 'transaction' if transaction else 'direct'}"
     target.mkdir(mode=0o700)
     failure_journal = SequenceJournal(target)
+    failure_control = PilotControlRuntime(failure_journal, resource_policy, target)
+    failure_control.start()
     failure_args = list(args)
     failure_args[failure_args.index(str(output))] = str(target)
     failed = AuditedSession(repo / "tools/phase5/audited-session-driver",
         failure_journal, failure_args, digests,
-        hashlib.sha256((repo / "tools/phase5/audited-session-driver").read_bytes()).hexdigest())
+        hashlib.sha256((repo / "tools/phase5/audited-session-driver").read_bytes()).hexdigest(),
+        admission_controller=failure_control.controller)
     if transaction:
         begin = failed.begin()
         if begin["state"] != "COMPLETE": raise SystemExit(begin)
@@ -178,6 +209,7 @@ def failure_session(name, prepared=False, transaction=False, prime_cached=False)
     else:
         result = failed.dispatch(name)
     failed.close()
+    failure_control.close()
     failure_journal.close()
     return result
 
@@ -201,11 +233,14 @@ if (execution_error_42["reason"], execution_error_42["planning_state"],
 target = output / "failure-revalidation-prepared"
 target.mkdir(mode=0o700)
 revalidation_journal = SequenceJournal(target)
+revalidation_control = PilotControlRuntime(revalidation_journal, resource_policy, target)
+revalidation_control.start()
 revalidation_args = list(args)
 revalidation_args[revalidation_args.index(str(output))] = str(target)
 revalidation = AuditedSession(repo / "tools/phase5/audited-session-driver",
     revalidation_journal, revalidation_args, digests,
-    hashlib.sha256((repo / "tools/phase5/audited-session-driver").read_bytes()).hexdigest())
+    hashlib.sha256((repo / "tools/phase5/audited-session-driver").read_bytes()).hexdigest(),
+    admission_controller=revalidation_control.controller)
 if revalidation.prepare("revalidation", "revalidation_error")["state"] != "COMPLETE":
     raise SystemExit("revalidation prepare failed")
 if revalidation.execute_prepared("revalidation")["state"] != "COMPLETE":
@@ -214,7 +249,7 @@ subprocess.run([psql, fixture_conninfo, "-X", "-v", "ON_ERROR_STOP=1", "-c",
                 "ALTER TABLE p5_revalidation ALTER COLUMN value TYPE bigint"], check=True,
                stdout=subprocess.DEVNULL)
 revalidation_error = revalidation.execute_prepared("revalidation")
-revalidation.close(); revalidation_journal.close()
+revalidation.close(); revalidation_control.close(); revalidation_journal.close()
 if (revalidation_error["reason"], revalidation_error["planning_state"],
         revalidation_error["execution_state"], revalidation_error["snapshot_state"]) != \
         ("prepared_error_unattributed", "UNAVAILABLE", "UNAVAILABLE", "COMPLETE"):
@@ -267,12 +302,14 @@ python3 "$repo/tools/phase5/supervisor.py" \
   --spool "$corpus_out/raw/baseline.spool" \
   --snapshot "$corpus_out/raw/baseline.snapshot.tsv" \
   --protocol extended --session-mode native_baseline \
-  --deadline-ms 8000 --cancel-grace-ms 1000 \
+  --deadline-ms 8000 --cancel-deadline-ms 1000 --cancel-grace-ms 1000 \
   --max-address-space-kib 65536 --max-output-bytes 65536 \
   --max-rows 2000 --max-bytes 1048576 --max-columns 4 \
   --max-field-bytes 1024 --max-spool-bytes 2097152 \
   --max-messages 2010 >"$corpus_out/baseline-terminal.json"
-cp "$audited_out/00000000000000000001-case_a.spool" "$corpus_out/raw/observed.spool"
+first_case_a=$(find "$audited_out" -maxdepth 1 -type f -name '*-case_a.spool' -print | sort | head -1)
+test -n "$first_case_a"
+cp "$first_case_a" "$corpus_out/raw/observed.spool"
 chmod 600 "$corpus_out/raw/observed.spool"
 python3 - "$corpus_out" "$pg_bindir/psql" "$baseline_conninfo" <<'PY'
 import hashlib, json, os, pathlib, subprocess, sys
@@ -329,7 +366,7 @@ run_case() {
     --conninfo "$conninfo" --sql-file "$repo/tests/phase5/sql/$sql" \
     --spool "$out/$name.spool" --snapshot "$out/$name.snapshot.tsv" \
     --protocol "$protocol" --session-mode "$session_mode" \
-    --deadline-ms 8000 --cancel-grace-ms 1000 \
+    --deadline-ms 8000 --cancel-deadline-ms 1000 --cancel-grace-ms 1000 \
     --max-address-space-kib 65536 --max-output-bytes 65536 \
     --max-rows 1300000 --max-bytes 125829120 --max-columns 16 \
     --max-field-bytes 1048576 --max-spool-bytes 134217728 \
@@ -369,6 +406,63 @@ run_case spool_limit extended large.sql LIMIT_EXCEEDED off --max-spool-bytes 412
 run_case query_deadline extended slow.sql FAILED off --deadline-ms 250
 run_case multiple_simple simple multiple-simple.sql FAILED off
 
+# A blocked libpq cancel must be bounded by the driver's own cancel deadline.
+cancel_blackhole_start=$(date +%s%3N)
+blackhole_app="pgqi_cancel_blackhole_$port"
+set +e
+PGQI5_CANCEL_BLACKHOLE=1 timeout 3s "$repo/tools/phase5/protocol-driver-fault" \
+  --conninfo "$conninfo application_name=$blackhole_app" --sql-file "$repo/tests/phase5/sql/slow.sql" \
+  --spool "$out/cancel-blackhole.spool" --snapshot "$out/cancel-blackhole.snapshot.tsv" \
+  --protocol extended --session-mode off --deadline-ms 100 --cancel-deadline-ms 100 \
+  --max-rows 10 --max-bytes 1024 --max-columns 2 --max-field-bytes 128 \
+  --max-spool-bytes 2048 --max-messages 20 >"$out/cancel-blackhole.terminal"
+cancel_blackhole_rc=$?
+set -e
+cancel_blackhole_elapsed=$(( $(date +%s%3N) - cancel_blackhole_start ))
+test "$cancel_blackhole_rc" -eq 1
+test "$cancel_blackhole_elapsed" -lt 2500
+python3 - "$out/cancel-blackhole.terminal" "$cancel_blackhole_elapsed" <<'PY'
+import json, pathlib, sys
+terminal = json.loads(pathlib.Path(sys.argv[1]).read_text())
+if terminal.get("reason") != "query_deadline":
+    raise SystemExit(f"unexpected cancel-blackhole reason: {terminal}")
+if terminal.get("cancel_attempted") is not True or terminal.get("cancel_timed_out") is not True:
+    raise SystemExit(f"cancel blackhole was not bounded truthfully: {terminal}")
+pathlib.Path(sys.argv[1]).with_suffix(".timing.tsv").write_text(
+    f"elapsed_ms\t{sys.argv[2]}\ninternal_cancel_deadline_ms\t100\n", encoding="utf-8")
+PY
+
+# The client result remains UNKNOWN until an authorised observer proves exact
+# backend absence. application_name discovers candidates; PID plus backend_start
+# is the only identity used for the targeted cleanup and absence observation.
+blackhole_identity=$("$pg_bindir/psql" "$conninfo" -X -At -F $'\t' -v ON_ERROR_STOP=1 \
+  -v target_app="$blackhole_app" \
+  -c "SELECT a.pid, a.backend_start, c.system_identifier, pg_postmaster_start_time() FROM pg_stat_activity AS a CROSS JOIN pg_control_system() AS c WHERE a.application_name = :'target_app' AND a.state = 'active'")
+test -n "$blackhole_identity"
+test "$(printf '%s\n' "$blackhole_identity" | wc -l)" -eq 1
+printf 'driver_retirement_state\tUNKNOWN\n' >"$out/cancel-blackhole-retirement.tsv"
+IFS=$'\t' read -r blackhole_pid blackhole_start blackhole_cluster blackhole_postmaster_start <<<"$blackhole_identity"
+"$pg_bindir/psql" "$conninfo" -X -At -v ON_ERROR_STOP=1 \
+  -v target_pid="$blackhole_pid" -v target_start="$blackhole_start" \
+  -c "SELECT pg_cancel_backend(pid) FROM pg_stat_activity WHERE pid = :'target_pid'::integer AND backend_start = :'target_start'::timestamptz" >/dev/null
+blackhole_active=1
+for _ in $(seq 1 80); do
+  blackhole_active=$("$pg_bindir/psql" "$conninfo" -X -At -v ON_ERROR_STOP=1 \
+    -v target_pid="$blackhole_pid" -v target_start="$blackhole_start" \
+    -c "SELECT count(*) FROM pg_stat_activity WHERE pid = :'target_pid'::integer AND backend_start = :'target_start'::timestamptz")
+  test "$blackhole_active" = 0 && break
+  sleep 0.05
+done
+test "$blackhole_active" = 0
+current_cluster=$("$pg_bindir/psql" "$conninfo" -X -At -v ON_ERROR_STOP=1 \
+  -c "SELECT system_identifier FROM pg_control_system()")
+current_postmaster_start=$("$pg_bindir/psql" "$conninfo" -X -At -v ON_ERROR_STOP=1 \
+  -c "SELECT pg_postmaster_start_time()")
+test "$current_cluster" = "$blackhole_cluster"
+test "$current_postmaster_start" = "$blackhole_postmaster_start"
+printf 'observer_cluster_start_unchanged\ttrue\nobserver_exact_backend_absent\ttrue\n' \
+  >>"$out/cancel-blackhole-retirement.tsv"
+
 for mode in custom generic; do
   "$pg_bindir/psql" "$conninfo" -X -At \
     -f "$repo/tests/phase5/sql/parameter-$mode.psql" \
@@ -398,7 +492,7 @@ python3 "$repo/tools/phase5/supervisor.py" \
   --conninfo "host=$stall_dir port=$port dbname=postgres user=$(id -un)" \
   --sql-file "$repo/tests/phase5/sql/literal.sql" \
   --spool "$out/connect-failure.spool" --snapshot "$out/connect-failure.snapshot.tsv" \
-  --protocol extended --session-mode off --deadline-ms 250 --cancel-grace-ms 250 \
+  --protocol extended --session-mode off --deadline-ms 250 --cancel-deadline-ms 100 --cancel-grace-ms 250 \
   --max-address-space-kib 65536 --max-output-bytes 65536 \
   --max-rows 10 --max-bytes 1024 --max-columns 2 --max-field-bytes 128 \
   --max-spool-bytes 2048 --max-messages 20 >"$out/connect-failure.json"
@@ -410,7 +504,7 @@ python3 "$repo/tools/phase5/supervisor.py" \
   --driver "$repo/tests/phase5/fixtures/hang-driver.sh" --run-root "$out" \
   --conninfo unused --sql-file "$repo/tests/phase5/sql/literal.sql" \
   --spool "$out/supervisor-hang.spool" --snapshot "$out/supervisor-hang.snapshot.tsv" \
-  --protocol extended --session-mode off --deadline-ms 100 --cancel-grace-ms 100 \
+  --protocol extended --session-mode off --deadline-ms 100 --cancel-deadline-ms 100 --cancel-grace-ms 100 \
   --max-address-space-kib 65536 --max-output-bytes 65536 \
   --max-rows 10 --max-bytes 1024 --max-columns 2 --max-field-bytes 128 \
   --max-spool-bytes 2048 --max-messages 20 >"$out/supervisor-hang.json"

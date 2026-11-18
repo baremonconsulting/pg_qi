@@ -6,17 +6,22 @@
 #include <limits.h>
 #include <poll.h>
 #include <stdint.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/wait.h>
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
 
 typedef struct {
     uint64_t rows, bytes, spool_bytes, messages;
     uint64_t max_rows, max_bytes, max_spool, max_messages;
     size_t max_columns, max_field;
-    int cancel_attempted, cancel_succeeded;
+    int cancel_attempted, cancel_succeeded, cancel_timed_out;
 } Limits;
 
 static int64_t now_ms(void) {
@@ -30,13 +35,15 @@ static void terminal(const char *state, const char *reason, const Limits *l,
     printf("{\"terminal_state\":\"%s\",\"reason\":\"%s\","
            "\"sqlstate\":\"%s\",\"rows\":%llu,\"bytes\":%llu,"
            "\"spool_bytes\":%llu,\"messages\":%llu,"
-           "\"cancel_attempted\":%s,\"cancel_succeeded\":%s}\n",
+           "\"cancel_attempted\":%s,\"cancel_succeeded\":%s,"
+           "\"cancel_timed_out\":%s}\n",
            state, reason, sqlstate ? sqlstate : "",
            (unsigned long long)l->rows, (unsigned long long)l->bytes,
            (unsigned long long)l->spool_bytes,
            (unsigned long long)l->messages,
            l->cancel_attempted ? "true" : "false",
-           l->cancel_succeeded ? "true" : "false");
+           l->cancel_succeeded ? "true" : "false",
+           l->cancel_timed_out ? "true" : "false");
     fflush(stdout);
 }
 
@@ -275,16 +282,20 @@ done:
     return success;
 }
 
+static int wait_result_ready(PGconn *c, int64_t deadline) {
+    while (PQisBusy(c)) {
+        int ready = wait_socket(c, POLLIN, deadline);
+        if (ready == 0 || now_ms() >= deadline) return 0;
+        if (ready > 0 && !PQconsumeInput(c)) return 0;
+    }
+    return 1;
+}
+
 static char *show_scalar(PGconn *c, const char *name, int64_t deadline) {
     char sql[128]; PGresult *r; char *copy = NULL;
     if (snprintf(sql, sizeof(sql), "SHOW %s", name) >= (int)sizeof(sql)) return NULL;
     if (!PQsendQueryParams(c, sql, 0, NULL, NULL, NULL, NULL, 0) ||
-        !flush_bounded(c, deadline)) return NULL;
-    while (PQisBusy(c)) {
-        int ready = wait_socket(c, POLLIN, deadline);
-        if (ready == 0 || now_ms() >= deadline) return NULL;
-        if (ready > 0 && !PQconsumeInput(c)) return NULL;
-    }
+        !flush_bounded(c, deadline) || !wait_result_ready(c, deadline)) return NULL;
     r = PQgetResult(c);
     if (!r || PQresultStatus(r) != PGRES_TUPLES_OK || PQntuples(r) != 1 ||
         PQnfields(r) != 1 || PQgetisnull(r, 0, 0)) {
@@ -293,49 +304,66 @@ static char *show_scalar(PGconn *c, const char *name, int64_t deadline) {
     }
     copy = strdup(PQgetvalue(r, 0, 0));
     PQclear(r);
+    if (!wait_result_ready(c, deadline)) { free(copy); return NULL; }
     if ((r = PQgetResult(c)) != NULL) { PQclear(r); free(copy); return NULL; }
     return copy;
 }
 
-static int configure_session(PGconn *c, const char *mode) {
-    PGresult *r; const char *sql;
+static char *query_scalar(PGconn *c, const char *sql, int64_t deadline) {
+    PGresult *r; char *copy = NULL;
+    if (!PQsendQueryParams(c, sql, 0, NULL, NULL, NULL, NULL, 0) ||
+        !flush_bounded(c, deadline)) return NULL;
+    if (!wait_result_ready(c, deadline)) return NULL;
+    r = PQgetResult(c);
+    if (!r || PQresultStatus(r) != PGRES_TUPLES_OK || PQntuples(r) != 1 ||
+        PQnfields(r) != 1 || PQgetisnull(r, 0, 0)) {
+        if (r) PQclear(r);
+        return NULL;
+    }
+    copy = strdup(PQgetvalue(r, 0, 0)); PQclear(r);
+    if (!wait_result_ready(c, deadline)) { free(copy); return NULL; }
+    if ((r = PQgetResult(c)) != NULL) { PQclear(r); free(copy); return NULL; }
+    return copy;
+}
+
+static int commands_bounded(PGconn *c, const char *sql, int64_t deadline) {
+    PGresult *r; int count = 0;
+    if (!PQsendQuery(c, sql) || !flush_bounded(c, deadline)) return 0;
+    for (;;) {
+        if (!wait_result_ready(c, deadline)) return 0;
+        r = PQgetResult(c);
+        if (!r) break;
+        int ok = PQresultStatus(r) == PGRES_COMMAND_OK;
+        PQclear(r); count++;
+        if (!ok) return 0;
+    }
+    return count > 0;
+}
+
+static int configure_session(PGconn *c, const char *mode, int64_t deadline) {
+    const char *sql;
     const char *preload_names[] = {"shared_preload_libraries",
                                    "session_preload_libraries",
                                    "local_preload_libraries"};
     size_t preload_index;
     if (!strcmp(mode, "native_baseline")) {
-        if (PQsetnonblocking(c, 0) != 0) return 0;
         for (preload_index = 0; preload_index < sizeof(preload_names) / sizeof(preload_names[0]);
              preload_index++) {
-            char check[96];
-            if (snprintf(check, sizeof(check), "SHOW %s", preload_names[preload_index]) >=
-                    (int)sizeof(check)) return 0;
-            r = PQexec(c, check);
-            if (!r || PQresultStatus(r) != PGRES_TUPLES_OK || PQntuples(r) != 1 ||
-                    PQnfields(r) != 1 || PQgetisnull(r, 0, 0) || *PQgetvalue(r, 0, 0)) {
-                if (r) PQclear(r);
-                return 0;
-            }
-            PQclear(r);
+            char *value = show_scalar(c, preload_names[preload_index], deadline);
+            if (!value || *value) { free(value); return 0; }
+            free(value);
         }
-        r = PQexec(c, "SELECT count(*) FROM pg_extension WHERE extname <> 'plpgsql'");
-        if (!r || PQresultStatus(r) != PGRES_TUPLES_OK || PQntuples(r) != 1 ||
-                PQnfields(r) != 1 || strcmp(PQgetvalue(r, 0, 0), "0")) {
-            if (r) PQclear(r);
-            return 0;
+        {
+            char *count = query_scalar(c,
+                "SELECT count(*) FROM pg_extension WHERE extname <> 'plpgsql'", deadline);
+            int ok = count && !strcmp(count, "0"); free(count); return ok;
         }
-        PQclear(r);
-        return PQsetnonblocking(c, 1) == 0;
     } else if (!strcmp(mode, "lab_allowlist"))
         sql = "SET pg_qi.enabled=on; SET pg_qi.routing_mode=allowlist; SET duckdb.force_execution=off";
     else if (!strcmp(mode, "off"))
         sql = "SET pg_qi.routing_mode=off; SET duckdb.force_execution=off";
     else return 0;
-    if (PQsetnonblocking(c, 0) != 0) return 0;
-    r = PQexec(c, sql);
-    if (!r || PQresultStatus(r) != PGRES_COMMAND_OK) { if (r) PQclear(r); return 0; }
-    PQclear(r);
-    return PQsetnonblocking(c, 1) == 0;
+    return commands_bounded(c, sql, deadline);
 }
 
 static int write_native_baseline_snapshot(const char *path) {
@@ -382,18 +410,56 @@ static int write_snapshot(PGconn *c, const char *path, const char *before,
     return 1;
 }
 
-static void cancel_owned_query(PGconn *c, Limits *l) {
-    char error[256]; PGcancel *cancel;
+static void cancel_owned_query(PGconn *c, Limits *l, uint64_t deadline_ms) {
+    PGcancel *cancel; int result_pipe[2] = {-1, -1}; pid_t child; unsigned char result = 0;
+    pid_t parent = getpid();
+    struct pollfd wait_fd; int wait_result; int64_t deadline;
     l->cancel_attempted = 1;
     cancel = PQgetCancel(c);
     if (!cancel) return;
-    l->cancel_succeeded = PQcancel(cancel, error, sizeof(error));
+    if (pipe(result_pipe)) { PQfreeCancel(cancel); return; }
+    child = fork();
+    if (child == 0) {
+        char error[256]; ssize_t written;
+#ifdef __linux__
+        if (prctl(PR_SET_PDEATHSIG, SIGKILL) != 0 || getppid() != parent) _exit(1);
+#endif
+        alarm((unsigned int)((deadline_ms + 999U) / 1000U));
+        close(result_pipe[0]);
+#ifdef PGQI5_FAULTPOINTS
+        if (getenv("PGQI5_CANCEL_BLACKHOLE") != NULL) {
+            for (;;) pause();
+        }
+#endif
+        result = PQcancel(cancel, error, sizeof(error)) ? 1 : 0;
+        written = write(result_pipe[1], &result, 1);
+        (void)written;
+        close(result_pipe[1]); PQfreeCancel(cancel); _exit(0);
+    }
+    close(result_pipe[1]);
+    if (child < 0) { close(result_pipe[0]); PQfreeCancel(cancel); return; }
+    wait_fd.fd = result_pipe[0]; wait_fd.events = POLLIN; wait_fd.revents = 0;
+    deadline = now_ms() + (int64_t)deadline_ms;
+    do {
+        int64_t remaining = deadline - now_ms();
+        if (remaining <= 0) { wait_result = 0; break; }
+        wait_result = poll(&wait_fd, 1, remaining > INT_MAX ? INT_MAX : (int)remaining);
+    } while (wait_result < 0 && errno == EINTR);
+    if (wait_result > 0 && (wait_fd.revents & (POLLIN | POLLHUP)) &&
+            read(result_pipe[0], &result, 1) == 1) {
+        l->cancel_succeeded = result == 1;
+    } else {
+        l->cancel_timed_out = 1;
+        (void)kill(child, SIGKILL);
+    }
+    close(result_pipe[0]);
+    while (waitpid(child, NULL, 0) < 0 && errno == EINTR) { }
     PQfreeCancel(cancel);
 }
 
 static void usage(const char *p) {
     fprintf(stderr, "usage: %s --conninfo STR --sql-file PATH --spool PATH "
-            "--protocol extended|simple --deadline-ms N --max-rows N "
+            "--protocol extended|simple --deadline-ms N --cancel-deadline-ms N --max-rows N "
             "--max-bytes N --max-columns N --max-field-bytes N "
             "--max-spool-bytes N --max-messages N --snapshot PATH "
             "--session-mode off|lab_allowlist|native_baseline [--prepared NAME]\n", p);
@@ -404,7 +470,7 @@ int main(int argc, char **argv) {
     const char *protocol = NULL, *prepared = NULL, *snapshot = NULL;
     const char *session_mode = NULL;
     const char *reason = "invalid_arguments";
-    char sqlstate[6] = ""; uint64_t deadline_ms = 0, v; int i, ok = 0;
+    char sqlstate[6] = ""; uint64_t deadline_ms = 0, cancel_deadline_ms = 0, v; int i, ok = 0;
     Limits l = {0}; char *sql = NULL, *before = NULL; FILE *spool = NULL;
     PGconn *c = NULL; int64_t query_deadline;
     for (i = 1; i < argc; i++) {
@@ -420,6 +486,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(option, "--session-mode")) session_mode = value;
         else if (!strcmp(option, "--deadline-ms") &&
                  parse_u64(value, 3600000, &v)) deadline_ms = v;
+        else if (!strcmp(option, "--cancel-deadline-ms") &&
+                 parse_u64(value, 60000, &v)) cancel_deadline_ms = v;
         else if (!strcmp(option, "--max-rows") &&
                  parse_u64(value, UINT32_MAX, &v)) l.max_rows = v;
         else if (!strcmp(option, "--max-bytes") &&
@@ -435,7 +503,7 @@ int main(int argc, char **argv) {
         else { usage(argv[0]); return 64; }
     }
     if (!conninfo || !sql_path || !spool_path || !snapshot || !protocol ||
-        !session_mode || !deadline_ms ||
+        !session_mode || !deadline_ms || !cancel_deadline_ms ||
         !l.max_rows || !l.max_bytes || !l.max_columns || !l.max_field ||
         !l.max_spool || !l.max_messages ||
         (strcmp(protocol, "extended") && strcmp(protocol, "simple"))) {
@@ -448,7 +516,7 @@ int main(int argc, char **argv) {
     if (!spool) { terminal("REFUSED", "spool_open", &l, NULL); goto done; }
     c = connect_bounded(conninfo, now_ms() + (int64_t)deadline_ms);
     if (!c) { terminal("FAILED", "connect_deadline_or_error", &l, NULL); goto done; }
-    if (!configure_session(c, session_mode) ||
+    if (!configure_session(c, session_mode, now_ms() + (int64_t)deadline_ms) ||
         (!(before = !strcmp(session_mode, "native_baseline") ? strdup("0") :
           show_scalar(c, "pg_qi.shadow_decision_id",
                       now_ms() + (int64_t)deadline_ms)))) {
@@ -461,7 +529,7 @@ int main(int argc, char **argv) {
     }
     if (!stream(c, spool, &l, query_deadline, &reason, sqlstate)) {
         if (!strncmp(reason, "max_", 4) || !strcmp(reason, "query_deadline"))
-            cancel_owned_query(c, &l);
+            cancel_owned_query(c, &l, cancel_deadline_ms);
         terminal(!strncmp(reason, "max_", 4) ? "LIMIT_EXCEEDED" : "FAILED",
                  reason, &l, sqlstate[0] ? sqlstate : NULL); goto done;
     }

@@ -20,7 +20,9 @@ while True:
     if mode == "disconnect": raise SystemExit(9)
     response = {"sequence": payload["sequence"], "state": "COMPLETE",
         "planning_state": "COMPLETE", "execution_state": "COMPLETE",
-        "snapshot_state": "COMPLETE", "reason": "ok"}
+        "snapshot_state": "COMPLETE", "reason": "ok",
+        "cancel_attempted": False, "cancel_succeeded": False,
+        "cancel_timed_out": False}
     if mode == "mismatch": response["sequence"] += 1
     encoded = bytes((1, opcode)) + json.dumps(response, sort_keys=True,
         separators=(",", ":")).encode("ascii")

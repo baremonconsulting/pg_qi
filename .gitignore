@@ -25,6 +25,7 @@ cmake-build-*/
 compile_commands.json
 __pycache__/
 tools/phase5/protocol-driver
+tools/phase5/protocol-driver-fault
 tools/phase5/site-preflight-driver
 tools/phase5/audited-session-driver
 

@@ -49,12 +49,16 @@ static int exact_read(void *buffer, size_t length) {
 static int frame_reply(unsigned int opcode, unsigned long long sequence,
                        const char *state, const char *planning,
                        const char *execution, const char *snapshot,
-                       const char *reason) {
+                       const char *reason, const Limits *limits) {
     char json[512]; unsigned char header[6]; int n;
     n = snprintf(json, sizeof(json),
-        "{\"execution_state\":\"%s\",\"planning_state\":\"%s\","
+        "{\"cancel_attempted\":%s,\"cancel_succeeded\":%s,"
+        "\"cancel_timed_out\":%s,\"execution_state\":\"%s\",\"planning_state\":\"%s\","
         "\"reason\":\"%s\",\"sequence\":%llu,\"snapshot_state\":\"%s\","
-        "\"state\":\"%s\"}", execution, planning, reason, sequence, snapshot, state);
+        "\"state\":\"%s\"}", limits->cancel_attempted ? "true" : "false",
+        limits->cancel_succeeded ? "true" : "false",
+        limits->cancel_timed_out ? "true" : "false",
+        execution, planning, reason, sequence, snapshot, state);
     if (n < 0 || (size_t)n >= sizeof(json)) return 0;
     header[0] = (unsigned char)(((unsigned int)n + 2) >> 24);
     header[1] = (unsigned char)(((unsigned int)n + 2) >> 16);
@@ -170,7 +174,7 @@ int main(int argc, char **argv) {
     const char *conninfo = NULL, *case_root = NULL, *output_root = NULL;
     char conninfo_buffer[8193]; int conninfo_fd = -1;
     const char *mode = NULL; PGconn *conn = NULL; int i, case_fd = -1, output_fd = -1;
-    uint64_t deadline_ms = 0, max_requests = 0, request_count = 0, value;
+    uint64_t deadline_ms = 0, cancel_deadline_ms = 0, max_requests = 0, request_count = 0, value;
     Limits base = {0};
     PlanSlot plans[MAX_PREPARED];
     memset(plans, 0, sizeof(plans));
@@ -181,6 +185,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--output-root")) output_root = argv[i + 1];
         else if (!strcmp(argv[i], "--session-mode")) mode = argv[i + 1];
         else if (!strcmp(argv[i], "--deadline-ms") && parse_u64(argv[i+1], 3600000, &value)) deadline_ms=value;
+        else if (!strcmp(argv[i], "--cancel-deadline-ms") && parse_u64(argv[i+1], 60000, &value)) cancel_deadline_ms=value;
         else if (!strcmp(argv[i], "--max-requests") && parse_u64(argv[i+1], 100000, &value)) max_requests=value;
         else if (!strcmp(argv[i], "--max-rows") && parse_u64(argv[i+1], UINT32_MAX, &value)) base.max_rows=value;
         else if (!strcmp(argv[i], "--max-bytes") && parse_u64(argv[i+1], INT64_MAX, &value)) base.max_bytes=value;
@@ -196,7 +201,7 @@ int main(int argc, char **argv) {
         conninfo_buffer[count] = 0; conninfo = conninfo_buffer;
         close(conninfo_fd);
     }
-    if (i != argc || !conninfo || !case_root || !output_root || !mode || !deadline_ms || !max_requests ||
+    if (i != argc || !conninfo || !case_root || !output_root || !mode || !deadline_ms || !cancel_deadline_ms || !max_requests ||
         !base.max_rows || !base.max_bytes || !base.max_columns || !base.max_field ||
         !base.max_spool || !base.max_messages) return 64;
     case_fd = open_private_directory(case_root);
@@ -207,25 +212,14 @@ int main(int argc, char **argv) {
         return 64;
     }
     conn = connect_bounded(conninfo, now_ms() + (int64_t)deadline_ms);
-    if (!conn || !configure_session(conn, mode)) {
+    if (!conn || !configure_session(conn, mode, now_ms() + (int64_t)deadline_ms)) {
         if (conn) PQfinish(conn);
         close(output_fd); close(case_fd);
         return 1;
     }
-    {
-        PGresult *readonly;
-        if (PQsetnonblocking(conn, 0) != 0) {
-            PQfinish(conn); close(output_fd); close(case_fd); return 1;
-        }
-        readonly = PQexec(conn, "SET default_transaction_read_only=on");
-        if (!readonly || PQresultStatus(readonly) != PGRES_COMMAND_OK) {
-            if (readonly) PQclear(readonly);
-            PQfinish(conn); close(output_fd); close(case_fd); return 1;
-        }
-        PQclear(readonly);
-        if (PQsetnonblocking(conn, 1) != 0) {
-            PQfinish(conn); close(output_fd); close(case_fd); return 1;
-        }
+    if (!commands_bounded(conn, "SET default_transaction_read_only=on",
+                          now_ms() + (int64_t)deadline_ms)) {
+        PQfinish(conn); close(output_fd); close(case_fd); return 1;
     }
     for (;;) {
         unsigned char header[4], *body = NULL; uint32_t length; unsigned int opcode;
@@ -262,7 +256,7 @@ int main(int argc, char **argv) {
             if (!frame_reply(opcode, sequence, ok ? "COMPLETE" : "FAILED",
                     "NOT_RUN", ok ? "COMPLETE" :
                         (!strcmp(reason, "connection_error") ? "INCOMPLETE" : "FAILED"), "NOT_RUN",
-                    ok ? "ok" : reason)) ok = 0;
+                    ok ? "ok" : reason, &limits)) ok = 0;
             if (!ok) break;
             continue;
         }
@@ -302,7 +296,7 @@ int main(int argc, char **argv) {
                      (uncertain ? "INCOMPLETE" : "NOT_RUN"));
                 if (!frame_reply(opcode, sequence, terminal, planning, "NOT_RUN",
                         ok ? "COMPLETE" : "INCOMPLETE",
-                        ok ? "prepared_created" : reason)) ok = 0;
+                        ok ? "prepared_created" : reason, &limits)) ok = 0;
             }
             free(before); free(sql);
             if (!ok) break;
@@ -322,7 +316,7 @@ int main(int argc, char **argv) {
                     (!strcmp(reason, "connection_error") ? "INCOMPLETE" : "FAILED"),
                     "NOT_RUN", ok ? "COMPLETE" :
                     (!strcmp(reason, "connection_error") ? "INCOMPLETE" : "FAILED"), "NOT_RUN",
-                    reason)) ok = 0;
+                    reason, &limits)) ok = 0;
             if (!ok) break;
             continue;
         }
@@ -330,7 +324,7 @@ int main(int argc, char **argv) {
             prepared_slot = plan_index(plans, prepared);
             if (prepared_slot < 0 || plans[prepared_slot].generation != generation) {
                 if (!frame_reply(opcode, sequence, "REFUSED", "NOT_RUN", "NOT_RUN",
-                        "NOT_RUN", "prepared_generation")) break;
+                        "NOT_RUN", "prepared_generation", &limits)) break;
                 continue;
             }
         }
@@ -347,6 +341,8 @@ int main(int argc, char **argv) {
         else {
             execution_state = "INCOMPLETE";
             if (!stream(conn, spool, &limits, now_ms()+(int64_t)deadline_ms, &reason, sqlstate)) {
+                if (!strncmp(reason, "max_", 4) || !strcmp(reason, "query_deadline"))
+                    cancel_owned_query(conn, &limits, cancel_deadline_ms);
                 if (!strcmp(reason, "server_error") ||
                         !strcmp(reason, "server_error_after_partial_stream")) {
                     PGresult *tail;
@@ -454,7 +450,7 @@ int main(int argc, char **argv) {
             }
             if (fsync(output_fd) || !frame_reply(opcode, sequence, terminal,
                     planning_state, execution_state, snapshot_state,
-                    reason)) ok = 0;
+                    reason, &limits)) ok = 0;
         }
         if (spool) fclose(spool);
         free(before);

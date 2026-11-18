@@ -12,6 +12,8 @@ import stat
 import struct
 import subprocess
 import selectors
+import signal
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,7 +22,8 @@ from typing import Any
 IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,62}\Z")
 TERMINAL = frozenset({"COMPLETE", "FAILED", "REFUSED", "INCOMPLETE",
                       "NOT_RUN", "UNAVAILABLE"})
-PHASES = frozenset({"request", "planning", "execution", "snapshot"})
+PHASES = frozenset({"request", "planning", "execution", "snapshot",
+                    "resource", "control", "retirement"})
 FRAME_VERSION = 1
 MAX_FRAME_BYTES = 1024 * 1024
 OP_EXECUTE = 1
@@ -71,8 +74,14 @@ class SequenceJournal:
         self._closed = False
         self._max_records = max_records
         self._max_record_bytes = max_record_bytes
+        self._lock = threading.Lock()
 
     def append(self, phase: str, state: str, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            return self._append_locked(phase, state, payload)
+
+    def _append_locked(self, phase: str, state: str,
+                       payload: dict[str, Any]) -> dict[str, Any]:
         if self._closed or phase not in PHASES or state not in TERMINAL | {"STARTED"}:
             raise ValueError("invalid journal transition")
         if self._sequence >= self._max_records:
@@ -102,11 +111,12 @@ class SequenceJournal:
         return record
 
     def close(self) -> None:
-        if not self._closed:
-            self._stream.close()
-            os.fsync(self._root_fd)
-            os.close(self._root_fd)
-            self._closed = True
+        with self._lock:
+            if not self._closed:
+                self._stream.close()
+                os.fsync(self._root_fd)
+                os.close(self._root_fd)
+                self._closed = True
 
 
 @dataclass(frozen=True)
@@ -251,6 +261,7 @@ class AuditedSession:
     def __init__(self, driver: Path, journal: SequenceJournal,
                  fixed_args: list[str], approved_cases: dict[str, str],
                  expected_driver_sha256: str,
+                 admission_controller: Any,
                  response_timeout_seconds: int = 30,
                  max_address_space_kib: int = 262144) -> None:
         driver_fd = os.open(driver, os.O_RDONLY | os.O_NOFOLLOW)
@@ -268,6 +279,10 @@ class AuditedSession:
         self._response_timeout = response_timeout_seconds
         self._registry = PreparedRegistry()
         self._closed = False
+        if admission_controller is None:
+            os.close(driver_fd)
+            raise ValueError("admission controller is required")
+        self._admission = admission_controller
         child_args = list(fixed_args)
         inherited = [driver_fd]
         conninfo_read = None
@@ -356,51 +371,83 @@ class AuditedSession:
                   intent_payload: dict[str, Any]) -> dict[str, Any]:
         if self._closed:
             raise ValueError("audited session is closed")
+        guard = self._admission.admission()
+        intent = None
         try:
-            intent = self._journal.append("request", "STARTED", intent_payload)
-        except Exception:
-            self._closed = True
-            self._retire_child()
-            raise
-        request = encode_frame(opcode_expected,
-            {**payload, "sequence": intent["sequence"]})
-        try:
-            assert self._proc.stdin is not None and self._proc.stdout is not None
-            self._proc.stdin.write(request); self._proc.stdin.flush()
+            with guard:
+                try:
+                    intent = self._journal.append("request", "STARTED", intent_payload)
+                except Exception:
+                    self._closed = True
+                    if self._admission is not None:
+                        self._admission.journal_failed()
+                    self._retire_child()
+                    raise
+                if self._admission is not None:
+                    self._admission.intent_started(intent["sequence"])
+                request = encode_frame(opcode_expected,
+                    {**payload, "sequence": intent["sequence"]})
+                assert self._proc.stdin is not None
+                self._proc.stdin.write(request); self._proc.stdin.flush()
+            assert self._proc.stdout is not None
             opcode, response = read_frame_deadline(self._proc.stdout,
                                                    self._response_timeout)
             if opcode != opcode_expected or response.get("sequence") != intent["sequence"]:
                 raise ValueError("response correlation mismatch")
             required = {"sequence", "state", "planning_state", "execution_state",
-                        "snapshot_state", "reason"}
+                        "snapshot_state", "reason", "cancel_attempted",
+                        "cancel_succeeded", "cancel_timed_out"}
             if set(response) != required or not all(isinstance(response[key], str)
-                    for key in required - {"sequence"}) or response["state"] not in TERMINAL or \
+                    for key in {"state", "planning_state", "execution_state",
+                                "snapshot_state", "reason"}) or \
+                    not all(isinstance(response[key], bool) for key in
+                            {"cancel_attempted", "cancel_succeeded", "cancel_timed_out"}) or \
+                    response["state"] not in TERMINAL or \
                     response["planning_state"] not in TERMINAL or \
                     response["execution_state"] not in TERMINAL or \
                     response["snapshot_state"] not in TERMINAL:
                 raise ValueError("invalid driver terminal schema")
-        except (BrokenPipeError, EOFError, OSError, TimeoutError, ValueError,
-                RecursionError) as exc:
+        except BaseException as exc:
+            if intent is None:
+                raise
             self._closed = True
             try:
                 self._journal.append("execution", "INCOMPLETE", {
                     "event": "session_lost_after_dispatch", "intent_sequence": intent["sequence"],
                     "error_family": type(exc).__name__})
+            except Exception:
+                if self._admission is not None:
+                    self._admission.journal_failed()
             finally:
+                if self._admission is not None:
+                    self._admission.intent_finished(intent["sequence"])
                 self._retire_child()
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                raise
             raise RuntimeError("audited session lost; request will not be replayed") from exc
         try:
             for phase in ("planning", "execution", "snapshot"):
                 self._journal.append(phase, response[f"{phase}_state"], {
                     "event": "driver_terminal", "intent_sequence": intent["sequence"],
-                    "reason": response["reason"]})
+                    "reason": response["reason"],
+                    "cancel_attempted": response["cancel_attempted"],
+                    "cancel_succeeded": response["cancel_succeeded"],
+                    "cancel_timed_out": response["cancel_timed_out"]})
             self._journal.append("request", response["state"], {
                 "event": "request_terminal", "intent_sequence": intent["sequence"],
-                "reason": response["reason"]})
-        except Exception:
+                "reason": response["reason"],
+                "cancel_attempted": response["cancel_attempted"],
+                "cancel_succeeded": response["cancel_succeeded"],
+                "cancel_timed_out": response["cancel_timed_out"]})
+        except BaseException:
             self._closed = True
+            if self._admission is not None:
+                self._admission.journal_failed()
             self._retire_child()
             raise
+        finally:
+            if self._admission is not None:
+                self._admission.intent_finished(intent["sequence"])
         if response["state"] != "COMPLETE":
             self._closed = True
             self._retire_child()
@@ -408,11 +455,21 @@ class AuditedSession:
 
     def _retire_child(self) -> None:
         if self._proc.poll() is None:
-            self._proc.terminate()
+            try:
+                os.killpg(self._proc.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
             try:
                 self._proc.wait(timeout=1)
             except subprocess.TimeoutExpired:
-                self._proc.kill(); self._proc.wait(timeout=1)
+                try:
+                    os.killpg(self._proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    self._proc.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    pass
         for stream in (self._proc.stdin, self._proc.stdout):
             if stream is not None and not stream.closed:
                 stream.close()

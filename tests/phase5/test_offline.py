@@ -37,7 +37,8 @@ def driver_args(root: Path, sql: Path) -> list[str]:
     return [str(DRIVER), "--conninfo", "host=/definitely/missing",
             "--sql-file", str(sql), "--spool", str(root / "out.spool"),
             "--snapshot", str(root / "out.snapshot"), "--protocol", "extended",
-            "--session-mode", "off", "--deadline-ms", "10", "--max-rows", "10",
+            "--session-mode", "off", "--deadline-ms", "10", "--cancel-deadline-ms", "10",
+            "--max-rows", "10",
             "--max-bytes", "100", "--max-columns", "2", "--max-field-bytes", "50",
             "--max-spool-bytes", "200", "--max-messages", "20"]
 
@@ -83,6 +84,7 @@ class SupervisorTests(unittest.TestCase):
                 "--sql-file", str(sql), "--spool", str(root / "x.spool"),
                 "--snapshot", str(root / "x.snapshot"), "--protocol", "extended",
                 "--session-mode", "off", "--deadline-ms", "100",
+                "--cancel-deadline-ms", "100",
                 "--cancel-grace-ms", "100", "--max-address-space-kib", "65536",
                 "--max-output-bytes", "4096", "--max-rows", "10",
                 "--max-bytes", "100", "--max-columns", "2",
