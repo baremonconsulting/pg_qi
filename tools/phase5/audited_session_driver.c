@@ -228,7 +228,8 @@ int main(int argc, char **argv) {
                     !command_result(conn, now_ms()+(int64_t)deadline_ms, &reason)) { }
             else ok = 1;
             if (!frame_reply(opcode, sequence, ok ? "COMPLETE" : "FAILED",
-                    "NOT_RUN", ok ? "COMPLETE" : "FAILED", "NOT_RUN",
+                    "NOT_RUN", ok ? "COMPLETE" :
+                        (!strcmp(reason, "connection_error") ? "INCOMPLETE" : "FAILED"), "NOT_RUN",
                     ok ? "ok" : reason)) ok = 0;
             if (!ok) break;
             continue;

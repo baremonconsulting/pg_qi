@@ -69,7 +69,7 @@ session = AuditedSession(repo / "tools/phase5/audited-session-driver", journal, 
                          digests, hashlib.sha256((repo / "tools/phase5/audited-session-driver").read_bytes()).hexdigest())
 first = session.dispatch("case_a")
 second = session.dispatch("case_a")
-session.prepare("a", "case_a")
+prepared_a = session.prepare("a", "case_a")
 session.execute_prepared("a")
 session.prepare("b", "case_b")
 session.execute_prepared("b")
@@ -95,9 +95,13 @@ if any(item["state"] != "COMPLETE" for item in
 rows = [json.loads(line) for line in (output / "request.journal.jsonl").read_text().splitlines()]
 if [row["sequence"] for row in rows] != list(range(1, len(rows) + 1)):
     raise SystemExit("journal sequence is not contiguous")
+cached_intents = [row for row in rows if row["payload"].get("event") == "execute_prepared_intent" and
+                  row["payload"].get("prepared") == "a"]
+if not cached_intents or cached_intents[0]["payload"].get("planning_sequence") != prepared_a["sequence"]:
+    raise SystemExit("cached A is not bound to A planning evidence")
 
 def failure_session(name, prepared=False, transaction=False):
-    target = output / f"failure-{name}"
+    target = output / f"failure-{name}-{'prepared' if prepared else 'transaction' if transaction else 'direct'}"
     target.mkdir(mode=0o700)
     failure_journal = SequenceJournal(target)
     failure_args = list(args)

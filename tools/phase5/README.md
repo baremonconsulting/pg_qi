@@ -35,11 +35,13 @@ only when the terminal state is `COMPLETE` and the offline verifier passes.
 
 `audited-session-driver` and `pilot_runtime.py` are the separate P5-3A path.
 The coordinator synchronises a hash-chained dispatch intent before sending a
-bounded versioned frame. The C/libpq process holds one connection, accepts only
-execute and close opcodes, resolves an immutable case identifier under a
+bounded versioned frame. The C/libpq process holds one connection and accepts
+only execute, prepare, execute-prepared, deallocate, fixed BEGIN and close
+opcodes. It resolves an immutable case identifier under a
 private case registry, verifies its SHA-256 digest and never reconnects or
 replays a request. Every request receives new exclusive spool and same-session
-snapshot files. Session loss after intent is `INCOMPLETE`, never proof that the
+spool/snapshot files for subject executions and planning snapshots for prepare.
+Session loss after intent is `INCOMPLETE`, never proof that the
 request did not execute.
 
 This controlled-pilot path does not install PostgreSQL, alter roles or
