@@ -86,6 +86,13 @@ class RegistryTests(unittest.TestCase):
         reparsed = registry.prepare("a", b"SELECT 3", 4)
         self.assertEqual(reparsed.generation, 2)
         self.assertNotEqual(reparsed.sql_sha256, retired.sql_sha256)
+        self.assertFalse(reparsed.attributable)
+        attributed = registry.replan("a", 5)
+        self.assertTrue(attributed.attributable)
+        self.assertEqual(attributed.replanned_sequence, 5)
+        unattributed = registry.mark_unattributed("a")
+        self.assertFalse(unattributed.attributable)
+        self.assertEqual(unattributed.generation, attributed.generation)
 
 
 class FramedSessionTests(unittest.TestCase):

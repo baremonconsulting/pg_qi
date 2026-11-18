@@ -14,7 +14,20 @@ typedef struct {
     unsigned long long generation;
     int active;
     int planned;
+    int attributable;
 } PlanSlot;
+
+static int decision_delta_is_one(const char *before, const char *after) {
+    char *before_end = NULL, *after_end = NULL;
+    unsigned long before_value, after_value;
+    errno = 0;
+    before_value = strtoul(before, &before_end, 10);
+    if (errno || !before_end || *before_end) return 0;
+    errno = 0;
+    after_value = strtoul(after, &after_end, 10);
+    return !errno && after_end && !*after_end &&
+           before_value < ULONG_MAX && after_value == before_value + 1;
+}
 
 static int plan_index(PlanSlot slots[MAX_PREPARED], const char *name) {
     int i;
@@ -275,7 +288,8 @@ int main(int argc, char **argv) {
             else if (fsync(output_fd)) reason = "snapshot_write";
             else {
                 strcpy(plans[slot].name, prepared); plans[slot].generation = generation;
-                plans[slot].active = 1; plans[slot].planned = 0; ok = 1;
+                plans[slot].active = 1; plans[slot].planned = 0;
+                plans[slot].attributable = 0; ok = 1;
             }
             {
                 int uncertain = !strcmp(reason, "connection_error") ||
@@ -345,19 +359,31 @@ int main(int argc, char **argv) {
                                         now_ms()+(int64_t)deadline_ms);
                     if (after && write_snapshot(conn, snapshot_path, before,
                                                 now_ms()+(int64_t)deadline_ms)) {
+                        int changed = strcmp(before, after) != 0;
+                        int single_change = changed && decision_delta_is_one(before, after);
                         snapshot_state = "COMPLETE";
-                        if (strcmp(before, after)) {
+                        if (changed) {
                             if (opcode == 4 && plans[prepared_slot].planned) {
                                 planning_state = "UNAVAILABLE";
                                 reason = "prepared_error_with_plan_activity";
-                            } else {
+                                plans[prepared_slot].attributable = 0;
+                            } else if (opcode == 4 && single_change) {
                                 planning_state = "COMPLETE";
-                                reason = opcode == 4 ? "planned_execution_error" :
-                                                      "fresh_execution_error";
-                            }
-                            if (opcode == 4 && !plans[prepared_slot].planned) {
+                                reason = "planned_execution_error";
                                 plans[prepared_slot].generation++;
                                 plans[prepared_slot].planned = 1;
+                                plans[prepared_slot].attributable = 1;
+                            } else if (opcode == 4) {
+                                planning_state = "UNAVAILABLE";
+                                reason = "prepared_error_with_plan_activity";
+                                plans[prepared_slot].planned = 1;
+                                plans[prepared_slot].attributable = 0;
+                            } else if (single_change) {
+                                planning_state = "COMPLETE";
+                                reason = "fresh_execution_error";
+                            } else {
+                                planning_state = "UNAVAILABLE";
+                                reason = "fresh_plan_activity_unattributed";
                             }
                         } else if (opcode == 4 && plans[prepared_slot].planned) {
                             planning_state = "UNAVAILABLE";
@@ -383,17 +409,31 @@ int main(int argc, char **argv) {
                 if (!after || !write_snapshot(conn, snapshot_path, before, now_ms()+(int64_t)deadline_ms)) {
                     reason = "snapshot_write"; snapshot_state = "INCOMPLETE";
                 } else {
+                    int changed = strcmp(before, after) != 0;
+                    int single_change = changed && decision_delta_is_one(before, after);
                     snapshot_state = "COMPLETE"; planning_state = "COMPLETE";
                     if (opcode == 4) {
-                        if (strcmp(before, after) && !plans[prepared_slot].planned) {
+                        if (single_change && !plans[prepared_slot].planned) {
                             reason = "planned";
                             plans[prepared_slot].generation++;
-                        } else if (strcmp(before, after)) {
+                            plans[prepared_slot].attributable = 1;
+                        } else if (changed) {
                             planning_state = "UNAVAILABLE";
                             reason = "prepared_plan_activity_unattributed";
-                        } else reason = "cached";
+                            plans[prepared_slot].attributable = 0;
+                        } else if (plans[prepared_slot].planned &&
+                                   plans[prepared_slot].attributable) {
+                            reason = "cached";
+                        } else {
+                            planning_state = "UNAVAILABLE";
+                            reason = "prepared_cached_unattributed";
+                        }
                         plans[prepared_slot].planned = 1;
-                    } else reason = "fresh";
+                    } else if (!changed || single_change) reason = "fresh";
+                    else {
+                        planning_state = "UNAVAILABLE";
+                        reason = "fresh_plan_activity_unattributed";
+                    }
                     if (fflush(spool) || fsync(fileno(spool))) reason = "spool_sync";
                     else ok = 1;
                 }

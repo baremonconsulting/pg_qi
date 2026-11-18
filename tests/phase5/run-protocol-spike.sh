@@ -97,7 +97,8 @@ replanned_a = session.execute_prepared("a")
 if replanned_a["reason"] != "prepared_plan_activity_unattributed":
     raise SystemExit(f"expected invalidation replan, got {replanned_a}")
 cached_replanned_a = session.execute_prepared("a")
-if cached_replanned_a["reason"] != "cached":
+if (cached_replanned_a["reason"], cached_replanned_a["planning_state"]) != \
+        ("prepared_cached_unattributed", "UNAVAILABLE"):
     raise SystemExit(f"expected cached replanned A, got {cached_replanned_a}")
 session.deallocate("a")
 session.prepare("a", "case_a")
@@ -109,8 +110,15 @@ session.prepare("A", "case_b")
 session.execute_prepared("A")
 session.deallocate("A")
 after_upper = session.execute_prepared("a")
+fresh_nested = session.dispatch("nested_planning")
+if (fresh_nested["reason"], fresh_nested["planning_state"]) != \
+        ("fresh_plan_activity_unattributed", "UNAVAILABLE"):
+    raise SystemExit(f"fresh nested planning was falsely attributed: {fresh_nested}")
 session.prepare("nested", "nested_planning")
-session.execute_prepared("nested")
+first_nested = session.execute_prepared("nested")
+if (first_nested["reason"], first_nested["planning_state"]) != \
+        ("prepared_plan_activity_unattributed", "UNAVAILABLE"):
+    raise SystemExit(f"first nested planning was falsely attributed: {first_nested}")
 nested_cached_outer = session.execute_prepared("nested")
 if nested_cached_outer["reason"] != "prepared_plan_activity_unattributed":
     raise SystemExit(f"nested planning was falsely attributed: {nested_cached_outer}")

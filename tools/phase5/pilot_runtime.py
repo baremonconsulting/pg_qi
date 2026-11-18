@@ -117,6 +117,7 @@ class PreparedPlan:
     created_sequence: int
     replanned_sequence: int | None = None
     deallocated_sequence: int | None = None
+    attributable: bool = False
 
 
 class PreparedRegistry:
@@ -155,7 +156,8 @@ class PreparedRegistry:
     def deallocate(self, name: str, sequence: int) -> PreparedPlan:
         plan = self.active(name)
         retired = PreparedPlan(plan.name, plan.generation, plan.sql_sha256,
-                               plan.created_sequence, plan.replanned_sequence, sequence)
+                               plan.created_sequence, plan.replanned_sequence, sequence,
+                               plan.attributable)
         del self._plans[name]
         return retired
 
@@ -163,9 +165,17 @@ class PreparedRegistry:
         plan = self.active(name)
         generation = plan.generation + 1
         updated = PreparedPlan(plan.name, generation, plan.sql_sha256,
-                               plan.created_sequence, sequence, None)
+                               plan.created_sequence, sequence, None, True)
         self._plans[name] = updated
         self._generations[name] = generation
+        return updated
+
+    def mark_unattributed(self, name: str) -> PreparedPlan:
+        plan = self.active(name)
+        updated = PreparedPlan(plan.name, plan.generation, plan.sql_sha256,
+                               plan.created_sequence, plan.replanned_sequence,
+                               plan.deallocated_sequence, False)
+        self._plans[name] = updated
         return updated
 
 
@@ -321,9 +331,13 @@ class AuditedSession:
         response = self._exchange(OP_EXECUTE_PREPARED, {"prepared": prepared,
             "generation": plan.generation}, {"event": "execute_prepared_intent",
             "prepared": prepared, "generation": plan.generation,
-            "planning_sequence": plan.replanned_sequence or plan.created_sequence})
+            "planning_sequence": ((plan.replanned_sequence or plan.created_sequence)
+                                  if plan.attributable else None)})
         if response["reason"] in ("planned", "planned_execution_error"):
             self._registry.replan(prepared, response["sequence"])
+        elif response["reason"] in ("prepared_plan_activity_unattributed",
+                                    "prepared_error_with_plan_activity"):
+            self._registry.mark_unattributed(prepared)
         return response
 
     def deallocate(self, prepared: str) -> dict[str, Any]:
