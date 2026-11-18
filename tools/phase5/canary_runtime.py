@@ -157,6 +157,7 @@ def validate_canary_bundle(root: Path, now: datetime | None = None) -> dict[str,
         raise CanaryError("canary_measurement_plan_outside_private_scope")
     private_index = _load_contract(private_root, "index.json", "index")
     private_requests = []
+    private_snapshots = []
     for item in private_index["payloads"]:
         try:
             candidate = strict_load_path(Path(item["path"]), private_root)
@@ -165,6 +166,8 @@ def validate_canary_bundle(root: Path, now: datetime | None = None) -> dict[str,
         if (candidate.get("contract_type") == "request" and
                 candidate.get("query_id") == plan["positive_query_id"]):
             private_requests.append(candidate)
+        if candidate.get("contract_type") == "snapshot":
+            private_snapshots.append(candidate)
     qualification = _raw(private_root, private_scope["scope_inputs"]["workload_definition"], {
         "schema_version", "document_type", "qualification_id", "authorities",
         "storage_policy", "baseline_authority", "oracle_limits", "natural_inventory",
@@ -222,7 +225,8 @@ def validate_canary_bundle(root: Path, now: datetime | None = None) -> dict[str,
             run["positive_spool"]["path"] == plan["expected_spool"]["path"] or
             run["positive_spool"]["bytes"] > plan["maximum_result_bytes"]):
         raise CanaryError("canary_positive_literal_or_limit_mismatch")
-    if len(private_requests) != 1 or "observed_spool" not in private_requests[0]:
+    if (len(private_requests) != 1 or len(private_snapshots) != 1 or
+            "observed_spool" not in private_requests[0]):
         raise CanaryError("canary_private_request_missing")
     private_observed = private_requests[0]["observed_spool"]
     if (private_observed["sha256"] != run["positive_spool"]["sha256"] or
@@ -234,11 +238,21 @@ def validate_canary_bundle(root: Path, now: datetime | None = None) -> dict[str,
         raise CanaryError("canary_control_sql_not_approved")
     request = _artifact_contract(root, run["positive_request"], "request")
     snapshot = _artifact_contract(root, run["positive_snapshot"], "snapshot")
+    private_request = private_requests[0]
+    private_snapshot = private_snapshots[0]
     execution = _raw(root, run["positive_execution_proof"], {"document_type", "query_id",
         "session_id", "executed_sql_sha256", "observed_spool", "started_at", "finished_at", "result"},
         "canary_positive_execution")
     interval = request.get("request_interval")
     if (request["scope_sha256"] != scope or request["run_id"] != plan["canary_id"] or
+            private_request["run_id"] != plan["canary_id"] or
+            private_request["session_id"] != run["session_id"] or
+            private_request["request_id"] != request["request_id"] or
+            private_request["planning_evidence"] != "FRESH" or
+            private_request["snapshot_relation"] != "CURRENT" or
+            private_request.get("planning_request_id") != request.get("planning_request_id") or
+            private_request.get("observed_spool", {}).get("sha256") !=
+            run["positive_spool"]["sha256"] or
             request["query_id"] != plan["positive_query_id"] or
             request["session_id"] != run["session_id"] or
             request["execution_status"] != "SUCCEEDED" or
@@ -246,6 +260,9 @@ def validate_canary_bundle(root: Path, now: datetime | None = None) -> dict[str,
             request["snapshot_relation"] != "CURRENT" or
             request.get("observed_spool") != run["positive_spool"] or
             snapshot["scope_sha256"] != scope or snapshot["session_id"] != run["session_id"] or
+            private_snapshot["session_id"] != run["session_id"] or
+            private_snapshot["planning_request_id"] != request["request_id"] or
+            private_snapshot["tuple"] != plan["expected_snapshot"] or
             snapshot["snapshot_id"] != request.get("snapshot_id") or
             snapshot["planning_request_id"] != request.get("planning_request_id") or
             snapshot["planning_request_id"] != request["request_id"] or
@@ -393,6 +410,11 @@ def _write_outcome(path: Path, value: dict[str, Any]) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def main(argv: list[str] | None = None) -> int:

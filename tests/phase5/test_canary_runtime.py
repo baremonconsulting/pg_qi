@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_contracts import snapshot_tuple
-from test_evidence_tool import build_private
+from test_evidence_tool import build_private, reseal as reseal_private
 from test_measurement_runtime import (
     artifact, level_one_authorization, measurement_scope, plan, state, write_document)
 from tools.phase5.canary_runtime import CanaryError, build_canary_record, main, validate_canary_bundle
@@ -109,6 +109,14 @@ def build_canary(root: Path) -> tuple[datetime, dict, dict, dict]:
     root.chmod(0o700)
     private = root / "private"; private.mkdir(mode=0o700)
     build_private(private, query_id="query-a")
+    for relative, changes in (("payload/request.json", {"run_id": "canary-1",
+            "request_id": "request-1", "planning_request_id": "request-1"}),
+            ("payload/snapshot.json", {"planning_request_id": "request-1"}),
+            ("payload/resource.json", {"run_id": "canary-1"}),
+            ("payload/retirement.json", {"run_id": "canary-1"})):
+        document = __import__("json").loads((private / relative).read_text())
+        document.update(changes); write_document(private / relative, document)
+    reseal_private(private)
     for path in private.rglob("*"):
         if path.is_file():
             path.chmod(0o600)
