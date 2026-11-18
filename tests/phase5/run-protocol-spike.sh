@@ -50,7 +50,7 @@ mkdir -m 700 "$audited_cases" "$audited_out"
 cp "$repo/tests/phase5/sql/literal.sql" "$audited_cases/case_a.sql"
 cp "$repo/tests/phase5/sql/null-empty.sql" "$audited_cases/case_b.sql"
 printf 'SELECT FROM;\n' >"$audited_cases/planning_error.sql"
-printf 'SELECT 1 / (id - 1) FROM p5_literal WHERE id = 1;\n' >"$audited_cases/execution_error.sql"
+printf 'SELECT 1 / value FROM p5_literal WHERE id = 1;\n' >"$audited_cases/execution_error.sql"
 cp "$repo/tests/phase5/sql/runtime-error.sql" "$audited_cases/partial_error.sql"
 chmod 600 "$audited_cases/case_a.sql" "$audited_cases/case_b.sql"
 chmod 600 "$audited_cases/planning_error.sql" "$audited_cases/execution_error.sql" "$audited_cases/partial_error.sql"
@@ -100,7 +100,12 @@ cached_intents = [row for row in rows if row["payload"].get("event") == "execute
 if not cached_intents or cached_intents[0]["payload"].get("planning_sequence") != prepared_a["sequence"]:
     raise SystemExit("cached A is not bound to A planning evidence")
 
-def failure_session(name, prepared=False, transaction=False):
+def set_error_value(value):
+    subprocess.run([psql, fixture_conninfo, "-X", "-v", "ON_ERROR_STOP=1", "-c",
+                    f"UPDATE p5_literal SET value = {value} WHERE id = 1"], check=True,
+                   stdout=subprocess.DEVNULL)
+
+def failure_session(name, prepared=False, transaction=False, prime_cached=False):
     target = output / f"failure-{name}-{'prepared' if prepared else 'transaction' if transaction else 'direct'}"
     target.mkdir(mode=0o700)
     failure_journal = SequenceJournal(target)
@@ -115,6 +120,10 @@ def failure_session(name, prepared=False, transaction=False):
     if prepared:
         prepare_result = failed.prepare("failing", name)
         if prepare_result["state"] != "COMPLETE": raise SystemExit(prepare_result)
+        if prime_cached:
+            prime = failed.execute_prepared("failing")
+            if prime["state"] != "COMPLETE": raise SystemExit(prime)
+            set_error_value(0)
         result = failed.execute_prepared("failing")
     else:
         result = failed.dispatch(name)
@@ -126,14 +135,17 @@ planning_error = failure_session("planning_error")
 if (planning_error["reason"], planning_error["planning_state"], planning_error["execution_state"], planning_error["snapshot_state"]) != \
         ("planning_error", "FAILED", "FAILED", "COMPLETE"):
     raise SystemExit(f"planning error states are untruthful: {planning_error}")
-cached_error = failure_session("execution_error", prepared=True)
+cached_error = failure_session("execution_error", prepared=True, prime_cached=True)
+set_error_value(1)
 if (cached_error["reason"], cached_error["planning_state"], cached_error["execution_state"], cached_error["snapshot_state"]) != \
         ("cached_execution_error", "COMPLETE", "FAILED", "COMPLETE"):
     raise SystemExit(f"cached execution error states are untruthful: {cached_error}")
 partial_error = failure_session("partial_error")
 if partial_error["state"] != "FAILED" or partial_error["snapshot_state"] != "COMPLETE":
     raise SystemExit(f"partial stream error states are untruthful: {partial_error}")
+set_error_value(0)
 aborted = failure_session("execution_error", transaction=True)
+set_error_value(1)
 if aborted["reason"] != "aborted_transaction" or aborted["snapshot_state"] != "INCOMPLETE":
     raise SystemExit(f"aborted transaction states are untruthful: {aborted}")
 PY
