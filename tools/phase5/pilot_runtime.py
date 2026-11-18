@@ -134,6 +134,15 @@ class PreparedRegistry:
         del self._plans[name]
         return retired
 
+    def replan(self, name: str, sequence: int) -> PreparedPlan:
+        plan = self.active(name)
+        generation = plan.generation + 1
+        updated = PreparedPlan(plan.name, generation, plan.sql_sha256,
+                               plan.created_sequence, sequence, None)
+        self._plans[name] = updated
+        self._generations[name] = generation
+        return updated
+
 
 def encode_frame(opcode: int, payload: dict[str, Any]) -> bytes:
     """Encode one bounded, versioned local protocol frame."""
@@ -246,9 +255,12 @@ class AuditedSession:
 
     def execute_prepared(self, prepared: str) -> dict[str, Any]:
         plan = self._registry.active(prepared)
-        return self._exchange(OP_EXECUTE_PREPARED, {"prepared": prepared,
+        response = self._exchange(OP_EXECUTE_PREPARED, {"prepared": prepared,
             "generation": plan.generation}, {"event": "execute_prepared_intent",
             "prepared": prepared, "generation": plan.generation})
+        if response["state"] == "COMPLETE" and response["reason"] == "replanned":
+            self._registry.replan(prepared, 0)
+        return response
 
     def deallocate(self, prepared: str) -> dict[str, Any]:
         plan = self._registry.active(prepared)

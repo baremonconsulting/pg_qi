@@ -33,6 +33,8 @@ printf '%s\n' \
   "unix_socket_directories = '$socket'" \
   "listen_addresses = ''" \
   "port = $port" \
+  "log_statement = 'all'" \
+  "log_line_prefix = '%a|'" \
   "max_connections = 20" >>"$data/postgresql.conf"
 "$pg_bindir/pg_ctl" -D "$data" -l "$out/postgres.log" start >/dev/null
 conninfo="host=$socket port=$port dbname=postgres user=$(id -un) connect_timeout=2"
@@ -48,7 +50,7 @@ mkdir -m 700 "$audited_cases" "$audited_out"
 cp "$repo/tests/phase5/sql/literal.sql" "$audited_cases/case_a.sql"
 cp "$repo/tests/phase5/sql/null-empty.sql" "$audited_cases/case_b.sql"
 chmod 600 "$audited_cases/case_a.sql" "$audited_cases/case_b.sql"
-PYTHONPATH="$repo" python3 - "$repo" "$conninfo" "$audited_cases" "$audited_out" <<'PY'
+PYTHONPATH="$repo" python3 - "$repo" "$conninfo application_name=pgqi_p5_audited" "$audited_cases" "$audited_out" <<'PY'
 import hashlib, json, pathlib, sys
 from tools.phase5.pilot_runtime import AuditedSession, SequenceJournal
 repo, conninfo, cases, output = pathlib.Path(sys.argv[1]), sys.argv[2], pathlib.Path(sys.argv[3]), pathlib.Path(sys.argv[4])
@@ -79,6 +81,12 @@ rows = [json.loads(line) for line in (output / "request.journal.jsonl").read_tex
 if [row["sequence"] for row in rows] != list(range(1, len(rows) + 1)):
     raise SystemExit("journal sequence is not contiguous")
 PY
+sleep 0.1
+grep 'pgqi_p5_audited|' "$out/postgres.log" >"$audited_out/sql-dispatch.log"
+if grep -Eiq 'ALTER[[:space:]]+SYSTEM|CREATE[[:space:]]+ROLE|DROP[[:space:]]+ROLE|pg_terminate_backend|COPY.*PROGRAM|CREATE[[:space:]]+EXTENSION|DROP[[:space:]]+EXTENSION' "$audited_out/sql-dispatch.log"; then
+  echo 'forbidden SQL in audited-session dispatch' >&2
+  exit 1
+fi
 
 run_case() {
   local name=$1 protocol=$2 sql=$3 expected=$4 session_mode=$5

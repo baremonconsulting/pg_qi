@@ -193,7 +193,8 @@ int main(int argc, char **argv) {
         unsigned char header[4], *body = NULL; uint32_t length; unsigned int opcode;
         char case_id[64] = "", digest[65] = "", prepared[64] = "";
         char sql_path[PATH_MAX], spool_path[PATH_MAX], snapshot_path[PATH_MAX];
-        unsigned long long sequence = 0, generation = 0; char *sql = NULL, *before = NULL; FILE *spool = NULL;
+        unsigned long long sequence = 0, generation = 0; char *sql = NULL, *before = NULL, *after = NULL; FILE *spool = NULL;
+        int prepared_slot = -1;
         Limits limits = base; const char *reason = "invalid_frame"; char sqlstate[6] = ""; int ok = 0;
         const char *planning_state = "UNAVAILABLE", *execution_state = "NOT_RUN";
         const char *snapshot_state = "NOT_RUN";
@@ -233,7 +234,7 @@ int main(int argc, char **argv) {
             }
             if (!frame_reply(opcode, sequence, ok ? "COMPLETE" : "FAILED",
                     ok ? "COMPLETE" : "FAILED", "NOT_RUN", "NOT_RUN",
-                    ok ? "ok" : reason)) ok = 0;
+                    reason)) ok = 0;
             free(sql);
             if (!ok) break;
             continue;
@@ -253,8 +254,8 @@ int main(int argc, char **argv) {
             continue;
         }
         if (opcode == 4) {
-            int slot = plan_index(plans, prepared);
-            if (slot < 0 || plans[slot].generation != generation) {
+            prepared_slot = plan_index(plans, prepared);
+            if (prepared_slot < 0 || plans[prepared_slot].generation != generation) {
                 if (!frame_reply(opcode, sequence, "REFUSED", "NOT_RUN", "NOT_RUN",
                         "NOT_RUN", "prepared_generation")) break;
                 continue;
@@ -276,10 +277,18 @@ int main(int argc, char **argv) {
                 if (!strcmp(reason, "server_error")) execution_state = "FAILED";
             } else {
                 execution_state = "COMPLETE";
-                if (!write_snapshot(conn, snapshot_path, before, now_ms()+(int64_t)deadline_ms)) {
+                after = show_scalar(conn, "pg_qi.shadow_decision_id",
+                                    now_ms()+(int64_t)deadline_ms);
+                if (!after || !write_snapshot(conn, snapshot_path, before, now_ms()+(int64_t)deadline_ms)) {
                     reason = "snapshot_write"; snapshot_state = "INCOMPLETE";
                 } else {
                     snapshot_state = "COMPLETE"; planning_state = "COMPLETE";
+                    if (opcode == 4) {
+                        if (strcmp(before, after)) {
+                            reason = "replanned";
+                            plans[prepared_slot].generation++;
+                        } else reason = "cached";
+                    } else reason = "fresh";
                     if (fflush(spool) || fsync(fileno(spool))) reason = "spool_sync";
                     else ok = 1;
                 }
@@ -298,6 +307,7 @@ int main(int argc, char **argv) {
         }
         if (spool) fclose(spool);
         free(before);
+        free(after);
         free(sql);
         if (!ok) break;
     }
