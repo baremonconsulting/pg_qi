@@ -73,8 +73,8 @@ class SequenceJournal:
             raise ValueError("invalid journal transition")
         if self._sequence >= self._max_records:
             raise ValueError("journal record limit reached")
-        self._sequence += 1
-        record = {"schema_version": 1, "sequence": self._sequence,
+        next_sequence = self._sequence + 1
+        record = {"schema_version": 1, "sequence": next_sequence,
                   "phase": phase, "state": state, "previous_sha256": self._previous,
                   "payload": payload}
         digest = hashlib.sha256(_canonical(record)).hexdigest()
@@ -82,6 +82,7 @@ class SequenceJournal:
         data = _canonical(record) + b"\n"
         if len(data) > self._max_record_bytes:
             raise ValueError("journal record exceeds limit")
+        self._sequence = next_sequence
         if self._stream.write(data) != len(data):
             raise OSError("short journal write")
         os.fsync(self._stream.fileno())
@@ -127,6 +128,11 @@ class PreparedRegistry:
         self._plans[name] = plan
         self._generations[name] = generation
         return plan
+
+    def next_generation(self, name: str) -> int:
+        if name in self._plans:
+            raise ValueError("prepared name is already active")
+        return self._generations.get(name, 0) + 1
 
     def active(self, name: str) -> PreparedPlan:
         try:
@@ -257,27 +263,24 @@ class AuditedSession:
         if (not IDENTIFIER.fullmatch(prepared) or not IDENTIFIER.fullmatch(case_id)
                 or not re.fullmatch(r"[0-9a-f]{64}", digest)):
             raise ValueError("invalid prepared request")
-        plan = self._registry.prepare_digest(prepared, digest, 0)
-        try:
-            response = self._exchange(OP_PREPARE, {"prepared": prepared,
+        generation = self._registry.next_generation(prepared)
+        response = self._exchange(OP_PREPARE, {"prepared": prepared,
                 "case_id": case_id, "case_sha256": digest,
-                "generation": plan.generation}, {"event": "prepare_intent",
+                "generation": generation}, {"event": "prepare_intent",
                 "prepared": prepared, "case_id": case_id,
-                "generation": plan.generation})
-            if response["state"] != "COMPLETE":
-                self._registry.deallocate(prepared, 0)
-            return response
-        except Exception:
-            self._registry.deallocate(prepared, 0)
-            raise
+                "generation": generation})
+        if response["state"] == "COMPLETE":
+            self._registry.prepare_digest(prepared, digest, response["sequence"])
+        return response
 
     def execute_prepared(self, prepared: str) -> dict[str, Any]:
         plan = self._registry.active(prepared)
         response = self._exchange(OP_EXECUTE_PREPARED, {"prepared": prepared,
             "generation": plan.generation}, {"event": "execute_prepared_intent",
-            "prepared": prepared, "generation": plan.generation})
-        if response["state"] == "COMPLETE" and response["reason"] == "replanned":
-            self._registry.replan(prepared, 0)
+            "prepared": prepared, "generation": plan.generation,
+            "planning_sequence": plan.replanned_sequence or plan.created_sequence})
+        if response["reason"] in ("replanned", "replanned_execution_error"):
+            self._registry.replan(prepared, response["sequence"])
         return response
 
     def deallocate(self, prepared: str) -> dict[str, Any]:
@@ -286,7 +289,7 @@ class AuditedSession:
             "generation": plan.generation}, {"event": "deallocate_intent",
             "prepared": prepared, "generation": plan.generation})
         if response["state"] == "COMPLETE":
-            self._registry.deallocate(prepared, 0)
+            self._registry.deallocate(prepared, response["sequence"])
         return response
 
     def _exchange(self, opcode_expected: int, payload: dict[str, Any],
@@ -313,15 +316,22 @@ class AuditedSession:
                 raise ValueError("invalid driver terminal schema")
         except (BrokenPipeError, EOFError, OSError, TimeoutError, ValueError) as exc:
             self._closed = True
-            self._journal.append("execution", "INCOMPLETE", {
-                "event": "session_lost_after_dispatch", "intent_sequence": intent["sequence"],
-                "error_family": type(exc).__name__})
-            self._retire_child()
+            try:
+                self._journal.append("execution", "INCOMPLETE", {
+                    "event": "session_lost_after_dispatch", "intent_sequence": intent["sequence"],
+                    "error_family": type(exc).__name__})
+            finally:
+                self._retire_child()
             raise RuntimeError("audited session lost; request will not be replayed") from exc
-        for phase in ("planning", "execution", "snapshot"):
-            self._journal.append(phase, response[f"{phase}_state"], {
-                "event": "driver_terminal", "intent_sequence": intent["sequence"],
-                "reason": response["reason"]})
+        try:
+            for phase in ("planning", "execution", "snapshot"):
+                self._journal.append(phase, response[f"{phase}_state"], {
+                    "event": "driver_terminal", "intent_sequence": intent["sequence"],
+                    "reason": response["reason"]})
+        except Exception:
+            self._closed = True
+            self._retire_child()
+            raise
         return response
 
     def _retire_child(self) -> None:
@@ -343,6 +353,9 @@ class AuditedSession:
             self._proc.stdin.write(encode_frame(OP_CLOSE, {})); self._proc.stdin.flush()
         except BrokenPipeError:
             pass
-        self._proc.stdin.close(); self._proc.wait(timeout=5)
-        self._retire_child()
-        self._closed = True
+        self._proc.stdin.close()
+        try:
+            self._proc.wait(timeout=5)
+        finally:
+            self._retire_child()
+            self._closed = True

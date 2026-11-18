@@ -50,15 +50,15 @@ mkdir -m 700 "$audited_cases" "$audited_out"
 cp "$repo/tests/phase5/sql/literal.sql" "$audited_cases/case_a.sql"
 cp "$repo/tests/phase5/sql/null-empty.sql" "$audited_cases/case_b.sql"
 chmod 600 "$audited_cases/case_a.sql" "$audited_cases/case_b.sql"
-PYTHONPATH="$repo" python3 - "$repo" "$conninfo application_name=pgqi_p5_audited" "$audited_cases" "$audited_out" <<'PY'
-import hashlib, json, pathlib, sys
+PYTHONPATH="$repo" python3 - "$repo" "$conninfo application_name=pgqi_p5_audited" "$audited_cases" "$audited_out" "$pg_bindir/psql" "$conninfo" <<'PY'
+import hashlib, json, pathlib, subprocess, sys
 from tools.phase5.pilot_runtime import AuditedSession, SequenceJournal
-repo, conninfo, cases, output = pathlib.Path(sys.argv[1]), sys.argv[2], pathlib.Path(sys.argv[3]), pathlib.Path(sys.argv[4])
+repo, conninfo, cases, output, psql, fixture_conninfo = pathlib.Path(sys.argv[1]), sys.argv[2], pathlib.Path(sys.argv[3]), pathlib.Path(sys.argv[4]), sys.argv[5], sys.argv[6]
 digests = {name: hashlib.sha256((cases / f"{name}.sql").read_bytes()).hexdigest()
            for name in ("case_a", "case_b")}
 journal = SequenceJournal(output)
 args = ["--conninfo", conninfo, "--case-root", str(cases), "--output-root", str(output),
-        "--session-mode", "lab_allowlist", "--deadline-ms", "8000", "--max-requests", "10",
+        "--session-mode", "lab_allowlist", "--deadline-ms", "8000", "--max-requests", "16",
         "--max-rows", "2000", "--max-bytes", "1048576", "--max-columns", "4",
         "--max-field-bytes", "1024", "--max-spool-bytes", "2097152", "--max-messages", "2010"]
 session = AuditedSession(repo / "tools/phase5/audited-session-driver", journal, args,
@@ -70,12 +70,23 @@ session.execute_prepared("a")
 session.prepare("b", "case_b")
 session.execute_prepared("b")
 cached_a = session.execute_prepared("a")
+if cached_a["reason"] != "cached":
+    raise SystemExit(f"expected cached A, got {cached_a}")
+subprocess.run([psql, fixture_conninfo, "-X", "-v", "ON_ERROR_STOP=1", "-c",
+                "ALTER TABLE p5_literal ADD COLUMN invalidation_probe integer"], check=True,
+               stdout=subprocess.DEVNULL)
+replanned_a = session.execute_prepared("a")
+if replanned_a["reason"] != "replanned":
+    raise SystemExit(f"expected invalidation replan, got {replanned_a}")
+cached_replanned_a = session.execute_prepared("a")
+if cached_replanned_a["reason"] != "cached":
+    raise SystemExit(f"expected cached replanned A, got {cached_replanned_a}")
 session.deallocate("a")
 session.prepare("a", "case_a")
 reprepared_a = session.execute_prepared("a")
 session.close(); journal.close()
 if any(item["state"] != "COMPLETE" for item in
-       (first, second, cached_a, reprepared_a)):
+       (first, second, cached_a, replanned_a, cached_replanned_a, reprepared_a)):
     raise SystemExit("audited session did not complete")
 rows = [json.loads(line) for line in (output / "request.journal.jsonl").read_text().splitlines()]
 if [row["sequence"] for row in rows] != list(range(1, len(rows) + 1)):

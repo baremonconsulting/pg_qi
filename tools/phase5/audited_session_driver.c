@@ -223,19 +223,26 @@ int main(int argc, char **argv) {
                 if (slot == MAX_PREPARED) reason = "prepared_registry_full";
             }
             if (snprintf(sql_path,sizeof(sql_path),"%s.sql",case_id) >= (int)sizeof(sql_path)) break;
+            if (snprintf(snapshot_path,sizeof(snapshot_path),"/proc/self/fd/%d/%020llu-%s-prepare.snapshot.tsv",
+                         output_fd,sequence,prepared) >= (int)sizeof(snapshot_path)) break;
             if (strcmp(reason, "invalid_frame")) { }
             else if (!(sql = read_case_at(case_fd, sql_path)) ||
                      !digest_matches((unsigned char *)sql, strlen(sql), digest)) reason = "case_digest";
+            else if (!(before = show_scalar(conn, "pg_qi.shadow_decision_id",
+                                             now_ms()+(int64_t)deadline_ms))) reason = "snapshot_before";
             else if (!PQsendPrepare(conn, prepared, sql, 0, NULL) ||
                      !command_result(conn, now_ms()+(int64_t)deadline_ms, &reason)) { }
+            else if (!write_snapshot(conn, snapshot_path, before,
+                                     now_ms()+(int64_t)deadline_ms)) reason = "snapshot_write";
             else {
                 strcpy(plans[slot].name, prepared); plans[slot].generation = generation;
                 plans[slot].active = 1; ok = 1;
             }
             if (!frame_reply(opcode, sequence, ok ? "COMPLETE" : "FAILED",
-                    ok ? "COMPLETE" : "FAILED", "NOT_RUN", "NOT_RUN",
+                    ok ? "COMPLETE" : "FAILED", "NOT_RUN",
+                    ok ? "COMPLETE" : "INCOMPLETE",
                     reason)) ok = 0;
-            free(sql);
+            free(before); free(sql);
             if (!ok) break;
             continue;
         }
@@ -249,7 +256,7 @@ int main(int argc, char **argv) {
             else { plans[slot].active = 0; ok = 1; }
             if (!frame_reply(opcode, sequence, ok ? "COMPLETE" : "FAILED",
                     "NOT_RUN", ok ? "COMPLETE" : "FAILED", "NOT_RUN",
-                    ok ? "ok" : reason)) ok = 0;
+                    reason)) ok = 0;
             if (!ok) break;
             continue;
         }
@@ -274,7 +281,31 @@ int main(int argc, char **argv) {
         else {
             execution_state = "INCOMPLETE";
             if (!stream(conn, spool, &limits, now_ms()+(int64_t)deadline_ms, &reason, sqlstate)) {
-                if (!strcmp(reason, "server_error")) execution_state = "FAILED";
+                if (!strcmp(reason, "server_error") ||
+                        !strcmp(reason, "server_error_after_partial_stream")) {
+                    PGresult *tail;
+                    execution_state = "FAILED";
+                    while ((tail = PQgetResult(conn)) != NULL) PQclear(tail);
+                    after = show_scalar(conn, "pg_qi.shadow_decision_id",
+                                        now_ms()+(int64_t)deadline_ms);
+                    if (after && write_snapshot(conn, snapshot_path, before,
+                                                now_ms()+(int64_t)deadline_ms)) {
+                        snapshot_state = "COMPLETE";
+                        if (opcode == 4) {
+                            planning_state = "COMPLETE";
+                            if (strcmp(before, after)) {
+                                reason = "replanned_execution_error";
+                                plans[prepared_slot].generation++;
+                            } else reason = "cached_execution_error";
+                        } else if (strcmp(before, after)) {
+                            planning_state = "COMPLETE";
+                            reason = "fresh_execution_error";
+                        } else {
+                            planning_state = "FAILED";
+                            reason = "planning_error";
+                        }
+                    } else snapshot_state = "INCOMPLETE";
+                }
             } else {
                 execution_state = "COMPLETE";
                 after = show_scalar(conn, "pg_qi.shadow_decision_id",
