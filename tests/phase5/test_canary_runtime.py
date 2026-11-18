@@ -110,8 +110,12 @@ def build_canary(root: Path) -> tuple[datetime, dict, dict, dict]:
     private = root / "private"; private.mkdir(mode=0o700)
     build_private(private, query_id="query-a")
     for relative, changes in (("payload/request.json", {"run_id": "canary-1",
-            "request_id": "request-1", "planning_request_id": "request-1"}),
-            ("payload/snapshot.json", {"planning_request_id": "request-1"}),
+            "request_id": "request-1", "planning_request_id": "request-1",
+            "request_interval": {"started_monotonic_ns": 100,
+                "finished_monotonic_ns": 200, "duration_ns": 100,
+                "state": "COMPLETE", "censored": False}}),
+            ("payload/snapshot.json", {"planning_request_id": "request-1",
+                "prepared_object_id": "query-a"}),
             ("payload/resource.json", {"run_id": "canary-1"}),
             ("payload/retirement.json", {"run_id": "canary-1"})):
         document = __import__("json").loads((private / relative).read_text())
@@ -346,6 +350,12 @@ class CanaryRuntimeTests(unittest.TestCase):
             (root / "canary-outcome.json").unlink()
             self.assertEqual(main(["--bundle", str(root), "--ledger", str(ledger)]), 1)
             self.assertEqual(len(list(ledger.glob("*.json"))), 1)
+
+    def test_cli_refuses_ledger_inside_bundle(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); build_canary(root)
+            ledger = root / "ledger"; ledger.mkdir(mode=0o700)
+            self.assertEqual(main(["--bundle", str(root), "--ledger", str(ledger)]), 1)
 
 
 if __name__ == "__main__":

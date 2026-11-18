@@ -251,6 +251,7 @@ def validate_canary_bundle(root: Path, now: datetime | None = None) -> dict[str,
             private_request["request_id"] != request["request_id"] or
             private_request["planning_evidence"] != "FRESH" or
             private_request["snapshot_relation"] != "CURRENT" or
+            private_request.get("request_interval") != request.get("request_interval") or
             private_request.get("planning_request_id") != request.get("planning_request_id") or
             private_request.get("observed_spool", {}).get("sha256") !=
             run["positive_spool"]["sha256"] or
@@ -262,7 +263,11 @@ def validate_canary_bundle(root: Path, now: datetime | None = None) -> dict[str,
             request.get("observed_spool") != run["positive_spool"] or
             snapshot["scope_sha256"] != scope or snapshot["session_id"] != run["session_id"] or
             private_snapshot["session_id"] != run["session_id"] or
+            private_snapshot["snapshot_id"] != snapshot["snapshot_id"] or
             private_snapshot["planning_request_id"] != request["request_id"] or
+            private_snapshot["prepared_object_id"] != plan["positive_query_id"] or
+            private_snapshot["prepared_generation"] != snapshot["prepared_generation"] or
+            private_snapshot["decision_id"] != snapshot["decision_id"] or
             private_snapshot["tuple"] != plan["expected_snapshot"] or
             snapshot["snapshot_id"] != request.get("snapshot_id") or
             snapshot["planning_request_id"] != request.get("planning_request_id") or
@@ -442,8 +447,16 @@ def main(argv: list[str] | None = None) -> int:
               file=sys.stderr)
         return 1
     try:
-        plan = _load_contract(_root(arguments.bundle), "canary-plan.json", "canary_plan")
-        _consume_attempt(arguments.ledger, plan)
+        bundle_root = _root(arguments.bundle)
+        ledger_root = _root(arguments.ledger)
+        try:
+            ledger_root.relative_to(bundle_root)
+        except ValueError:
+            pass
+        else:
+            raise CanaryError("canary_ledger_must_be_outside_bundle")
+        plan = _load_contract(bundle_root, "canary-plan.json", "canary_plan")
+        _consume_attempt(ledger_root, plan)
         result = validate_canary_bundle(arguments.bundle)
         _write_outcome(outcome, {"schema_version": 1, "document_type": "canary_outcome",
             "decision": result["decision"], "result": result["result"],
