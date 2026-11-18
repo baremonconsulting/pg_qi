@@ -49,13 +49,17 @@ audited_out="$out/audited-session"
 mkdir -m 700 "$audited_cases" "$audited_out"
 cp "$repo/tests/phase5/sql/literal.sql" "$audited_cases/case_a.sql"
 cp "$repo/tests/phase5/sql/null-empty.sql" "$audited_cases/case_b.sql"
+printf 'SELECT FROM;\n' >"$audited_cases/planning_error.sql"
+printf 'SELECT 1 / 0;\n' >"$audited_cases/execution_error.sql"
+cp "$repo/tests/phase5/sql/runtime-error.sql" "$audited_cases/partial_error.sql"
 chmod 600 "$audited_cases/case_a.sql" "$audited_cases/case_b.sql"
+chmod 600 "$audited_cases/planning_error.sql" "$audited_cases/execution_error.sql" "$audited_cases/partial_error.sql"
 PYTHONPATH="$repo" python3 - "$repo" "$conninfo application_name=pgqi_p5_audited" "$audited_cases" "$audited_out" "$pg_bindir/psql" "$conninfo" <<'PY'
 import hashlib, json, pathlib, subprocess, sys
 from tools.phase5.pilot_runtime import AuditedSession, SequenceJournal
 repo, conninfo, cases, output, psql, fixture_conninfo = pathlib.Path(sys.argv[1]), sys.argv[2], pathlib.Path(sys.argv[3]), pathlib.Path(sys.argv[4]), sys.argv[5], sys.argv[6]
 digests = {name: hashlib.sha256((cases / f"{name}.sql").read_bytes()).hexdigest()
-           for name in ("case_a", "case_b")}
+           for name in ("case_a", "case_b", "planning_error", "execution_error", "partial_error")}
 journal = SequenceJournal(output)
 args = ["--conninfo", conninfo, "--case-root", str(cases), "--output-root", str(output),
         "--session-mode", "lab_allowlist", "--deadline-ms", "8000", "--max-requests", "16",
@@ -91,6 +95,37 @@ if any(item["state"] != "COMPLETE" for item in
 rows = [json.loads(line) for line in (output / "request.journal.jsonl").read_text().splitlines()]
 if [row["sequence"] for row in rows] != list(range(1, len(rows) + 1)):
     raise SystemExit("journal sequence is not contiguous")
+
+def failure_session(name, prepared=False):
+    target = output / f"failure-{name}"
+    target.mkdir(mode=0o700)
+    failure_journal = SequenceJournal(target)
+    failure_args = list(args)
+    failure_args[failure_args.index(str(output))] = str(target)
+    failed = AuditedSession(repo / "tools/phase5/audited-session-driver",
+        failure_journal, failure_args, digests,
+        hashlib.sha256((repo / "tools/phase5/audited-session-driver").read_bytes()).hexdigest())
+    if prepared:
+        prepare_result = failed.prepare("failing", name)
+        if prepare_result["state"] != "COMPLETE": raise SystemExit(prepare_result)
+        result = failed.execute_prepared("failing")
+    else:
+        result = failed.dispatch(name)
+    failed.close()
+    failure_journal.close()
+    return result
+
+planning_error = failure_session("planning_error")
+if (planning_error["reason"], planning_error["planning_state"], planning_error["execution_state"], planning_error["snapshot_state"]) != \
+        ("planning_error", "FAILED", "FAILED", "COMPLETE"):
+    raise SystemExit(f"planning error states are untruthful: {planning_error}")
+cached_error = failure_session("execution_error", prepared=True)
+if (cached_error["reason"], cached_error["planning_state"], cached_error["execution_state"], cached_error["snapshot_state"]) != \
+        ("cached_execution_error", "COMPLETE", "FAILED", "COMPLETE"):
+    raise SystemExit(f"cached execution error states are untruthful: {cached_error}")
+partial_error = failure_session("partial_error")
+if partial_error["state"] != "FAILED" or partial_error["snapshot_state"] != "COMPLETE":
+    raise SystemExit(f"partial stream error states are untruthful: {partial_error}")
 PY
 sleep 0.1
 grep 'pgqi_p5_audited|' "$out/postgres.log" >"$audited_out/sql-dispatch.log"

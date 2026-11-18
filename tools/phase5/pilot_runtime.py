@@ -332,6 +332,9 @@ class AuditedSession:
             self._closed = True
             self._retire_child()
             raise
+        if response["state"] != "COMPLETE":
+            self._closed = True
+            self._retire_child()
         return response
 
     def _retire_child(self) -> None:
