@@ -295,7 +295,7 @@ int main(int argc, char **argv) {
             else if (snprintf(command, sizeof(command), "DEALLOCATE %s", prepared) >= (int)sizeof(command) ||
                     !PQsendQuery(conn, command) ||
                     !command_result(conn, now_ms()+(int64_t)deadline_ms, &reason)) { }
-            else { plans[slot].active = 0; ok = 1; }
+            else { plans[slot].active = 0; reason = "deallocated"; ok = 1; }
             if (!frame_reply(opcode, sequence, ok ? "COMPLETE" :
                     (!strcmp(reason, "connection_error") ? "INCOMPLETE" : "FAILED"),
                     "NOT_RUN", ok ? "COMPLETE" :

@@ -70,9 +70,9 @@ session = AuditedSession(repo / "tools/phase5/audited-session-driver", journal, 
 first = session.dispatch("case_a")
 second = session.dispatch("case_a")
 prepared_a = session.prepare("a", "case_a")
-session.execute_prepared("a")
+planned_a = session.execute_prepared("a")
 session.prepare("b", "case_b")
-session.execute_prepared("b")
+planned_b = session.execute_prepared("b")
 cached_a = session.execute_prepared("a")
 if cached_a["reason"] != "cached":
     raise SystemExit(f"expected cached A, got {cached_a}")
@@ -97,7 +97,10 @@ if [row["sequence"] for row in rows] != list(range(1, len(rows) + 1)):
     raise SystemExit("journal sequence is not contiguous")
 cached_intents = [row for row in rows if row["payload"].get("event") == "execute_prepared_intent" and
                   row["payload"].get("prepared") == "a"]
-if len(cached_intents) < 2 or cached_intents[1]["payload"].get("planning_sequence") != prepared_a["sequence"]:
+cached_intent = next((row for row in cached_intents if row["sequence"] == cached_a["sequence"]), None)
+if (cached_intent is None or
+        cached_intent["payload"].get("planning_sequence") != planned_a["sequence"] or
+        cached_intent["payload"].get("planning_sequence") == planned_b["sequence"]):
     raise SystemExit("cached A is not bound to A planning evidence")
 
 def set_error_value(value):
