@@ -182,7 +182,7 @@ if revalidation.prepare("revalidation", "revalidation_error")["state"] != "COMPL
 if revalidation.execute_prepared("revalidation")["state"] != "COMPLETE":
     raise SystemExit("revalidation prime failed")
 subprocess.run([psql, fixture_conninfo, "-X", "-v", "ON_ERROR_STOP=1", "-c",
-                "ALTER TABLE p5_revalidation DROP COLUMN value"], check=True,
+                "ALTER TABLE p5_revalidation ALTER COLUMN value TYPE bigint"], check=True,
                stdout=subprocess.DEVNULL)
 revalidation_error = revalidation.execute_prepared("revalidation")
 revalidation.close(); revalidation_journal.close()
@@ -193,7 +193,7 @@ if (revalidation_error["reason"], revalidation_error["planning_state"],
 cached_error = failure_session("execution_error", prepared=True, prime_cached=True)
 set_error_value(1)
 if (cached_error["reason"], cached_error["planning_state"], cached_error["execution_state"], cached_error["snapshot_state"]) != \
-        ("cached_execution_error", "COMPLETE", "FAILED", "COMPLETE"):
+        ("prepared_error_unattributed", "UNAVAILABLE", "UNAVAILABLE", "COMPLETE"):
     raise SystemExit(f"cached execution error states are untruthful: {cached_error}")
 partial_error = failure_session("partial_error")
 if (partial_error["state"], partial_error["reason"], partial_error["execution_state"], partial_error["snapshot_state"]) != \

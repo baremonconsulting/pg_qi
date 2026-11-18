@@ -354,14 +354,10 @@ int main(int argc, char **argv) {
                                 plans[prepared_slot].generation++;
                                 plans[prepared_slot].planned = 1;
                             }
-                        } else if (opcode == 4 && plans[prepared_slot].planned &&
-                                   sqlstate[0] == '4' && sqlstate[1] == '2') {
+                        } else if (opcode == 4 && plans[prepared_slot].planned) {
                             planning_state = "UNAVAILABLE";
                             execution_state = "UNAVAILABLE";
                             reason = "prepared_error_unattributed";
-                        } else if (opcode == 4 && plans[prepared_slot].planned) {
-                            planning_state = "COMPLETE";
-                            reason = "cached_execution_error";
                         } else {
                             planning_state = "FAILED";
                             execution_state = "NOT_RUN";
