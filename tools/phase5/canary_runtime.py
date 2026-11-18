@@ -20,12 +20,14 @@ try:
         strict_load_path, validate_contract, verify_artifact)
     from .measurement_runtime import MeasurementError, validate_level_authorization
     from .evidence_tool import EvidenceError, validate_private
+    from .corpus_oracle import OracleError, compare_spools
 except ImportError:
     from contract_rules import (CANARY_CHECKS, CANARY_CONTROLS, CANARY_LIMITATIONS,
         ContractError, canonical_bytes, canonical_sha256, resolve_bundle_path,
         strict_load_path, validate_contract, verify_artifact)
     from measurement_runtime import MeasurementError, validate_level_authorization
     from evidence_tool import EvidenceError, validate_private
+    from corpus_oracle import OracleError, compare_spools
 
 
 class CanaryError(RuntimeError):
@@ -33,6 +35,9 @@ class CanaryError(RuntimeError):
 
 
 UTC = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.(?:\d{3}|\d{6}))?Z$")
+CONTROL_SQL = (b"SHOW duckdb.force_execution\n",
+               b"SELECT unsupported_control()\n", b"SELECT $1::integer\n")
+CONTROL_SQL_SHA256 = [hashlib.sha256(item).hexdigest() for item in CONTROL_SQL]
 
 
 def _time(value: Any, name: str) -> datetime:
@@ -132,6 +137,9 @@ def validate_canary_bundle(root: Path, now: datetime | None = None) -> dict[str,
     if private_validation["result"] != "PASS":
         raise CanaryError("canary_private_validation_failed")
     private_scope = private_validation["scope"]
+    if private_scope["scope_inputs"]["measurement_plan"]["sha256"] != \
+            plan["measurement_plan"]["sha256"]:
+        raise CanaryError("canary_measurement_plan_outside_private_scope")
     qualification = _raw(private_root, private_scope["scope_inputs"]["workload_definition"], {
         "schema_version", "document_type", "qualification_id", "authorities",
         "storage_policy", "baseline_authority", "oracle_limits", "natural_inventory",
@@ -171,6 +179,8 @@ def validate_canary_bundle(root: Path, now: datetime | None = None) -> dict[str,
         verify_artifact(root, plan["positive_sql"])
         verify_artifact(root, plan["expected_spool"])
         verify_artifact(root, run["positive_spool"])
+        for item in plan["negative_control_sql"]:
+            verify_artifact(root, item)
     except ContractError as exc:
         raise CanaryError("canary_positive_artifact_invalid") from exc
     scenarios = {item["query_id"]: item for item in measurement_plan["required_scenarios"]}
@@ -182,9 +192,11 @@ def validate_canary_bundle(root: Path, now: datetime | None = None) -> dict[str,
             baseline_item["spool_sha256"] != plan["expected_spool"]["sha256"] or
             baseline_item["spool_bytes"] != plan["expected_spool"]["bytes"] or
             plan["positive_sql"]["sha256"] != plan["positive_literal_sha256"] or
-            run["positive_spool"] != plan["expected_spool"] or
+            run["positive_spool"]["path"] == plan["expected_spool"]["path"] or
             run["positive_spool"]["bytes"] > plan["maximum_result_bytes"]):
         raise CanaryError("canary_positive_literal_or_limit_mismatch")
+    if [item["sha256"] for item in plan["negative_control_sql"]] != CONTROL_SQL_SHA256:
+        raise CanaryError("canary_control_sql_not_approved")
     request = _artifact_contract(root, run["positive_request"], "request")
     snapshot = _artifact_contract(root, run["positive_snapshot"], "snapshot")
     execution = _raw(root, run["positive_execution_proof"], {"document_type", "query_id",
@@ -218,7 +230,18 @@ def validate_canary_bundle(root: Path, now: datetime | None = None) -> dict[str,
 
     oracle = _raw(root, run["oracle_proof"], {"document_type", "query_id",
         "spool_sha256", "result"}, "canary_oracle")
-    if (oracle["query_id"] != plan["positive_query_id"] or
+    try:
+        scratch = Path(qualification["storage_policy"]["scratch_root"]).resolve(strict=True)
+        scratch.relative_to(private_root)
+        comparison = compare_spools(
+            resolve_bundle_path(root, Path(plan["expected_spool"]["path"])),
+            resolve_bundle_path(root, Path(run["positive_spool"]["path"])),
+            scratch,
+            **qualification["oracle_limits"])
+    except (ContractError, OracleError, OSError, ValueError) as exc:
+        raise CanaryError("canary_oracle_comparison_invalid") from exc
+    if (comparison["result"] != "PASS" or
+            oracle["query_id"] != plan["positive_query_id"] or
             oracle["spool_sha256"] != run["positive_spool"]["sha256"] or
             oracle["result"] != "PASS"):
         raise CanaryError("canary_oracle_did_not_pass")
@@ -259,6 +282,11 @@ def validate_canary_bundle(root: Path, now: datetime | None = None) -> dict[str,
     reconnect_time = _time(reconnect["connected_at"], "canary_reconnect")
     performed = _time(retirement["performed_at"], "canary_retirement")
     backend = run["backend_identity"]
+    for proof in (exit_proof, reconnect):
+        if (not all(isinstance(proof[name], str) and proof[name] for name in
+                    ("cluster_id", "start_id", "backend_start", "session_id")) or
+                type(proof["pid"]) is not int or proof["pid"] <= 0):
+            raise CanaryError("canary_backend_identity_invalid")
     if (retirement["owned_session_id"] != run["session_id"] or
             exit_proof["session_id"] != run["session_id"] or
             any(exit_proof[name] != backend[name] for name in
@@ -266,8 +294,11 @@ def validate_canary_bundle(root: Path, now: datetime | None = None) -> dict[str,
             exit_proof["observer_authorized"] is not True or
             exit_proof["observation_complete"] is not True or
             exit_proof["backend_present"] is not False or exit_proof["result"] != "PASS" or
+            reconnect["cluster_id"] != backend["cluster_id"] or
+            reconnect["start_id"] != backend["start_id"] or
             reconnect["session_id"] == run["session_id"] or reconnect["pid"] == backend["pid"] or
-            reconnect["backend_start"] == backend["backend_start"] or reconnect["mode"] != "off" or
+            _time(reconnect["backend_start"], "reconnect_backend_start") < exit_time or
+            reconnect["mode"] != "off" or
             reconnect["force_execution"] != "off" or
             reconnect["observed_engine"] != "postgres" or reconnect["result"] != "PASS" or
             not (finished < exit_time <= performed < reconnect_time <= min(go_end, checked_utc)) or
