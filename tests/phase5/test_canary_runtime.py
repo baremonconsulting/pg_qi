@@ -183,8 +183,9 @@ def build_canary(root: Path) -> tuple[datetime, dict, dict, dict]:
         "started_at": utc(base + timedelta(seconds=2)),
         "finished_at": utc(base + timedelta(seconds=3)), "result": "PASS"})
     mandate = __import__("json").loads((root / "operation-mandate.json").read_text())
+    recovery_r2 = __import__("json").loads((root / "operation-r2.json").read_text())
     backend = {"cluster_id": mandate["target_cluster_id"],
-        "start_id": mandate["target_initial_start_id"], "pid": 1234,
+        "start_id": recovery_r2["after_start_id"], "pid": 1234,
         "backend_start": utc(base - timedelta(seconds=10)), "session_id": "session-1"}
     run = {"schema_version": 1, "contract_type": "canary_run", "contract_id": "canary-run-1",
         "scope_sha256": scope_sha, "canary_id": "canary-1",
@@ -203,7 +204,7 @@ def build_canary(root: Path) -> tuple[datetime, dict, dict, dict]:
         "observed_at": utc(base + timedelta(seconds=7)), "result": "PASS"})
     reconnect = raw(root, "fresh-reconnect.json", {"document_type": "canary_fresh_reconnect",
         "cluster_id": mandate["target_cluster_id"],
-        "start_id": mandate["target_initial_start_id"], "pid": 2345,
+        "start_id": recovery_r2["after_start_id"], "pid": 2345,
         "backend_start": utc(base + timedelta(seconds=8)), "session_id": "session-2",
         "connected_at": utc(base + timedelta(seconds=8)),
         "mode": "off", "force_execution": "off", "observed_engine": "postgres",

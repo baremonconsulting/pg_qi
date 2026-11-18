@@ -191,6 +191,7 @@ def validate_canary_bundle(root: Path, now: datetime | None = None) -> dict[str,
     operation_go = _artifact_contract(root, authorization["operation_go"], "approval_receipt")
     mandate = _artifact_contract(root, authorization["operation_rehearsal_mandate"],
                                  "rehearsal_mandate")
+    recovery_r2 = _artifact_contract(root, authorization["operation_recovery_r2"], "recovery_r2")
     if (level["level"] != 1 or level["sessions"] != 1 or
             canonical_sha256(operation_go) != plan["operation_go_sha256"] or
             run["operation_go_sha256"] != plan["operation_go_sha256"]):
@@ -349,7 +350,7 @@ def validate_canary_bundle(root: Path, now: datetime | None = None) -> dict[str,
         raise CanaryError("canary_observed_spool_aliases_baseline")
     if (retirement["owned_session_id"] != run["session_id"] or
             backend["cluster_id"] != mandate["target_cluster_id"] or
-            backend["start_id"] != mandate["target_initial_start_id"] or
+            backend["start_id"] != recovery_r2["after_start_id"] or
             not _time(operation_go["valid_from"], "operation_go_start") <= backend_start <= started or
             exit_proof["session_id"] != run["session_id"] or
             any(exit_proof[name] != backend[name] for name in
