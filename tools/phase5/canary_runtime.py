@@ -255,6 +255,8 @@ def validate_canary_bundle(root: Path, now: datetime | None = None) -> dict[str,
             private_request.get("planning_request_id") != request.get("planning_request_id") or
             private_request.get("observed_spool", {}).get("sha256") !=
             run["positive_spool"]["sha256"] or
+            any(name in request for name in ("prepared_object_id", "prepared_generation",
+                                              "sqlstate")) or
             request["query_id"] != plan["positive_query_id"] or
             request["session_id"] != run["session_id"] or
             request["execution_status"] != "SUCCEEDED" or

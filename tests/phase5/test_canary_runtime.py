@@ -342,6 +342,18 @@ class CanaryRuntimeTests(unittest.TestCase):
             with self.assertRaisesRegex(CanaryError, "outside_private_scope"):
                 validate_canary_bundle(root, checked)
 
+    def test_fresh_positive_request_refuses_prepared_identity_and_sqlstate(self) -> None:
+        for extra in ({"prepared_object_id": "other", "prepared_generation": 2},
+                      {"sqlstate": "XX000"}):
+            with self.subTest(extra=extra), tempfile.TemporaryDirectory() as name:
+                root = Path(name); checked, _, run, _ = build_canary(root)
+                request = __import__("json").loads((root / "positive-request.json").read_text())
+                request.update(extra); write_document(root / "positive-request.json", request)
+                run["positive_request"] = artifact(root, "positive-request.json")
+                reseal_run(root, run)
+                with self.assertRaisesRegex(CanaryError, "positive_request_or_snapshot"):
+                    validate_canary_bundle(root, checked)
+
     def test_cli_persists_terminal_outcome_and_blocks_retry(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             root = Path(name); _, plan_value, run, _ = build_canary(root)
