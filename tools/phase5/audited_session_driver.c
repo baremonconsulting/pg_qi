@@ -347,10 +347,15 @@ int main(int argc, char **argv) {
                                                 now_ms()+(int64_t)deadline_ms)) {
                         snapshot_state = "COMPLETE";
                         if (strcmp(before, after)) {
-                            planning_state = "COMPLETE";
-                            reason = opcode == 4 ? "replanned_execution_error" :
-                                                  "fresh_execution_error";
-                            if (opcode == 4) {
+                            if (opcode == 4 && plans[prepared_slot].planned) {
+                                planning_state = "UNAVAILABLE";
+                                reason = "prepared_error_with_plan_activity";
+                            } else {
+                                planning_state = "COMPLETE";
+                                reason = opcode == 4 ? "planned_execution_error" :
+                                                      "fresh_execution_error";
+                            }
+                            if (opcode == 4 && !plans[prepared_slot].planned) {
                                 plans[prepared_slot].generation++;
                                 plans[prepared_slot].planned = 1;
                             }
@@ -364,9 +369,11 @@ int main(int argc, char **argv) {
                             reason = "planning_error";
                         }
                     } else snapshot_state = "INCOMPLETE";
-                    if (transaction_aborted)
+                    if (transaction_aborted) {
+                        planning_state = "UNAVAILABLE";
+                        execution_state = "UNAVAILABLE";
                         reason = "aborted_transaction";
-                    else if (partial_stream)
+                    } else if (partial_stream)
                         reason = "partial_stream_error";
                 }
             } else {
@@ -378,9 +385,12 @@ int main(int argc, char **argv) {
                 } else {
                     snapshot_state = "COMPLETE"; planning_state = "COMPLETE";
                     if (opcode == 4) {
-                        if (strcmp(before, after)) {
-                            reason = "replanned";
+                        if (strcmp(before, after) && !plans[prepared_slot].planned) {
+                            reason = "planned";
                             plans[prepared_slot].generation++;
+                        } else if (strcmp(before, after)) {
+                            planning_state = "UNAVAILABLE";
+                            reason = "prepared_plan_activity_unattributed";
                         } else reason = "cached";
                         plans[prepared_slot].planned = 1;
                     } else reason = "fresh";

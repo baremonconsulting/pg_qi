@@ -322,7 +322,7 @@ class AuditedSession:
             "generation": plan.generation}, {"event": "execute_prepared_intent",
             "prepared": prepared, "generation": plan.generation,
             "planning_sequence": plan.replanned_sequence or plan.created_sequence})
-        if response["reason"] in ("replanned", "replanned_execution_error"):
+        if response["reason"] in ("planned", "planned_execution_error"):
             self._registry.replan(prepared, response["sequence"])
         return response
 

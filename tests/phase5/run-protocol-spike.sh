@@ -56,11 +56,13 @@ printf 'SELECT 1 / 0;\n' >"$audited_cases/planning_error_non42.sql"
 printf 'SELECT 1 / value FROM p5_literal WHERE id = 1;\n' >"$audited_cases/execution_error.sql"
 printf "SELECT ('pgqi_absent_' || id::text)::regclass FROM p5_literal WHERE id = 1;\n" >"$audited_cases/execution_error_42.sql"
 printf 'SELECT value FROM p5_revalidation WHERE id = 1;\n' >"$audited_cases/revalidation_error.sql"
+printf "SELECT query_to_xml('SELECT 1', false, false, '');\n" >"$audited_cases/nested_planning.sql"
 cp "$repo/tests/phase5/sql/runtime-error.sql" "$audited_cases/partial_error.sql"
 chmod 600 "$audited_cases/case_a.sql" "$audited_cases/case_b.sql"
 chmod 600 "$audited_cases/planning_error.sql" "$audited_cases/execution_error.sql" "$audited_cases/partial_error.sql"
 chmod 600 "$audited_cases/planning_error_non42.sql" "$audited_cases/execution_error_42.sql"
 chmod 600 "$audited_cases/revalidation_error.sql"
+chmod 600 "$audited_cases/nested_planning.sql"
 PYTHONPATH="$repo" python3 - "$repo" "$conninfo application_name=pgqi_p5_audited" "$audited_cases" "$audited_out" "$pg_bindir/psql" "$conninfo" <<'PY'
 import hashlib, json, pathlib, subprocess, sys
 from tools.phase5.pilot_runtime import AuditedSession, SequenceJournal
@@ -70,6 +72,8 @@ digests = {name: hashlib.sha256((cases / f"{name}.sql").read_bytes()).hexdigest(
                         "execution_error", "execution_error_42", "partial_error")}
 digests["revalidation_error"] = hashlib.sha256(
     (cases / "revalidation_error.sql").read_bytes()).hexdigest()
+digests["nested_planning"] = hashlib.sha256(
+    (cases / "nested_planning.sql").read_bytes()).hexdigest()
 journal = SequenceJournal(output)
 args = ["--conninfo", conninfo, "--case-root", str(cases), "--output-root", str(output),
         "--session-mode", "lab_allowlist", "--deadline-ms", "8000", "--max-requests", "24",
@@ -90,7 +94,7 @@ subprocess.run([psql, fixture_conninfo, "-X", "-v", "ON_ERROR_STOP=1", "-c",
                 "ALTER TABLE p5_literal ADD COLUMN invalidation_probe integer"], check=True,
                stdout=subprocess.DEVNULL)
 replanned_a = session.execute_prepared("a")
-if replanned_a["reason"] != "replanned":
+if replanned_a["reason"] != "prepared_plan_activity_unattributed":
     raise SystemExit(f"expected invalidation replan, got {replanned_a}")
 cached_replanned_a = session.execute_prepared("a")
 if cached_replanned_a["reason"] != "cached":
@@ -105,6 +109,11 @@ session.prepare("A", "case_b")
 session.execute_prepared("A")
 session.deallocate("A")
 after_upper = session.execute_prepared("a")
+session.prepare("nested", "nested_planning")
+session.execute_prepared("nested")
+nested_cached_outer = session.execute_prepared("nested")
+if nested_cached_outer["reason"] != "prepared_plan_activity_unattributed":
+    raise SystemExit(f"nested planning was falsely attributed: {nested_cached_outer}")
 session.close(); journal.close()
 if any(item["state"] != "COMPLETE" for item in
        (first, second, cached_a, replanned_a, cached_replanned_a, reprepared_a,
@@ -202,7 +211,9 @@ if (partial_error["state"], partial_error["reason"], partial_error["execution_st
 set_error_value(0)
 aborted = failure_session("execution_error", transaction=True)
 set_error_value(1)
-if aborted["reason"] != "aborted_transaction" or aborted["snapshot_state"] != "INCOMPLETE":
+if (aborted["reason"], aborted["planning_state"], aborted["execution_state"],
+        aborted["snapshot_state"]) != ("aborted_transaction", "UNAVAILABLE",
+                                        "UNAVAILABLE", "INCOMPLETE"):
     raise SystemExit(f"aborted transaction states are untruthful: {aborted}")
 PY
 sleep 0.1
