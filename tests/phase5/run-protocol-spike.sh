@@ -50,19 +50,23 @@ mkdir -m 700 "$audited_cases" "$audited_out"
 cp "$repo/tests/phase5/sql/literal.sql" "$audited_cases/case_a.sql"
 cp "$repo/tests/phase5/sql/null-empty.sql" "$audited_cases/case_b.sql"
 printf 'SELECT FROM;\n' >"$audited_cases/planning_error.sql"
+printf 'SELECT 1 / 0;\n' >"$audited_cases/planning_error_non42.sql"
 printf 'SELECT 1 / value FROM p5_literal WHERE id = 1;\n' >"$audited_cases/execution_error.sql"
+printf "SELECT ('pgqi_absent_' || id::text)::regclass FROM p5_literal WHERE id = 1;\n" >"$audited_cases/execution_error_42.sql"
 cp "$repo/tests/phase5/sql/runtime-error.sql" "$audited_cases/partial_error.sql"
 chmod 600 "$audited_cases/case_a.sql" "$audited_cases/case_b.sql"
 chmod 600 "$audited_cases/planning_error.sql" "$audited_cases/execution_error.sql" "$audited_cases/partial_error.sql"
+chmod 600 "$audited_cases/planning_error_non42.sql" "$audited_cases/execution_error_42.sql"
 PYTHONPATH="$repo" python3 - "$repo" "$conninfo application_name=pgqi_p5_audited" "$audited_cases" "$audited_out" "$pg_bindir/psql" "$conninfo" <<'PY'
 import hashlib, json, pathlib, subprocess, sys
 from tools.phase5.pilot_runtime import AuditedSession, SequenceJournal
 repo, conninfo, cases, output, psql, fixture_conninfo = pathlib.Path(sys.argv[1]), sys.argv[2], pathlib.Path(sys.argv[3]), pathlib.Path(sys.argv[4]), sys.argv[5], sys.argv[6]
 digests = {name: hashlib.sha256((cases / f"{name}.sql").read_bytes()).hexdigest()
-           for name in ("case_a", "case_b", "planning_error", "execution_error", "partial_error")}
+           for name in ("case_a", "case_b", "planning_error", "planning_error_non42",
+                        "execution_error", "execution_error_42", "partial_error")}
 journal = SequenceJournal(output)
 args = ["--conninfo", conninfo, "--case-root", str(cases), "--output-root", str(output),
-        "--session-mode", "lab_allowlist", "--deadline-ms", "8000", "--max-requests", "16",
+        "--session-mode", "lab_allowlist", "--deadline-ms", "8000", "--max-requests", "24",
         "--max-rows", "2000", "--max-bytes", "1048576", "--max-columns", "4",
         "--max-field-bytes", "1024", "--max-spool-bytes", "2097152", "--max-messages", "2010"]
 session = AuditedSession(repo / "tools/phase5/audited-session-driver", journal, args,
@@ -88,9 +92,17 @@ if cached_replanned_a["reason"] != "cached":
 session.deallocate("a")
 session.prepare("a", "case_a")
 reprepared_a = session.execute_prepared("a")
+session.prepare("all", "case_b")
+session.deallocate("all")
+after_all = session.execute_prepared("a")
+session.prepare("A", "case_b")
+session.execute_prepared("A")
+session.deallocate("A")
+after_upper = session.execute_prepared("a")
 session.close(); journal.close()
 if any(item["state"] != "COMPLETE" for item in
-       (first, second, cached_a, replanned_a, cached_replanned_a, reprepared_a)):
+       (first, second, cached_a, replanned_a, cached_replanned_a, reprepared_a,
+        after_all, after_upper)):
     raise SystemExit("audited session did not complete")
 rows = [json.loads(line) for line in (output / "request.journal.jsonl").read_text().splitlines()]
 if [row["sequence"] for row in rows] != list(range(1, len(rows) + 1)):
@@ -138,6 +150,18 @@ planning_error = failure_session("planning_error")
 if (planning_error["reason"], planning_error["planning_state"], planning_error["execution_state"], planning_error["snapshot_state"]) != \
         ("planning_error", "FAILED", "NOT_RUN", "COMPLETE"):
     raise SystemExit(f"planning error states are untruthful: {planning_error}")
+planning_error_non42 = failure_session("planning_error_non42")
+if (planning_error_non42["reason"], planning_error_non42["planning_state"],
+        planning_error_non42["execution_state"]) != ("planning_error", "FAILED", "NOT_RUN"):
+    raise SystemExit(f"non-42 planning error states are untruthful: {planning_error_non42}")
+prepared_planning_error = failure_session("planning_error_non42", prepared=True)
+if (prepared_planning_error["reason"], prepared_planning_error["planning_state"],
+        prepared_planning_error["execution_state"]) != ("planning_error", "FAILED", "NOT_RUN"):
+    raise SystemExit(f"prepared planning error states are untruthful: {prepared_planning_error}")
+execution_error_42 = failure_session("execution_error_42")
+if (execution_error_42["reason"], execution_error_42["planning_state"],
+        execution_error_42["execution_state"]) != ("fresh_execution_error", "COMPLETE", "FAILED"):
+    raise SystemExit(f"class-42 execution error states are untruthful: {execution_error_42}")
 cached_error = failure_session("execution_error", prepared=True, prime_cached=True)
 set_error_value(1)
 if (cached_error["reason"], cached_error["planning_state"], cached_error["execution_state"], cached_error["snapshot_state"]) != \

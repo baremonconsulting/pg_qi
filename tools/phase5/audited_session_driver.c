@@ -1,3 +1,4 @@
+#define _XOPEN_SOURCE 700
 #define main protocol_spike_main
 #include "protocol_driver.c"
 #undef main
@@ -8,7 +9,12 @@
 #define FRAME_MAX (1024U * 1024U)
 #define MAX_PREPARED 64
 
-typedef struct { char name[64]; unsigned long long generation; int active; } PlanSlot;
+typedef struct {
+    char name[64];
+    unsigned long long generation;
+    int active;
+    int planned;
+} PlanSlot;
 
 static int plan_index(PlanSlot slots[MAX_PREPARED], const char *name) {
     int i;
@@ -86,7 +92,7 @@ static int command_result(PGconn *conn, int64_t deadline, const char **reason) {
     if (!flush_bounded(conn, deadline)) { *reason = "send_error"; return 0; }
     while (PQisBusy(conn)) {
         int ready = wait_socket(conn, POLLIN, deadline);
-        if (ready < 0 || (ready > 0 && !PQconsumeInput(conn))) {
+        if (ready == 0 || (ready > 0 && !PQconsumeInput(conn))) {
             *reason = "connection_error"; return 0;
         }
     }
@@ -269,7 +275,7 @@ int main(int argc, char **argv) {
             else if (fsync(output_fd)) reason = "snapshot_write";
             else {
                 strcpy(plans[slot].name, prepared); plans[slot].generation = generation;
-                plans[slot].active = 1; ok = 1;
+                plans[slot].active = 1; plans[slot].planned = 0; ok = 1;
             }
             {
                 int uncertain = !strcmp(reason, "connection_error") ||
@@ -289,13 +295,15 @@ int main(int argc, char **argv) {
             continue;
         }
         if (opcode == 5) {
-            char command[96];
+            char command[160]; char *quoted = NULL;
             int slot = plan_index(plans, prepared);
             if (slot < 0 || plans[slot].generation != generation) reason = "prepared_generation";
-            else if (snprintf(command, sizeof(command), "DEALLOCATE %s", prepared) >= (int)sizeof(command) ||
+            else if (!(quoted = PQescapeIdentifier(conn, prepared, strlen(prepared)))) reason = "identifier_quote";
+            else if (snprintf(command, sizeof(command), "DEALLOCATE %s", quoted) >= (int)sizeof(command) ||
                     !PQsendQuery(conn, command) ||
                     !command_result(conn, now_ms()+(int64_t)deadline_ms, &reason)) { }
             else { plans[slot].active = 0; reason = "deallocated"; ok = 1; }
+            if (quoted) PQfreemem(quoted);
             if (!frame_reply(opcode, sequence, ok ? "COMPLETE" :
                     (!strcmp(reason, "connection_error") ? "INCOMPLETE" : "FAILED"),
                     "NOT_RUN", ok ? "COMPLETE" :
@@ -338,21 +346,20 @@ int main(int argc, char **argv) {
                     if (after && write_snapshot(conn, snapshot_path, before,
                                                 now_ms()+(int64_t)deadline_ms)) {
                         snapshot_state = "COMPLETE";
-                        if (sqlstate[0] == '4' && sqlstate[1] == '2') {
-                            planning_state = "FAILED";
-                            execution_state = "NOT_RUN";
-                            reason = "planning_error";
-                        } else if (opcode == 4) {
+                        if (strcmp(before, after)) {
                             planning_state = "COMPLETE";
-                            if (strcmp(before, after)) {
-                                reason = "replanned_execution_error";
+                            reason = opcode == 4 ? "replanned_execution_error" :
+                                                  "fresh_execution_error";
+                            if (opcode == 4) {
                                 plans[prepared_slot].generation++;
-                            } else reason = "cached_execution_error";
-                        } else if (strcmp(before, after)) {
+                                plans[prepared_slot].planned = 1;
+                            }
+                        } else if (opcode == 4 && plans[prepared_slot].planned) {
                             planning_state = "COMPLETE";
-                            reason = "fresh_execution_error";
+                            reason = "cached_execution_error";
                         } else {
                             planning_state = "FAILED";
+                            execution_state = "NOT_RUN";
                             reason = "planning_error";
                         }
                     } else snapshot_state = "INCOMPLETE";
@@ -374,6 +381,7 @@ int main(int argc, char **argv) {
                             reason = "replanned";
                             plans[prepared_slot].generation++;
                         } else reason = "cached";
+                        plans[prepared_slot].planned = 1;
                     } else reason = "fresh";
                     if (fflush(spool) || fsync(fileno(spool))) reason = "spool_sync";
                     else ok = 1;
