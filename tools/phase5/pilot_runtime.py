@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import resource
 import stat
 import struct
 import subprocess
@@ -38,6 +39,8 @@ def _canonical(value: Any) -> bytes:
 def _exclusive_file(root: Path, name: str):
     if not IDENTIFIER.fullmatch(name.replace(".", "_")):
         raise ValueError("invalid output name")
+    if root.resolve(strict=True) != root.absolute():
+        raise ValueError("output root must not contain symbolic links")
     root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         info = os.fstat(root_fd)
@@ -83,10 +86,18 @@ class SequenceJournal:
         data = _canonical(record) + b"\n"
         if len(data) > self._max_record_bytes:
             raise ValueError("journal record exceeds limit")
+        try:
+            if self._stream.write(data) != len(data):
+                raise OSError("short journal write")
+            os.fsync(self._stream.fileno())
+        except Exception:
+            self._closed = True
+            try:
+                self._stream.close()
+            finally:
+                os.close(self._root_fd)
+            raise
         self._sequence = next_sequence
-        if self._stream.write(data) != len(data):
-            raise OSError("short journal write")
-        os.fsync(self._stream.fileno())
         self._previous = digest
         return record
 
@@ -215,7 +226,10 @@ def read_frame_deadline(stream, timeout_seconds: int) -> tuple[int, dict[str, An
     if body[0] != FRAME_VERSION or body[1] not in (OP_EXECUTE, OP_CLOSE,
             OP_PREPARE, OP_EXECUTE_PREPARED, OP_DEALLOCATE, OP_BEGIN):
         raise ValueError("unsupported frame")
-    decoded = json.loads(body[2:].decode("ascii"))
+    try:
+        decoded = json.loads(body[2:].decode("ascii"))
+    except (json.JSONDecodeError, UnicodeError, RecursionError) as exc:
+        raise ValueError("invalid frame JSON") from exc
     if not isinstance(decoded, dict):
         raise ValueError("frame payload must be an object")
     return body[1], decoded
@@ -227,7 +241,8 @@ class AuditedSession:
     def __init__(self, driver: Path, journal: SequenceJournal,
                  fixed_args: list[str], approved_cases: dict[str, str],
                  expected_driver_sha256: str,
-                 response_timeout_seconds: int = 30) -> None:
+                 response_timeout_seconds: int = 30,
+                 max_address_space_kib: int = 262144) -> None:
         driver_fd = os.open(driver, os.O_RDONLY | os.O_NOFOLLOW)
         info = os.fstat(driver_fd)
         if (not stat.S_ISREG(info.st_mode) or info.st_uid not in (0, os.getuid()) or
@@ -243,11 +258,38 @@ class AuditedSession:
         self._response_timeout = response_timeout_seconds
         self._registry = PreparedRegistry()
         self._closed = False
+        child_args = list(fixed_args)
+        inherited = [driver_fd]
+        conninfo_read = None
+        if "--conninfo" in child_args:
+            index = child_args.index("--conninfo")
+            if index + 1 >= len(child_args):
+                os.close(driver_fd); raise ValueError("missing conninfo")
+            conninfo = child_args[index + 1].encode("utf-8")
+            if not conninfo or len(conninfo) > 8192 or b"\0" in conninfo:
+                os.close(driver_fd); raise ValueError("invalid conninfo")
+            conninfo_read, conninfo_write = os.pipe()
+            os.write(conninfo_write, conninfo)
+            os.close(conninfo_write)
+            child_args[index:index + 2] = ["--conninfo-fd", str(conninfo_read)]
+            inherited.append(conninfo_read)
+        def child_boundary() -> None:
+            os.umask(0o077)
+            limit = max_address_space_kib * 1024
+            resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+            resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+            try:
+                import ctypes
+                ctypes.CDLL(None).prctl(1, 15, 0, 0, 0)
+            except Exception:
+                pass
         self._proc = subprocess.Popen(
-            [f"/proc/self/fd/{driver_fd}", *fixed_args], stdin=subprocess.PIPE,
+            [f"/proc/self/fd/{driver_fd}", *child_args], stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, close_fds=True,
-            pass_fds=(driver_fd,),
+            pass_fds=tuple(inherited), preexec_fn=child_boundary,
             start_new_session=True, env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
+        if conninfo_read is not None:
+            os.close(conninfo_read)
         os.close(driver_fd)
 
     def dispatch(self, case_id: str) -> dict[str, Any]:
@@ -300,7 +342,12 @@ class AuditedSession:
                   intent_payload: dict[str, Any]) -> dict[str, Any]:
         if self._closed:
             raise ValueError("audited session is closed")
-        intent = self._journal.append("request", "STARTED", intent_payload)
+        try:
+            intent = self._journal.append("request", "STARTED", intent_payload)
+        except Exception:
+            self._closed = True
+            self._retire_child()
+            raise
         request = encode_frame(opcode_expected,
             {**payload, "sequence": intent["sequence"]})
         try:
@@ -318,7 +365,8 @@ class AuditedSession:
                     response["execution_state"] not in TERMINAL or \
                     response["snapshot_state"] not in TERMINAL:
                 raise ValueError("invalid driver terminal schema")
-        except (BrokenPipeError, EOFError, OSError, TimeoutError, ValueError) as exc:
+        except (BrokenPipeError, EOFError, OSError, TimeoutError, ValueError,
+                RecursionError) as exc:
             self._closed = True
             try:
                 self._journal.append("execution", "INCOMPLETE", {
@@ -332,6 +380,9 @@ class AuditedSession:
                 self._journal.append(phase, response[f"{phase}_state"], {
                     "event": "driver_terminal", "intent_sequence": intent["sequence"],
                     "reason": response["reason"]})
+            self._journal.append("request", response["state"], {
+                "event": "request_terminal", "intent_sequence": intent["sequence"],
+                "reason": response["reason"]})
         except Exception:
             self._closed = True
             self._retire_child()

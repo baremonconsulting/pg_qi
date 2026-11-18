@@ -85,7 +85,8 @@ static int command_result(PGconn *conn, int64_t deadline, const char **reason) {
     PGresult *r;
     if (!flush_bounded(conn, deadline)) { *reason = "send_error"; return 0; }
     while (PQisBusy(conn)) {
-        if (wait_socket(conn, POLLIN, deadline) <= 0 || !PQconsumeInput(conn)) {
+        int ready = wait_socket(conn, POLLIN, deadline);
+        if (ready < 0 || (ready > 0 && !PQconsumeInput(conn))) {
             *reason = "connection_error"; return 0;
         }
     }
@@ -112,7 +113,11 @@ static int digest_matches(const unsigned char *data, size_t length,
 
 static int open_private_directory(const char *path) {
     int fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
-    struct stat st;
+    struct stat st; char resolved[PATH_MAX];
+    if (!realpath(path, resolved) || strcmp(path, resolved)) {
+        if (fd >= 0) close(fd);
+        return -1;
+    }
     if (fd < 0 || fstat(fd, &st) || !S_ISDIR(st.st_mode) ||
         st.st_uid != getuid() || (st.st_mode & 0777) != 0700) {
         if (fd >= 0) close(fd);
@@ -144,6 +149,7 @@ static char *read_case_at(int root_fd, const char *name) {
 
 int main(int argc, char **argv) {
     const char *conninfo = NULL, *case_root = NULL, *output_root = NULL;
+    char conninfo_buffer[8193]; int conninfo_fd = -1;
     const char *mode = NULL; PGconn *conn = NULL; int i, case_fd = -1, output_fd = -1;
     uint64_t deadline_ms = 0, max_requests = 0, request_count = 0, value;
     Limits base = {0};
@@ -151,6 +157,7 @@ int main(int argc, char **argv) {
     memset(plans, 0, sizeof(plans));
     for (i = 1; i + 1 < argc; i += 2) {
         if (!strcmp(argv[i], "--conninfo")) conninfo = argv[i + 1];
+        else if (!strcmp(argv[i], "--conninfo-fd") && parse_u64(argv[i+1], INT_MAX, &value)) conninfo_fd=(int)value;
         else if (!strcmp(argv[i], "--case-root")) case_root = argv[i + 1];
         else if (!strcmp(argv[i], "--output-root")) output_root = argv[i + 1];
         else if (!strcmp(argv[i], "--session-mode")) mode = argv[i + 1];
@@ -163,6 +170,12 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--max-spool-bytes") && parse_u64(argv[i+1], INT64_MAX, &value)) base.max_spool=value;
         else if (!strcmp(argv[i], "--max-messages") && parse_u64(argv[i+1], UINT32_MAX, &value)) base.max_messages=value;
         else return 64;
+    }
+    if (!conninfo && conninfo_fd >= 0) {
+        ssize_t count = read(conninfo_fd, conninfo_buffer, sizeof(conninfo_buffer) - 1);
+        if (count <= 0 || memchr(conninfo_buffer, '\0', (size_t)count)) return 64;
+        conninfo_buffer[count] = 0; conninfo = conninfo_buffer;
+        close(conninfo_fd);
     }
     if (i != argc || !conninfo || !case_root || !output_root || !mode || !deadline_ms || !max_requests ||
         !base.max_rows || !base.max_bytes || !base.max_columns || !base.max_field ||
@@ -253,6 +266,7 @@ int main(int argc, char **argv) {
                      !command_result(conn, now_ms()+(int64_t)deadline_ms, &reason)) { }
             else if (!write_snapshot(conn, snapshot_path, before,
                                      now_ms()+(int64_t)deadline_ms)) reason = "snapshot_write";
+            else if (fsync(output_fd)) reason = "snapshot_write";
             else {
                 strcpy(plans[slot].name, prepared); plans[slot].generation = generation;
                 plans[slot].active = 1; ok = 1;
@@ -282,8 +296,10 @@ int main(int argc, char **argv) {
                     !PQsendQuery(conn, command) ||
                     !command_result(conn, now_ms()+(int64_t)deadline_ms, &reason)) { }
             else { plans[slot].active = 0; ok = 1; }
-            if (!frame_reply(opcode, sequence, ok ? "COMPLETE" : "FAILED",
-                    "NOT_RUN", ok ? "COMPLETE" : "FAILED", "NOT_RUN",
+            if (!frame_reply(opcode, sequence, ok ? "COMPLETE" :
+                    (!strcmp(reason, "connection_error") ? "INCOMPLETE" : "FAILED"),
+                    "NOT_RUN", ok ? "COMPLETE" :
+                    (!strcmp(reason, "connection_error") ? "INCOMPLETE" : "FAILED"), "NOT_RUN",
                     reason)) ok = 0;
             if (!ok) break;
             continue;
@@ -313,6 +329,7 @@ int main(int argc, char **argv) {
                         !strcmp(reason, "server_error_after_partial_stream")) {
                     PGresult *tail;
                     int transaction_aborted;
+                    int partial_stream = !strcmp(reason, "server_error_after_partial_stream");
                     execution_state = "FAILED";
                     while ((tail = PQgetResult(conn)) != NULL) PQclear(tail);
                     transaction_aborted = PQtransactionStatus(conn) == PQTRANS_INERROR;
@@ -321,7 +338,11 @@ int main(int argc, char **argv) {
                     if (after && write_snapshot(conn, snapshot_path, before,
                                                 now_ms()+(int64_t)deadline_ms)) {
                         snapshot_state = "COMPLETE";
-                        if (opcode == 4) {
+                        if (sqlstate[0] == '4' && sqlstate[1] == '2') {
+                            planning_state = "FAILED";
+                            execution_state = "NOT_RUN";
+                            reason = "planning_error";
+                        } else if (opcode == 4) {
                             planning_state = "COMPLETE";
                             if (strcmp(before, after)) {
                                 reason = "replanned_execution_error";
@@ -337,6 +358,8 @@ int main(int argc, char **argv) {
                     } else snapshot_state = "INCOMPLETE";
                     if (transaction_aborted)
                         reason = "aborted_transaction";
+                    else if (partial_stream)
+                        reason = "partial_stream_error";
                 }
             } else {
                 execution_state = "COMPLETE";
@@ -364,6 +387,9 @@ int main(int argc, char **argv) {
                             !strcmp(reason, "snapshot_write") || !strcmp(reason, "spool_sync") ||
                             !strcmp(reason, "send_error");
             const char *terminal = ok ? "COMPLETE" : (uncertain ? "INCOMPLETE" : "FAILED");
+            if (spool && (fflush(spool) || fsync(fileno(spool)))) {
+                reason = "spool_sync"; terminal = "INCOMPLETE";
+            }
             if (fsync(output_fd) || !frame_reply(opcode, sequence, terminal,
                     planning_state, execution_state, snapshot_state,
                     reason)) ok = 0;

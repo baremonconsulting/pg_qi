@@ -7,6 +7,7 @@ import os
 import tempfile
 import unittest
 import sys
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -42,7 +43,7 @@ class JournalTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as name:
             parent = Path(name); real = parent / "real"; real.mkdir(mode=0o700)
             link = parent / "link"; link.symlink_to(real, target_is_directory=True)
-            with self.assertRaises(OSError):
+            with self.assertRaises((OSError, ValueError)):
                 SequenceJournal(link)
 
     def test_record_count_and_size_are_bounded(self) -> None:
@@ -59,6 +60,16 @@ class JournalTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 journal.append("request", "STARTED", {"value": "x" * 1000})
             journal.close()
+
+    def test_sync_failure_permanently_closes_journal(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); os.chmod(root, 0o700)
+            journal = SequenceJournal(root)
+            with mock.patch("os.fsync", side_effect=OSError("injected sync failure")):
+                with self.assertRaises(OSError):
+                    journal.append("request", "STARTED", {})
+            with self.assertRaises(ValueError):
+                journal.append("request", "STARTED", {})
 
 
 class RegistryTests(unittest.TestCase):
@@ -105,7 +116,8 @@ class FramedSessionTests(unittest.TestCase):
             self.assertEqual(rows[0]["payload"]["event"], "dispatch_intent")
             self.assertEqual(rows[1]["payload"]["intent_sequence"], 1)
             self.assertEqual([row["phase"] for row in rows[1:]],
-                             ["planning", "execution", "snapshot"])
+                             ["planning", "execution", "snapshot", "request"])
+            self.assertEqual(rows[-1]["state"], "COMPLETE")
 
     def test_session_loss_is_incomplete_and_never_replayed(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -136,6 +148,20 @@ class FramedSessionTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 session.dispatch("case_a")
             journal.close()
+
+    def test_unapproved_case_is_refused_before_process_dispatch(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); os.chmod(root, 0o700)
+            fixture = Path(__file__).parent / "fixtures/framed-driver.py"
+            driver = Path(sys.executable).resolve()
+            journal = SequenceJournal(root)
+            session = AuditedSession(driver, journal, [str(fixture)],
+                                     {"safe": "a" * 64},
+                                     hashlib.sha256(driver.read_bytes()).hexdigest())
+            with self.assertRaises(ValueError):
+                session.dispatch("pg_terminate_backend")
+            session.close(); journal.close()
+            self.assertEqual((root / "request.journal.jsonl").read_bytes(), b"")
 
     def test_prepared_lifecycle_reprepare_generation(self) -> None:
         with tempfile.TemporaryDirectory() as name:

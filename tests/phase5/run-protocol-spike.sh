@@ -97,7 +97,7 @@ if [row["sequence"] for row in rows] != list(range(1, len(rows) + 1)):
     raise SystemExit("journal sequence is not contiguous")
 cached_intents = [row for row in rows if row["payload"].get("event") == "execute_prepared_intent" and
                   row["payload"].get("prepared") == "a"]
-if not cached_intents or cached_intents[0]["payload"].get("planning_sequence") != prepared_a["sequence"]:
+if len(cached_intents) < 2 or cached_intents[1]["payload"].get("planning_sequence") != prepared_a["sequence"]:
     raise SystemExit("cached A is not bound to A planning evidence")
 
 def set_error_value(value):
@@ -133,7 +133,7 @@ def failure_session(name, prepared=False, transaction=False, prime_cached=False)
 
 planning_error = failure_session("planning_error")
 if (planning_error["reason"], planning_error["planning_state"], planning_error["execution_state"], planning_error["snapshot_state"]) != \
-        ("planning_error", "FAILED", "FAILED", "COMPLETE"):
+        ("planning_error", "FAILED", "NOT_RUN", "COMPLETE"):
     raise SystemExit(f"planning error states are untruthful: {planning_error}")
 cached_error = failure_session("execution_error", prepared=True, prime_cached=True)
 set_error_value(1)
@@ -141,7 +141,8 @@ if (cached_error["reason"], cached_error["planning_state"], cached_error["execut
         ("cached_execution_error", "COMPLETE", "FAILED", "COMPLETE"):
     raise SystemExit(f"cached execution error states are untruthful: {cached_error}")
 partial_error = failure_session("partial_error")
-if partial_error["state"] != "FAILED" or partial_error["snapshot_state"] != "COMPLETE":
+if (partial_error["state"], partial_error["reason"], partial_error["execution_state"], partial_error["snapshot_state"]) != \
+        ("FAILED", "partial_stream_error", "FAILED", "COMPLETE"):
     raise SystemExit(f"partial stream error states are untruthful: {partial_error}")
 set_error_value(0)
 aborted = failure_session("execution_error", transaction=True)
