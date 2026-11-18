@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_contracts import snapshot_tuple
+from test_evidence_tool import build_private
 from test_measurement_runtime import (
     artifact, level_one_authorization, measurement_scope, plan, state, write_document)
 from tools.phase5.canary_runtime import CanaryError, build_canary_record, validate_canary_bundle
@@ -30,41 +31,71 @@ def raw(root: Path, name: str, value: dict) -> dict:
     return artifact(root, name)
 
 
+def reseal_run(root: Path, run: dict) -> None:
+    write_document(root / "canary-run.json", run)
+    retirement = __import__("json").loads((root / "canary-retirement.json").read_text())
+    retirement["run_sha256"] = canonical_sha256(run)
+    write_document(root / "canary-retirement.json", retirement)
+
+
+def reseal_all(root: Path, plan_value: dict, run: dict) -> None:
+    write_document(root / "canary-plan.json", plan_value)
+    run["plan_sha256"] = canonical_sha256(plan_value)
+    write_document(root / "canary-run.json", run)
+    retirement = __import__("json").loads((root / "canary-retirement.json").read_text())
+    retirement["plan_sha256"] = canonical_sha256(plan_value)
+    retirement["run_sha256"] = canonical_sha256(run)
+    write_document(root / "canary-retirement.json", retirement)
+
+
 def build_canary(root: Path) -> tuple[datetime, dict, dict, dict]:
     root.chmod(0o700)
+    private = root / "private"; private.mkdir(mode=0o700)
+    build_private(private, query_id="query-a")
+    for path in private.rglob("*"):
+        if path.is_file():
+            path.chmod(0o600)
     measurement = plan(levels=1)
-    _, scope_sha = measurement_scope(measurement)
+    scope_doc = __import__("json").loads((private / "scope.json").read_text())
+    scope_sha = canonical_sha256(scope_doc)
     write_document(root / "measurement-plan.json", measurement)
     authorization = level_one_authorization(root, canonical_sha256(measurement), scope_sha)
     write_document(root / "level-authorization.json", authorization)
     operation_go = __import__("json").loads((root / "operation-go.json").read_text())
 
-    sql = b"SELECT count(*) FROM pg_catalog.pg_class /* approved literal */"
-    (root / "positive.sql").write_bytes(sql); (root / "positive.sql").chmod(0o600)
     expected = snapshot_tuple()
+    for index, sql in enumerate((b"SHOW duckdb.force_execution\n",
+                                  b"SELECT unsupported_control()\n",
+                                  b"SELECT $1::integer\n"), 1):
+        (root / f"control-{index}.sql").write_bytes(sql)
+        (root / f"control-{index}.sql").chmod(0o600)
     plan_doc = {"schema_version": 1, "contract_type": "canary_plan",
         "contract_id": "canary-plan-1", "scope_sha256": scope_sha,
         "canary_id": "canary-1", "measurement_plan": artifact(root, "measurement-plan.json"),
         "level_authorization": artifact(root, "level-authorization.json"),
         "operation_go_sha256": canonical_sha256(operation_go),
-        "positive_query_id": "positive-1", "positive_sql": artifact(root, "positive.sql"),
-        "positive_literal_sha256": artifact(root, "positive.sql")["sha256"],
+        "private_bundle_path": "private", "positive_query_id": "query-a",
+        "positive_sql": artifact(root, "private/raw/q.sql"),
+        "positive_literal_sha256": artifact(root, "private/raw/q.sql")["sha256"],
+        "expected_spool": artifact(root, "private/raw/expected.spool"),
         "negative_controls": list(CANARY_CONTROLS), "expected_snapshot": expected,
+        "negative_control_sql": [artifact(root, f"control-{index}.sql") for index in range(1, 4)],
         "maximum_result_bytes": 4096, "session_count": 1, "pool_profile": "DIRECT"}
     validate_contract(plan_doc); write_document(root / "canary-plan.json", plan_doc)
 
     base = datetime.now(timezone.utc)
-    (root / "positive.spool").write_bytes(b"42\n"); (root / "positive.spool").chmod(0o600)
-    spool = artifact(root, "positive.spool")
+    spool = artifact(root, "private/raw/expected.spool")
     request = {"schema_version": 1, "contract_type": "request", "contract_id": "request-1",
         "scope_sha256": scope_sha, "run_id": "canary-1", "session_id": "session-1",
-        "request_id": "request-1", "query_id": "positive-1", "execution_status": "SUCCEEDED",
+        "request_id": "request-1", "query_id": "query-a", "execution_status": "SUCCEEDED",
         "planning_evidence": "FRESH", "snapshot_relation": "CURRENT",
         "snapshot_id": "snapshot-1", "planning_request_id": "planning-1",
-        "observed_spool": spool}
+        "observed_spool": spool, "request_interval": {"started_monotonic_ns": 100,
+            "finished_monotonic_ns": 200, "duration_ns": 100,
+            "state": "COMPLETE", "censored": False}}
     snapshot = {"schema_version": 1, "contract_type": "snapshot", "contract_id": "snapshot-1",
         "scope_sha256": scope_sha, "snapshot_id": "snapshot-1", "session_id": "session-1",
-        "planning_request_id": "planning-1", "prepared_object_id": "positive-1",
+        "planning_request_id": "planning-1", "prepared_object_id": "query-a",
         "prepared_generation": 1, "decision_id": 1, "tuple": expected}
     request_art = raw(root, "positive-request.json", request)
     snapshot_art = raw(root, "positive-snapshot.json", snapshot)
@@ -73,26 +104,38 @@ def build_canary(root: Path) -> tuple[datetime, dict, dict, dict]:
         controls.append(raw(root, f"control-{index}.json", {"document_type": "canary_control",
             "control_id": control_id, "session_id": "session-1", "execution_status": "SUCCEEDED",
             "planning_evidence": "UNAVAILABLE", "snapshot_relation": "NO_SNAPSHOT",
-            "observed_engine": "postgres", "performed_at": utc(base + timedelta(seconds=index)),
+            "observed_engine": "postgres", "executed_sql_sha256":
+            plan_doc["negative_control_sql"][index - 1]["sha256"], "mode": "lab_allowlist",
+            "force_execution": "off", "performed_at": utc(base + timedelta(seconds=(1, 4, 5)[index - 1])),
             "result": "PASS"}))
     oracle = raw(root, "oracle.json", {"document_type": "canary_oracle",
-        "query_id": "positive-1", "spool_sha256": spool["sha256"], "result": "PASS"})
+        "query_id": "query-a", "spool_sha256": spool["sha256"], "result": "PASS"})
+    positive_execution = raw(root, "positive-execution.json", {
+        "document_type": "canary_positive_execution", "query_id": "query-a",
+        "session_id": "session-1", "executed_sql_sha256": plan_doc["positive_literal_sha256"],
+        "started_at": utc(base + timedelta(seconds=2)),
+        "finished_at": utc(base + timedelta(seconds=3)), "result": "PASS"})
+    backend = {"cluster_id": "cluster-1", "start_id": "start-1", "pid": 1234,
+        "backend_start": utc(base - timedelta(seconds=10)), "session_id": "session-1"}
     run = {"schema_version": 1, "contract_type": "canary_run", "contract_id": "canary-run-1",
         "scope_sha256": scope_sha, "canary_id": "canary-1",
         "plan_sha256": canonical_sha256(plan_doc),
         "operation_go_sha256": canonical_sha256(operation_go), "session_id": "session-1",
+        "backend_identity": backend, "positive_execution_proof": positive_execution,
         "positive_request": request_art, "positive_snapshot": snapshot_art,
         "positive_spool": spool, "control_proofs": controls,
         "ambient_force_off_proof": controls[0], "oracle_proof": oracle,
-        "started_at": utc(base), "finished_at": utc(base + timedelta(seconds=4)),
-        "duration_ms": 4000, "result": "PASS", "state": state()}
+        "started_at": utc(base), "finished_at": utc(base + timedelta(seconds=6)),
+        "duration_ms": 6000, "result": "PASS", "state": state()}
     validate_contract(run); write_document(root / "canary-run.json", run)
     exit_proof = raw(root, "backend-exit.json", {"document_type": "canary_backend_exit",
-        "session_id": "session-1", "observer_authorized": True,
+        **backend, "observer_authorized": True,
         "observation_complete": True, "backend_present": False,
-        "observed_at": utc(base + timedelta(seconds=5)), "result": "PASS"})
+        "observed_at": utc(base + timedelta(seconds=7)), "result": "PASS"})
     reconnect = raw(root, "fresh-reconnect.json", {"document_type": "canary_fresh_reconnect",
-        "session_id": "session-2", "connected_at": utc(base + timedelta(seconds=6)),
+        "cluster_id": "cluster-1", "start_id": "start-1", "pid": 2345,
+        "backend_start": utc(base + timedelta(seconds=8)), "session_id": "session-2",
+        "connected_at": utc(base + timedelta(seconds=8)),
         "mode": "off", "force_execution": "off", "observed_engine": "postgres",
         "result": "PASS"})
     retirement = {"schema_version": 1, "contract_type": "canary_retirement",
@@ -100,9 +143,9 @@ def build_canary(root: Path) -> tuple[datetime, dict, dict, dict]:
         "canary_id": "canary-1", "plan_sha256": canonical_sha256(plan_doc),
         "run_sha256": canonical_sha256(run), "owned_session_id": "session-1",
         "backend_exit_proof": exit_proof, "fresh_reconnect_proof": reconnect,
-        "performed_at": utc(base + timedelta(seconds=5)), "result": "PASS", "state": state()}
+        "performed_at": utc(base + timedelta(seconds=7)), "result": "PASS", "state": state()}
     validate_contract(retirement); write_document(root / "canary-retirement.json", retirement)
-    return base + timedelta(seconds=7), plan_doc, run, retirement
+    return base + timedelta(seconds=9), plan_doc, run, retirement
 
 
 class CanaryRuntimeTests(unittest.TestCase):
@@ -122,8 +165,8 @@ class CanaryRuntimeTests(unittest.TestCase):
             value["session_id"] = "other-session"; write_document(root / "positive-snapshot.json", value)
             run = __import__("json").loads((root / "canary-run.json").read_text())
             run["positive_snapshot"] = artifact(root, "positive-snapshot.json")
-            write_document(root / "canary-run.json", run)
-            with self.assertRaisesRegex(CanaryError, "identity_graph_mismatch"):
+            reseal_run(root, run)
+            with self.assertRaisesRegex(CanaryError, "positive_request_or_snapshot_mismatch"):
                 validate_canary_bundle(root, checked)
 
     def test_wrong_control_order_is_refused(self) -> None:
@@ -132,8 +175,9 @@ class CanaryRuntimeTests(unittest.TestCase):
             run = __import__("json").loads((root / "canary-run.json").read_text())
             run["control_proofs"][1], run["control_proofs"][2] = (
                 run["control_proofs"][2], run["control_proofs"][1])
-            write_document(root / "canary-run.json", run)
-            with self.assertRaises(CanaryError): validate_canary_bundle(root, checked)
+            reseal_run(root, run)
+            with self.assertRaisesRegex(CanaryError, "negative_controls_did_not_pass"):
+                validate_canary_bundle(root, checked)
 
     def test_client_close_without_observed_backend_exit_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -148,15 +192,53 @@ class CanaryRuntimeTests(unittest.TestCase):
     def test_tampering_and_partial_run_are_not_relabelled_pass(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             root = Path(name); checked, _, _, _ = build_canary(root)
-            (root / "positive.spool").write_bytes(b"changed\n")
+            (root / "private/raw/expected.spool").write_bytes(b"changed\n")
             with self.assertRaises(CanaryError): validate_canary_bundle(root, checked)
         with tempfile.TemporaryDirectory() as name:
             root = Path(name); checked, _, _, _ = build_canary(root)
             run = __import__("json").loads((root / "canary-run.json").read_text())
             run["result"] = "INCOMPLETE"
             run["state"] = state("INCONCLUSIVE", "UNKNOWN")
-            write_document(root / "canary-run.json", run)
-            with self.assertRaises(CanaryError): validate_canary_bundle(root, checked)
+            reseal_run(root, run)
+            with self.assertRaisesRegex(CanaryError, "retirement_did_not_pass"):
+                validate_canary_bundle(root, checked)
+
+    def test_self_reported_oracle_cannot_bless_wrong_spool(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); checked, plan_value, run, _ = build_canary(root)
+            wrong = root / "wrong.spool"; wrong.write_bytes(b"wrong-result\n"); wrong.chmod(0o600)
+            wrong_artifact = artifact(root, "wrong.spool")
+            plan_value["expected_spool"] = wrong_artifact
+            run["positive_spool"] = wrong_artifact
+            request = __import__("json").loads((root / "positive-request.json").read_text())
+            request["observed_spool"] = wrong_artifact
+            write_document(root / "positive-request.json", request)
+            run["positive_request"] = artifact(root, "positive-request.json")
+            oracle = __import__("json").loads((root / "oracle.json").read_text())
+            oracle["spool_sha256"] = wrong_artifact["sha256"]
+            write_document(root / "oracle.json", oracle); run["oracle_proof"] = artifact(root, "oracle.json")
+            reseal_all(root, plan_value, run)
+            with self.assertRaisesRegex(CanaryError, "literal_or_limit_mismatch"):
+                validate_canary_bundle(root, checked)
+
+    def test_unapproved_sql_and_unsafe_expected_tuple_are_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); checked, plan_value, run, _ = build_canary(root)
+            rogue = root / "rogue.sql"; rogue.write_bytes(b"SELECT 987654321\n"); rogue.chmod(0o600)
+            plan_value["positive_sql"] = artifact(root, "rogue.sql")
+            plan_value["positive_literal_sha256"] = plan_value["positive_sql"]["sha256"]
+            execution = __import__("json").loads((root / "positive-execution.json").read_text())
+            execution["executed_sql_sha256"] = plan_value["positive_literal_sha256"]
+            write_document(root / "positive-execution.json", execution)
+            run["positive_execution_proof"] = artifact(root, "positive-execution.json")
+            reseal_all(root, plan_value, run)
+            with self.assertRaisesRegex(CanaryError, "literal_or_limit_mismatch"):
+                validate_canary_bundle(root, checked)
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); _, plan_value, _, _ = build_canary(root)
+            plan_value["expected_snapshot"]["observed_engine"] = "postgres"
+            with self.assertRaisesRegex(Exception, "safe delegation"):
+                validate_contract(plan_value)
 
 
 if __name__ == "__main__":

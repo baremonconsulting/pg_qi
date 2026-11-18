@@ -19,11 +19,13 @@ try:
         ContractError, canonical_bytes, canonical_sha256, resolve_bundle_path,
         strict_load_path, validate_contract, verify_artifact)
     from .measurement_runtime import MeasurementError, validate_level_authorization
+    from .evidence_tool import EvidenceError, validate_private
 except ImportError:
     from contract_rules import (CANARY_CHECKS, CANARY_CONTROLS, CANARY_LIMITATIONS,
         ContractError, canonical_bytes, canonical_sha256, resolve_bundle_path,
         strict_load_path, validate_contract, verify_artifact)
     from measurement_runtime import MeasurementError, validate_level_authorization
+    from evidence_tool import EvidenceError, validate_private
 
 
 class CanaryError(RuntimeError):
@@ -122,6 +124,21 @@ def validate_canary_bundle(root: Path, now: datetime | None = None) -> dict[str,
         raise CanaryError("canary_identity_graph_mismatch")
 
     measurement_plan = _artifact_contract(root, plan["measurement_plan"], "measurement_plan")
+    try:
+        private_root = resolve_bundle_path(root, Path(plan["private_bundle_path"]))
+        private_validation = validate_private(private_root, scope)
+    except (ContractError, EvidenceError, OSError) as exc:
+        raise CanaryError("canary_private_validation_failed") from exc
+    if private_validation["result"] != "PASS":
+        raise CanaryError("canary_private_validation_failed")
+    private_scope = private_validation["scope"]
+    qualification = _raw(private_root, private_scope["scope_inputs"]["workload_definition"], {
+        "schema_version", "document_type", "qualification_id", "authorities",
+        "storage_policy", "baseline_authority", "oracle_limits", "natural_inventory",
+        "execution_corpus", "synthetic_controls"}, "corpus_qualification")
+    corpus = {item["query_id"]: item for item in qualification["execution_corpus"]}
+    baselines = {item["query_id"]: item for item in
+                 qualification["baseline_authority"]["cases"]}
     authorization = _raw(root, plan["level_authorization"], {
         "schema_version", "document_type", "scope_sha256", "plan_sha256",
         "requested_level", "approval_reference", "operation_go",
@@ -152,15 +169,30 @@ def validate_canary_bundle(root: Path, now: datetime | None = None) -> dict[str,
 
     try:
         verify_artifact(root, plan["positive_sql"])
+        verify_artifact(root, plan["expected_spool"])
         verify_artifact(root, run["positive_spool"])
     except ContractError as exc:
         raise CanaryError("canary_positive_artifact_invalid") from exc
-    if (plan["positive_sql"]["sha256"] != plan["positive_literal_sha256"] or
+    scenarios = {item["query_id"]: item for item in measurement_plan["required_scenarios"]}
+    corpus_item = corpus.get(plan["positive_query_id"])
+    baseline_item = baselines.get(plan["positive_query_id"])
+    if (plan["positive_query_id"] not in scenarios or
+            corpus_item is None or baseline_item is None or
+            corpus_item["sql_sha256"] != plan["positive_literal_sha256"] or
+            baseline_item["spool_sha256"] != plan["expected_spool"]["sha256"] or
+            baseline_item["spool_bytes"] != plan["expected_spool"]["bytes"] or
+            plan["positive_sql"]["sha256"] != plan["positive_literal_sha256"] or
+            run["positive_spool"] != plan["expected_spool"] or
             run["positive_spool"]["bytes"] > plan["maximum_result_bytes"]):
         raise CanaryError("canary_positive_literal_or_limit_mismatch")
     request = _artifact_contract(root, run["positive_request"], "request")
     snapshot = _artifact_contract(root, run["positive_snapshot"], "snapshot")
-    if (request["scope_sha256"] != scope or request["query_id"] != plan["positive_query_id"] or
+    execution = _raw(root, run["positive_execution_proof"], {"document_type", "query_id",
+        "session_id", "executed_sql_sha256", "started_at", "finished_at", "result"},
+        "canary_positive_execution")
+    interval = request.get("request_interval")
+    if (request["scope_sha256"] != scope or request["run_id"] != plan["canary_id"] or
+            request["query_id"] != plan["positive_query_id"] or
             request["session_id"] != run["session_id"] or
             request["execution_status"] != "SUCCEEDED" or
             request["planning_evidence"] != "FRESH" or
@@ -169,8 +201,20 @@ def validate_canary_bundle(root: Path, now: datetime | None = None) -> dict[str,
             snapshot["scope_sha256"] != scope or snapshot["session_id"] != run["session_id"] or
             snapshot["snapshot_id"] != request.get("snapshot_id") or
             snapshot["planning_request_id"] != request.get("planning_request_id") or
+            snapshot["prepared_object_id"] != plan["positive_query_id"] or
             snapshot["tuple"] != plan["expected_snapshot"]):
         raise CanaryError("canary_positive_request_or_snapshot_mismatch")
+    if not isinstance(interval, dict) or interval.get("state") != "COMPLETE" or \
+            interval.get("censored") is not False:
+        raise CanaryError("canary_positive_interval_invalid")
+    positive_started = _time(execution["started_at"], "positive_started")
+    positive_finished = _time(execution["finished_at"], "positive_finished")
+    if (execution["query_id"] != plan["positive_query_id"] or
+            execution["session_id"] != run["session_id"] or
+            execution["executed_sql_sha256"] != plan["positive_literal_sha256"] or
+            execution["result"] != "PASS" or not started < positive_started <
+            positive_finished < finished):
+        raise CanaryError("canary_positive_execution_invalid")
 
     oracle = _raw(root, run["oracle_proof"], {"document_type", "query_id",
         "spool_sha256", "result"}, "canary_oracle")
@@ -181,39 +225,52 @@ def validate_canary_bundle(root: Path, now: datetime | None = None) -> dict[str,
 
     controls = [_raw(root, item, {"document_type", "control_id", "session_id",
         "execution_status", "planning_evidence", "snapshot_relation", "observed_engine",
-        "performed_at", "result"}, "canary_control") for item in run["control_proofs"]]
+        "executed_sql_sha256", "mode", "force_execution", "performed_at", "result"},
+        "canary_control") for item in run["control_proofs"]]
     if ([item["control_id"] for item in controls] != CANARY_CONTROLS or
             any(item["session_id"] != run["session_id"] or
                 item["execution_status"] != "SUCCEEDED" or
                 item["planning_evidence"] != "UNAVAILABLE" or
                 item["snapshot_relation"] != "NO_SNAPSHOT" or
-                item["observed_engine"] != "postgres" or item["result"] != "PASS"
-                for item in controls) or
+                item["observed_engine"] != "postgres" or item["mode"] != "lab_allowlist" or
+                item["force_execution"] != "off" or item["result"] != "PASS" or
+                item["executed_sql_sha256"] != plan["negative_control_sql"][index]["sha256"]
+                for index, item in enumerate(controls)) or
             run["ambient_force_off_proof"] != run["control_proofs"][0]):
         raise CanaryError("canary_negative_controls_did_not_pass")
     control_times = [_time(item["performed_at"], "control") for item in controls]
-    if not started < control_times[0] < control_times[1] < control_times[2] < finished:
+    request_start_ns = interval.get("started_monotonic_ns")
+    request_finish_ns = interval.get("finished_monotonic_ns")
+    if (type(request_start_ns) is not int or type(request_finish_ns) is not int or
+            request_start_ns >= request_finish_ns or
+            not started < control_times[0] < positive_started < positive_finished <
+            control_times[1] < control_times[2] < finished):
         raise CanaryError("canary_control_order_invalid")
 
     exit_proof = _raw(root, retirement["backend_exit_proof"], {"document_type",
-        "session_id", "observer_authorized", "observation_complete", "backend_present",
+        "cluster_id", "start_id", "pid", "backend_start", "session_id",
+        "observer_authorized", "observation_complete", "backend_present",
         "observed_at", "result"}, "canary_backend_exit")
     reconnect = _raw(root, retirement["fresh_reconnect_proof"], {"document_type",
-        "session_id", "connected_at", "mode", "force_execution", "observed_engine",
+        "cluster_id", "start_id", "pid", "backend_start", "session_id",
+        "connected_at", "mode", "force_execution", "observed_engine",
         "result"}, "canary_fresh_reconnect")
     exit_time = _time(exit_proof["observed_at"], "canary_exit")
     reconnect_time = _time(reconnect["connected_at"], "canary_reconnect")
     performed = _time(retirement["performed_at"], "canary_retirement")
+    backend = run["backend_identity"]
     if (retirement["owned_session_id"] != run["session_id"] or
             exit_proof["session_id"] != run["session_id"] or
+            any(exit_proof[name] != backend[name] for name in
+                ("cluster_id", "start_id", "pid", "backend_start", "session_id")) or
             exit_proof["observer_authorized"] is not True or
             exit_proof["observation_complete"] is not True or
             exit_proof["backend_present"] is not False or exit_proof["result"] != "PASS" or
-            reconnect["session_id"] == run["session_id"] or reconnect["mode"] != "off" or
+            reconnect["session_id"] == run["session_id"] or reconnect["pid"] == backend["pid"] or
+            reconnect["backend_start"] == backend["backend_start"] or reconnect["mode"] != "off" or
             reconnect["force_execution"] != "off" or
             reconnect["observed_engine"] != "postgres" or reconnect["result"] != "PASS" or
-            not (finished < exit_time <= performed < reconnect_time <=
-                 checked_utc) or
+            not (finished < exit_time <= performed < reconnect_time <= min(go_end, checked_utc)) or
             run["result"] != "PASS" or retirement["result"] != "PASS"):
         raise CanaryError("canary_retirement_did_not_pass")
 

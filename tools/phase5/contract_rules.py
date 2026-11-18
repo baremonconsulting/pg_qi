@@ -961,11 +961,24 @@ def _validate_canary_plan(value: dict[str, Any], catalog: dict[str, Any]) -> Non
     _artifact(value["measurement_plan"], "measurement_plan")
     _artifact(value["level_authorization"], "level_authorization")
     _digest(value["operation_go_sha256"], "operation_go_sha256")
+    _string(value["private_bundle_path"], "private_bundle_path",
+            re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$"))
     _string(value["positive_query_id"], "positive_query_id")
     _artifact(value["positive_sql"], "positive_sql")
     _digest(value["positive_literal_sha256"], "positive_literal_sha256")
+    _artifact(value["expected_spool"], "expected_spool")
     _exact_sequence(value["negative_controls"], CANARY_CONTROLS, "negative_controls")
+    control_sql = _array(value["negative_control_sql"], "negative_control_sql", True)
+    if len(control_sql) != len(CANARY_CONTROLS):
+        raise ContractError("canary control SQL count differs from controls")
+    for item in control_sql:
+        _artifact(item, "negative_control_sql")
     _snapshot_tuple(value["expected_snapshot"], "expected_snapshot")
+    expected = value["expected_snapshot"]
+    if (expected["observed_engine"] != "duckdb" or expected["verification"] != "verified" or
+            expected["request_applied"] != "on" or
+            expected["duckdb_force_execution"] != "off"):
+        raise ContractError("canary expected snapshot does not prove safe delegation")
     _integer(value["maximum_result_bytes"], "maximum_result_bytes", 1)
     if value["session_count"] != 1 or type(value["session_count"]) is not int:
         raise ContractError("canary requires exactly one session")
@@ -979,7 +992,15 @@ def _validate_canary_run(value: dict[str, Any], catalog: dict[str, Any]) -> None
         _string(value[name], name)
     for name in ("plan_sha256", "operation_go_sha256"):
         _digest(value[name], name)
-    for name in ("positive_request", "positive_snapshot", "positive_spool",
+    backend = _object(value["backend_identity"], "backend_identity")
+    if set(backend) != {"cluster_id", "start_id", "pid", "backend_start", "session_id"}:
+        raise ContractError("canary backend identity is not exact")
+    for name in ("cluster_id", "start_id", "backend_start", "session_id"):
+        _string(backend[name], name, UTC if name == "backend_start" else IDENTIFIER)
+    _integer(backend["pid"], "backend pid", 1)
+    if backend["session_id"] != value["session_id"]:
+        raise ContractError("canary backend and run session differ")
+    for name in ("positive_execution_proof", "positive_request", "positive_snapshot", "positive_spool",
                  "ambient_force_off_proof", "oracle_proof"):
         _artifact(value[name], name)
     controls = _array(value["control_proofs"], "control_proofs", True)

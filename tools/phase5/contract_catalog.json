@@ -161,11 +161,11 @@
       "optional": []
     },
     "canary_plan": {
-      "required": ["scope_sha256", "canary_id", "measurement_plan", "level_authorization", "operation_go_sha256", "positive_query_id", "positive_sql", "positive_literal_sha256", "negative_controls", "expected_snapshot", "maximum_result_bytes", "session_count", "pool_profile"],
+      "required": ["scope_sha256", "canary_id", "measurement_plan", "level_authorization", "operation_go_sha256", "private_bundle_path", "positive_query_id", "positive_sql", "positive_literal_sha256", "expected_spool", "negative_controls", "negative_control_sql", "expected_snapshot", "maximum_result_bytes", "session_count", "pool_profile"],
       "optional": []
     },
     "canary_run": {
-      "required": ["scope_sha256", "canary_id", "plan_sha256", "operation_go_sha256", "session_id", "positive_request", "positive_snapshot", "positive_spool", "control_proofs", "ambient_force_off_proof", "oracle_proof", "started_at", "finished_at", "duration_ms", "result", "state"],
+      "required": ["scope_sha256", "canary_id", "plan_sha256", "operation_go_sha256", "session_id", "backend_identity", "positive_execution_proof", "positive_request", "positive_snapshot", "positive_spool", "control_proofs", "ambient_force_off_proof", "oracle_proof", "started_at", "finished_at", "duration_ms", "result", "state"],
       "optional": []
     },
     "canary_retirement": {
