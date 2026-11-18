@@ -19,7 +19,7 @@ if str(ROOT) not in sys.path:
 from tools.phase5.control_runtime import (
     BackendIdentity, ControlError, DispatchStopped, OwnershipRegistry,
     LocalProcResourceFeed, PilotControlRuntime, ResourcePolicy, ResourceSample,
-    ResourceWatchdog, StopController, load_strict_json,
+    ResourceFeedMonitor, StopController, load_strict_json,
     verify_journal_prefix,
 )
 from tools.phase5.pilot_runtime import AuditedSession, SequenceJournal
@@ -262,17 +262,17 @@ class ResourceAndStopTests(unittest.TestCase):
                 for number, old in previous.items(): signal.signal(number, old)
                 journal.close()
 
-    def test_watchdog_stops_missing_feed_within_budget(self) -> None:
+    def test_feed_monitor_stops_missing_feed_within_budget(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             root = Path(name); root.chmod(0o700); journal = SequenceJournal(root)
             configured = policy(interval_ms=20, max_age_ms=40, stop_overshoot_ms=20)
             controller = StopController(journal, configured)
-            watchdog = ResourceWatchdog(controller, configured)
-            started = __import__("time").monotonic(); watchdog.start()
+            monitor = ResourceFeedMonitor(controller, configured)
+            started = __import__("time").monotonic(); monitor.start()
             while not controller.stopped and __import__("time").monotonic() - started < 0.5:
                 __import__("time").sleep(0.005)
             elapsed_ms = (__import__("time").monotonic() - started) * 1000
-            watchdog.close(); journal.close()
+            monitor.close(); journal.close()
             self.assertEqual(controller.reason, "RESOURCE_FEED_MISSING")
             self.assertLessEqual(elapsed_ms, configured.stop_overshoot_ms + 40)
 

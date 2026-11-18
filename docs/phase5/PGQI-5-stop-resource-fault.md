@@ -16,9 +16,11 @@ The approved feed is `LocalProcResourceFeed`: a versioned `resource_policy` plus
 descendant driver/helper process tree and the evidence directory. Both documents
 bind the scope digest, source identity,
 metric names and units. Missing, stale, reordered, future-dated or
-wrong-scope samples stop admission. A `ResourceWatchdog` checks feed age within
+wrong-scope samples stop admission. A `ResourceFeedMonitor` checks feed age within
 `min(interval_ms, stop_overshoot_ms)`. RSS, CPU, evidence size and inflight
-request limits all produce a truthful hard stop.
+request limits all produce a truthful hard stop. `ResourceFeedMonitor` is only
+a feed-age admission latch: it does not restart processes, replay requests,
+manage a fleet or terminate sessions, and is not a general lifecycle watchdog.
 
 Control files must be owned by the current user, regular, non-symlink files
 with mode `0600`. JSON parsing rejects duplicate keys, non-finite numbers,
@@ -63,7 +65,7 @@ timeout, socket close or an unverified backend observation.
 1. Materialise the approved policy from
    `templates/resource-policy.example.json`, bind its scope digest and store it
    as a private `0600` file.
-2. Start the local sampler and watchdog before admitting any request.
+2. Start the local sampler and feed-age monitor before admitting any request.
 3. Register the exact backend identity when a session is created.
 4. Dispatch only through `AuditedSession` with the controller supplied.
 5. On stop, wait for or cancel admitted inflight requests within their bounds.

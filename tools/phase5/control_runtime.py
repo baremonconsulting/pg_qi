@@ -511,14 +511,14 @@ class StopController:
             self._signal_worker.join(1)
 
 
-class ResourceWatchdog:
+class ResourceFeedMonitor:
     """Poll the mandatory local feed age within its declared stop budget."""
 
     def __init__(self, controller: StopController, policy: ResourcePolicy) -> None:
         self._controller = controller
         self._period = min(policy.interval_ms, policy.stop_overshoot_ms) / 1000.0
         self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._run, name="pgqi-resource-watchdog",
+        self._thread = threading.Thread(target=self._run, name="pgqi-resource-feed-monitor",
                                         daemon=True)
 
     def start(self) -> None:
@@ -528,7 +528,7 @@ class ResourceWatchdog:
         self._stop.set()
         self._thread.join(max(1.0, self._period * 2))
         if self._thread.is_alive():
-            raise ControlError("resource_watchdog_shutdown")
+            raise ControlError("resource_feed_monitor_shutdown")
 
     def _run(self) -> None:
         while not self._stop.wait(self._period):
@@ -542,13 +542,13 @@ class ResourceWatchdog:
 
 
 class PilotControlRuntime:
-    """Compose sampler, watchdog and controller for a real audited pilot."""
+    """Compose sampler, feed-age monitor and controller for an audited pilot."""
 
     def __init__(self, journal: SequenceJournal, policy: ResourcePolicy,
                  evidence_root: Path) -> None:
         self.controller = StopController(journal, policy)
         self._feed = LocalProcResourceFeed(policy)
-        self._watchdog = ResourceWatchdog(self.controller, policy)
+        self._feed_monitor = ResourceFeedMonitor(self.controller, policy)
         self._evidence_root = evidence_root
         self._period = policy.interval_ms / 1000.0
         self._stop = threading.Event()
@@ -560,13 +560,13 @@ class PilotControlRuntime:
         self.controller.accept_sample(self._feed.sample(
             self._evidence_root, self.controller.inflight_count))
         self._previous_signals = self.controller.install_signal_handlers()
-        self._watchdog.start(); self._thread.start()
+        self._feed_monitor.start(); self._thread.start()
 
     def close(self) -> None:
         self._stop.set(); self._thread.join(max(1.0, self._period * 2))
         if self._thread.is_alive():
             raise ControlError("resource_sampler_shutdown")
-        self._watchdog.close()
+        self._feed_monitor.close()
         if self._previous_signals is not None:
             self.controller.restore_signal_handlers(self._previous_signals)
             self._previous_signals = None
