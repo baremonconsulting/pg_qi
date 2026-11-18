@@ -319,17 +319,6 @@ int main(int argc, char **argv) {
                         "NOT_RUN", "prepared_generation")) break;
                 continue;
             }
-            if (!PQsendDescribePrepared(conn, prepared) ||
-                    !command_result(conn, now_ms()+(int64_t)deadline_ms, &reason)) {
-                int uncertain = !strcmp(reason, "connection_error") ||
-                                !strcmp(reason, "send_error");
-                if (!uncertain) reason = "planning_error";
-                if (!frame_reply(opcode, sequence,
-                        uncertain ? "INCOMPLETE" : "FAILED",
-                        uncertain ? "INCOMPLETE" : "FAILED", "NOT_RUN",
-                        "UNAVAILABLE", reason)) { }
-                break;
-            }
         }
         if (snprintf(sql_path,sizeof(sql_path),"%s.sql",case_id) >= (int)sizeof(sql_path) ||
             snprintf(spool_path,sizeof(spool_path),"/proc/self/fd/%d/%020llu-%s.spool",output_fd,sequence,case_id) >= (int)sizeof(spool_path) ||
@@ -365,6 +354,11 @@ int main(int argc, char **argv) {
                                 plans[prepared_slot].generation++;
                                 plans[prepared_slot].planned = 1;
                             }
+                        } else if (opcode == 4 && plans[prepared_slot].planned &&
+                                   sqlstate[0] == '4' && sqlstate[1] == '2') {
+                            planning_state = "UNAVAILABLE";
+                            execution_state = "UNAVAILABLE";
+                            reason = "prepared_error_unattributed";
                         } else if (opcode == 4 && plans[prepared_slot].planned) {
                             planning_state = "COMPLETE";
                             reason = "cached_execution_error";
