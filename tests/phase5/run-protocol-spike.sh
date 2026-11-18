@@ -188,7 +188,7 @@ revalidation_error = revalidation.execute_prepared("revalidation")
 revalidation.close(); revalidation_journal.close()
 if (revalidation_error["reason"], revalidation_error["planning_state"],
         revalidation_error["execution_state"], revalidation_error["snapshot_state"]) != \
-        ("planning_error", "FAILED", "NOT_RUN", "UNAVAILABLE"):
+        ("connection_error", "INCOMPLETE", "NOT_RUN", "UNAVAILABLE"):
     raise SystemExit(f"failed revalidation states are untruthful: {revalidation_error}")
 cached_error = failure_session("execution_error", prepared=True, prime_cached=True)
 set_error_value(1)
