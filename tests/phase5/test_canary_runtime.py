@@ -147,13 +147,13 @@ def build_canary(root: Path) -> tuple[datetime, dict, dict, dict]:
         "scope_sha256": scope_sha, "run_id": "canary-1", "session_id": "session-1",
         "request_id": "request-1", "query_id": "query-a", "execution_status": "SUCCEEDED",
         "planning_evidence": "FRESH", "snapshot_relation": "CURRENT",
-        "snapshot_id": "snapshot-1", "planning_request_id": "planning-1",
+        "snapshot_id": "snapshot-1", "planning_request_id": "request-1",
         "observed_spool": spool, "request_interval": {"started_monotonic_ns": 100,
             "finished_monotonic_ns": 200, "duration_ns": 100,
             "state": "COMPLETE", "censored": False}}
     snapshot = {"schema_version": 1, "contract_type": "snapshot", "contract_id": "snapshot-1",
         "scope_sha256": scope_sha, "snapshot_id": "snapshot-1", "session_id": "session-1",
-        "planning_request_id": "planning-1", "prepared_object_id": "query-a",
+        "planning_request_id": "request-1", "prepared_object_id": "query-a",
         "prepared_generation": 1, "decision_id": 1, "tuple": expected}
     request_art = raw(root, "positive-request.json", request)
     snapshot_art = raw(root, "positive-snapshot.json", snapshot)

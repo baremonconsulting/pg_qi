@@ -155,6 +155,16 @@ def validate_canary_bundle(root: Path, now: datetime | None = None) -> dict[str,
     if private_scope["scope_inputs"]["measurement_plan"]["sha256"] != \
             plan["measurement_plan"]["sha256"]:
         raise CanaryError("canary_measurement_plan_outside_private_scope")
+    private_index = _load_contract(private_root, "index.json", "index")
+    private_requests = []
+    for item in private_index["payloads"]:
+        try:
+            candidate = strict_load_path(Path(item["path"]), private_root)
+        except ContractError:
+            continue
+        if (candidate.get("contract_type") == "request" and
+                candidate.get("query_id") == plan["positive_query_id"]):
+            private_requests.append(candidate)
     qualification = _raw(private_root, private_scope["scope_inputs"]["workload_definition"], {
         "schema_version", "document_type", "qualification_id", "authorities",
         "storage_policy", "baseline_authority", "oracle_limits", "natural_inventory",
@@ -212,6 +222,14 @@ def validate_canary_bundle(root: Path, now: datetime | None = None) -> dict[str,
             run["positive_spool"]["path"] == plan["expected_spool"]["path"] or
             run["positive_spool"]["bytes"] > plan["maximum_result_bytes"]):
         raise CanaryError("canary_positive_literal_or_limit_mismatch")
+    if len(private_requests) != 1 or "observed_spool" not in private_requests[0]:
+        raise CanaryError("canary_private_request_missing")
+    private_observed = private_requests[0]["observed_spool"]
+    if (private_observed["sha256"] != run["positive_spool"]["sha256"] or
+            private_observed["bytes"] != run["positive_spool"]["bytes"] or
+            resolve_bundle_path(private_root, Path(private_observed["path"])).stat().st_ino !=
+            resolve_bundle_path(root, Path(run["positive_spool"]["path"])).stat().st_ino):
+        raise CanaryError("canary_observed_spool_not_private_validated")
     if [item["sha256"] for item in plan["negative_control_sql"]] != CONTROL_SQL_SHA256:
         raise CanaryError("canary_control_sql_not_approved")
     request = _artifact_contract(root, run["positive_request"], "request")
@@ -230,6 +248,7 @@ def validate_canary_bundle(root: Path, now: datetime | None = None) -> dict[str,
             snapshot["scope_sha256"] != scope or snapshot["session_id"] != run["session_id"] or
             snapshot["snapshot_id"] != request.get("snapshot_id") or
             snapshot["planning_request_id"] != request.get("planning_request_id") or
+            snapshot["planning_request_id"] != request["request_id"] or
             snapshot["prepared_object_id"] != plan["positive_query_id"] or
             snapshot["tuple"] != plan["expected_snapshot"]):
         raise CanaryError("canary_positive_request_or_snapshot_mismatch")
@@ -381,7 +400,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bundle", required=True, type=Path)
     arguments = parser.parse_args(argv)
     outcome = arguments.bundle / "canary-outcome.json"
-    if outcome.exists():
+    if any(path.name == "canary-outcome.json" for path in arguments.bundle.rglob("canary-outcome.json")):
         print(json.dumps({"decision": "REFUSED", "reason": "canary_attempt_already_recorded",
                           "result": "FAIL"}, sort_keys=True, separators=(",", ":")),
               file=sys.stderr)

@@ -753,6 +753,12 @@ CANARY_CHECKS = ["OPERATION_GO_CURRENT", "SINGLE_DEDICATED_SESSION",
 CANARY_LIMITATIONS = {"NO_CUSTOMER_AUTHORIZATION", "NO_PRODUCTION_AUTHORIZATION",
     "NO_PUBLICATION_AUTHORIZATION", "NO_PERSISTENT_SETTING_AUTHORIZATION",
     "NO_AUTOMATIC_GATE_GRANT"}
+CANARY_EXPECTED_SNAPSHOT = {"contract_version": "1", "context": "proven_client",
+    "policy_intent": "request_delegation", "reason": "delegation_verified",
+    "force_origin": "qi_stack", "classifier_status": "candidate",
+    "classifier_reason": "candidate", "observed_engine": "duckdb",
+    "verification": "verified", "observation": "duckdb_scan_at_downstream_boundary",
+    "request_applied": "on", "duckdb_force_execution": "off"}
 
 
 def _exact_sequence(value: Any, expected: list[str], name: str) -> None:
@@ -975,9 +981,7 @@ def _validate_canary_plan(value: dict[str, Any], catalog: dict[str, Any]) -> Non
         _artifact(item, "negative_control_sql")
     _snapshot_tuple(value["expected_snapshot"], "expected_snapshot")
     expected = value["expected_snapshot"]
-    if (expected["observed_engine"] != "duckdb" or expected["verification"] != "verified" or
-            expected["request_applied"] != "on" or
-            expected["duckdb_force_execution"] != "off"):
+    if expected != CANARY_EXPECTED_SNAPSHOT:
         raise ContractError("canary expected snapshot does not prove safe delegation")
     _integer(value["maximum_result_bytes"], "maximum_result_bytes", 1)
     if value["session_count"] != 1 or type(value["session_count"]) is not int:
@@ -1056,7 +1060,10 @@ def _validate_canary(value: dict[str, Any], catalog: dict[str, Any]) -> None:
     if limitations != CANARY_LIMITATIONS:
         raise ContractError("canary limitations are incomplete")
     _state(value["state"], catalog)
+    technical = value["state"]["technical_result"]
+    expected_technical = {"PASS": "PASS", "FAIL": "FAIL", "NOT_RUN": "NOT_RUN"}[result]
     if ((result == "PASS") != (eligibility == "ELIGIBLE_FOR_HUMAN_GRANT") or
+            technical != expected_technical or
             (result == "PASS" and not aggregate_pass(value["state"]))):
         raise ContractError("canary result, eligibility and state disagree")
 
