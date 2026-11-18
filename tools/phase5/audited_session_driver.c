@@ -312,8 +312,10 @@ int main(int argc, char **argv) {
                 if (!strcmp(reason, "server_error") ||
                         !strcmp(reason, "server_error_after_partial_stream")) {
                     PGresult *tail;
+                    int transaction_aborted;
                     execution_state = "FAILED";
                     while ((tail = PQgetResult(conn)) != NULL) PQclear(tail);
+                    transaction_aborted = PQtransactionStatus(conn) == PQTRANS_INERROR;
                     after = show_scalar(conn, "pg_qi.shadow_decision_id",
                                         now_ms()+(int64_t)deadline_ms);
                     if (after && write_snapshot(conn, snapshot_path, before,
@@ -333,7 +335,7 @@ int main(int argc, char **argv) {
                             reason = "planning_error";
                         }
                     } else snapshot_state = "INCOMPLETE";
-                    if (PQtransactionStatus(conn) == PQTRANS_INERROR)
+                    if (transaction_aborted)
                         reason = "aborted_transaction";
                 }
             } else {
