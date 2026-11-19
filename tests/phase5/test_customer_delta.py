@@ -40,6 +40,12 @@ def state() -> dict:
             "value_outcome": "NOT_EVALUATED", "project_decision": "PAUSE"}
 
 
+def pass_state() -> dict:
+    return {"lifecycle": "CLOSED", "technical_result": "PASS",
+            "evidence_completeness": "COMPLETE", "exit_state": "CLEAN",
+            "value_outcome": "POSITIVE", "project_decision": "CONTINUE"}
+
+
 def matrix() -> list[dict]:
     return [{"gate_id": gate, "status": "NOT_RUN", "evidence": None, "receipt": None}
             for gate in sorted(CUSTOMER_DELTA_GATES)]
@@ -48,7 +54,8 @@ def matrix() -> list[dict]:
 def closeout() -> dict:
     return {"schema_version": 1, "contract_type": "customer_delta_closeout",
         "contract_id": "customer-delta-closeout", "internal_scope_sha256": None,
-        "dossier": None, "sponsor_mandate": None, "internal_closeout_receipt": None,
+        "dossier": None, "sponsor_mandate": None, "internal_closeout_validation": None,
+        "internal_closeout_receipt": None,
         "customer_operation_go": None, "gate_reruns": matrix(), "windows": [],
         "failures": [], "not_run_reasons": ["CUSTOMER_EXECUTION_UNAVAILABLE",
             "INTERNAL_CLOSEOUT_NOT_GRANTED", "NO_CUSTOMER", "NO_MANDATE",
@@ -77,62 +84,117 @@ def gate_receipt(gate: str, scope: str, evidence: str, approved: str,
 
 def build_prepared(root: Path) -> None:
     root.mkdir(mode=0o700)
-    for name in ("workload", "data", "evidence", "recovery", "support", "incident"):
-        write(root / f"{name}.txt", f"{name}\n".encode())
+    scope_names = ("workload_definition", "measurement_plan", "baseline_manifest",
+        "dataset", "release_definition", "target", "limits", "evidence_policy",
+        "recovery_plan", "export_policy", "toolkit", "role_bindings", "window")
+    changed_names = {"workload_definition", "dataset", "release_definition",
+                     "target", "limits"}
+    for prefix in ("internal", "customer"):
+        for name in scope_names:
+            variant = "customer" if prefix == "customer" and name in changed_names else "shared"
+            write(root / f"{prefix}-{name}.json", f"{name}:{variant}\n".encode())
+    internal_scope = {"schema_version": 1, "contract_type": "scope",
+        "contract_id": "internal-scope", "scope_inputs": {
+            name: artifact(root, f"internal-{name}.json") for name in scope_names},
+        "gates_required": ["INTERNAL_CLOSEOUT"]}
+    customer_scope = {"schema_version": 1, "contract_type": "scope",
+        "contract_id": "customer-scope", "scope_inputs": {
+            name: artifact(root, f"customer-{name}.json") for name in scope_names},
+        "gates_required": sorted(CUSTOMER_DELTA_GATES)}
+    write(root / "internal-scope.json", internal_scope)
+    write(root / "customer-scope.json", customer_scope)
+    internal_sha, customer_sha = canonical_sha256(internal_scope), canonical_sha256(customer_scope)
+    preflight = {"schema_version": 1, "contract_type": "preflight",
+        "contract_id": "customer-preflight", "scope_sha256": customer_sha,
+        "target_identity_sha256": customer_scope["scope_inputs"]["target"]["sha256"],
+        "checks": ["target_identity"], "state": pass_state()}
+    from tools.phase5.contract_rules import RECOVERY_CHECKS
+    recovery = {"schema_version": 1, "contract_type": "recovery_validation",
+        "contract_id": "customer-recovery", "scope_sha256": customer_sha,
+        "rehearsal_id": "customer-rehearsal", "mandate_sha256": "a" * 64,
+        "r1_terminal_sha256": "b" * 64, "r2_terminal_sha256": "c" * 64,
+        "walkthrough_sha256": "d" * 64, "incident_sha256": "e" * 64,
+        "checked_at": "2026-11-19T00:05:00Z", "result": "PASS",
+        "decision": "ELIGIBLE_FOR_HUMAN_GRANT", "checks": RECOVERY_CHECKS,
+        "limitations": ["NO_AUTOMATIC_GATE_GRANT", "NO_RTO_CLAIM", "NO_SLA_CLAIM"]}
+    write(root / "customer-preflight.json", preflight)
+    write(root / "customer-recovery.json", recovery)
+    write(root / "support.txt", b"support\n"); write(root / "incident.txt", b"incident\n")
     roles = {"technical": "technical-reviewer", "operational": "operations-reviewer",
              "data": "data-reviewer", "legal": "legal-reviewer",
              "customer": "customer-authority"}
     dossier = {"schema_version": 1, "contract_type": "customer_delta_dossier",
-        "contract_id": "customer-dossier", "internal_scope_sha256": ZERO,
-        "customer_scope_sha256": ONE, "customer_reference": "customer-ref-1",
+        "contract_id": "customer-dossier",
+        "internal_scope": artifact(root, "internal-scope.json"),
+        "customer_scope": artifact(root, "customer-scope.json"),
+        "internal_scope_sha256": internal_sha, "customer_scope_sha256": customer_sha,
+        "customer_reference": "cust-" + "f" * 64,
         "charter_revision": "charter-v1", "environment_class": "NON_PRODUCTION",
-        "production_scope": "NONE", "site_sha256": "2" * 64,
-        "target_sha256": "3" * 64, "build_sha256": "4" * 64,
-        "pool_sha256": "5" * 64,
-        "workload_authority": artifact(root, "workload.txt"),
-        "data_authority": artifact(root, "data.txt"),
-        "evidence_policy": artifact(root, "evidence.txt"),
-        "recovery_plan": artifact(root, "recovery.txt"),
+        "production_scope": "NONE",
+        "site_sha256": customer_scope["scope_inputs"]["target"]["sha256"],
+        "target_sha256": customer_scope["scope_inputs"]["target"]["sha256"],
+        "build_sha256": customer_scope["scope_inputs"]["release_definition"]["sha256"],
+        "pool_sha256": customer_scope["scope_inputs"]["limits"]["sha256"],
+        "workload_authority": customer_scope["scope_inputs"]["workload_definition"],
+        "data_authority": customer_scope["scope_inputs"]["dataset"],
+        "evidence_policy": customer_scope["scope_inputs"]["evidence_policy"],
+        "recovery_plan": customer_scope["scope_inputs"]["recovery_plan"],
+        "site_preflight": artifact(root, "customer-preflight.json"),
+        "recovery_validation": artifact(root, "customer-recovery.json"),
         "support_plan": artifact(root, "support.txt"),
         "incident_plan": artifact(root, "incident.txt"), "role_approvals": roles,
         "valid_from": "2026-11-19T00:00:00Z", "valid_through": "2026-11-20T00:00:00Z",
-        "changes": [{"dimension": "resource", "before_sha256": "6" * 64,
-                     "after_sha256": "7" * 64}],
-        "affected_gates": ["CUSTOMER_OPERATION_GO", "RESOURCE_ACCEPTED"],
+        "changes": [{"scope_input": name,
+            "before_sha256": internal_scope["scope_inputs"][name]["sha256"],
+            "after_sha256": customer_scope["scope_inputs"][name]["sha256"]}
+            for name in sorted(changed_names)],
+        "affected_gates": sorted(CUSTOMER_DELTA_GATES),
         "confidentiality_classes": ["CUSTOMER_DATA", "CUSTOMER_IDENTITY",
             "CUSTOMER_QUOTES", "CUSTOMER_RESULTS", "CUSTOMER_SQL"]}
     write(root / "dossier.json", dossier)
     dossier_artifact = artifact(root, "dossier.json")
-    internal = gate_receipt("INTERNAL_CLOSEOUT", ZERO, "8" * 64,
+    internal_validation = {"schema_version": 1,
+        "document_type": "internal_pilot_validation", "scope_sha256": internal_sha,
+        "result": "PASS", "decision": "ELIGIBLE_FOR_HUMAN_GRANT",
+        "checked_at": "2026-11-19T00:00:00Z"}
+    write(root / "internal-validation.json", internal_validation)
+    internal_validation_artifact = artifact(root, "internal-validation.json")
+    internal = gate_receipt("INTERNAL_CLOSEOUT", internal_sha,
+                            internal_validation_artifact["sha256"],
                             "2026-11-19T00:00:00Z")
-    mandate = gate_receipt("CUSTOMER_PILOT_MANDATE", ONE, dossier_artifact["sha256"],
-                           "2026-11-19T00:10:00Z", "customer-ref-1")
+    mandate = gate_receipt("CUSTOMER_PILOT_MANDATE", customer_sha,
+                           dossier_artifact["sha256"], "2026-11-19T00:10:00Z",
+                           "cust-" + "f" * 64)
+    mandate["approvals"] = ["independent-sponsor"]
     go = {"schema_version": 1, "contract_type": "approval_receipt",
         "contract_id": "customer-go", "receipt_kind": "CUSTOMER_OPERATION_GO",
-        "scope_sha256": ONE, "preflight_sha256": dossier["site_sha256"],
-        "recovery_validation_sha256": dossier["recovery_plan"]["sha256"],
+        "scope_sha256": customer_sha, "preflight_sha256": canonical_sha256(preflight),
+        "recovery_validation_sha256": canonical_sha256(recovery),
         "valid_from": "2026-11-19T00:20:00Z", "valid_through": "2026-11-19T01:20:00Z",
         "approvals": sorted(roles.values()), "nonce": "customer-go-nonce"}
     write(root / "internal-closeout.json", internal); write(root / "mandate.json", mandate)
     write(root / "customer-go.json", go); write(root / "resource-evidence.txt", b"resource\n")
     resource_evidence = artifact(root, "resource-evidence.txt")
-    resource = gate_receipt("RESOURCE_ACCEPTED", ONE, resource_evidence["sha256"],
-                            "2026-11-19T00:15:00Z")
-    write(root / "resource-receipt.json", resource)
     reruns = matrix()
     for item in reruns:
-        if item["gate_id"] == "RESOURCE_ACCEPTED":
-            item.update(status="PASS", evidence=resource_evidence,
-                        receipt=artifact(root, "resource-receipt.json"))
-        elif item["gate_id"] == "CUSTOMER_OPERATION_GO":
+        if item["gate_id"] == "CUSTOMER_OPERATION_GO":
             item.update(status="PASS", evidence=dossier_artifact,
                         receipt=artifact(root, "customer-go.json"))
+        else:
+            receipt = gate_receipt(item["gate_id"], customer_sha,
+                                   resource_evidence["sha256"], "2026-11-19T00:15:00Z")
+            receipt_path = f"{item['gate_id'].lower()}-receipt.json"
+            write(root / receipt_path, receipt)
+            item.update(status="PASS", evidence=resource_evidence,
+                        receipt=artifact(root, receipt_path))
     value = closeout()
-    value.update(internal_scope_sha256=ZERO, dossier=dossier_artifact,
+    value.update(internal_scope_sha256=internal_sha, dossier=dossier_artifact,
         sponsor_mandate=artifact(root, "mandate.json"),
+        internal_closeout_validation=internal_validation_artifact,
         internal_closeout_receipt=artifact(root, "internal-closeout.json"),
         customer_operation_go=artifact(root, "customer-go.json"), gate_reruns=reruns,
-        not_run_reasons=["CUSTOMER_EXECUTION_UNAVAILABLE"])
+        not_run_reasons=["CUSTOMER_EXECUTION_UNAVAILABLE"],
+        final_environment_state="RETIRED_OFF")
     write(root / "customer-delta-closeout.json", value)
 
 
@@ -175,6 +237,22 @@ class CustomerDeltaTests(unittest.TestCase):
             value["sponsor_mandate"] = value["internal_closeout_receipt"]
             write(root / "customer-delta-closeout.json", value)
             with self.assertRaisesRegex(CustomerDeltaError, "authority_graph_invalid"):
+                validate_customer_delta(root, CHECKED)
+
+    def test_declared_delta_and_internal_validation_are_recomputed(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name) / "bundle"; build_prepared(root)
+            dossier = json.loads((root / "dossier.json").read_text())
+            dossier["changes"] = dossier["changes"][:-1]
+            write(root / "dossier.json", dossier)
+            with self.assertRaises(CustomerDeltaError):
+                validate_customer_delta(root, CHECKED)
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name) / "bundle"; build_prepared(root)
+            validation = json.loads((root / "internal-validation.json").read_text())
+            validation["result"] = "FAIL"
+            write(root / "internal-validation.json", validation)
+            with self.assertRaises(CustomerDeltaError):
                 validate_customer_delta(root, CHECKED)
 
     def test_customer_go_never_unlocks_existing_measurement_runtime(self) -> None:

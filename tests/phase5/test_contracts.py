@@ -72,6 +72,20 @@ def request(identity: str, planning: str, relation: str, **extra: object) -> dic
 
 
 class ParserTests(unittest.TestCase):
+    def test_internal_workload_refuses_customer_inventory_even_if_derived(self) -> None:
+        value = base("workload", "workload-customer-inventory")
+        value.update({"scope_sha256": ZERO, "inventory_sha256": ZERO,
+            "entries": [{"query_id": "q-1", "sql": artifact("q.sql"),
+                "inventory_origin": "natural_customer",
+                "inventory_authority": "INVENTORY_ONLY",
+                "executed_sql_origin": "derived_reproduction",
+                "executed_sql_authority": "AUTHORISED",
+                "dataset_origin": "derived_reproduction",
+                "dataset_authority": "AUTHORISED",
+                "execution_authority": "OPERATION_GO"}]})
+        with self.assertRaisesRegex(RULES.ContractError, "customer-origin execution"):
+            RULES.validate_contract(value)
+
     def test_static_malformed_fixtures_are_rejected(self) -> None:
         for path in sorted((ROOT / "tests/phase5/contracts/invalid").glob("*.json")):
             with self.subTest(path=path.name), self.assertRaises(RULES.ContractError):

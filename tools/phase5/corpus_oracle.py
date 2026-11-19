@@ -205,6 +205,8 @@ def validate_qualification(value: dict[str, Any]) -> dict[str, Any]:
             parent = _id(parent, "natural_query_id")
             if parent not in natural_ids:
                 raise OracleError("execution corpus has unknown natural parent")
+            if natural_origins[parent] == "natural_customer":
+                raise OracleError("customer inventory cannot enter the internal execution corpus")
         if item["executed_sql_origin"] not in {"natural_internal", "natural_customer",
                                                 "derived_reproduction"}:
             raise OracleError("invalid executed_sql_origin")
@@ -215,6 +217,9 @@ def validate_qualification(value: dict[str, Any]) -> dict[str, Any]:
         if item["dataset_origin"] not in {"natural_internal", "natural_customer",
                                            "derived_reproduction", "synthetic_control"}:
             raise OracleError("invalid dataset_origin")
+        if (item["executed_sql_origin"] == "natural_customer" or
+                item["dataset_origin"] == "natural_customer"):
+            raise OracleError("customer-origin execution requires a customer path")
         _id(item["executed_sql_ref"], "executed_sql_ref")
         if not isinstance(item["sql_sha256"], str) or not DIGEST.fullmatch(item["sql_sha256"]):
             raise OracleError("invalid sql_sha256")

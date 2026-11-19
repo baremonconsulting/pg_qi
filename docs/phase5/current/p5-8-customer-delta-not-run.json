@@ -1,1 +1,88 @@
-{"checked_at":"2026-11-19T00:30:00Z","contract_id":"customer-delta-closeout","contract_type":"customer_delta_closeout","customer_operation_go":null,"dossier":null,"eligibility":"REFUSED","failures":[],"final_environment_state":"NOT_TOUCHED","gate_reruns":[{"evidence":null,"gate_id":"CUSTOMER_OPERATION_GO","receipt":null,"status":"NOT_RUN"},{"evidence":null,"gate_id":"DATA_EVIDENCE_AUTHORIZED","receipt":null,"status":"NOT_RUN"},{"evidence":null,"gate_id":"ORACLE_QUALIFIED","receipt":null,"status":"NOT_RUN"},{"evidence":null,"gate_id":"QUALIFICATION_AUTHORIZED","receipt":null,"status":"NOT_RUN"},{"evidence":null,"gate_id":"RECOVERY_REHEARSED","receipt":null,"status":"NOT_RUN"},{"evidence":null,"gate_id":"RELEASE_SITE_QUALIFIED","receipt":null,"status":"NOT_RUN"},{"evidence":null,"gate_id":"RESOURCE_ACCEPTED","receipt":null,"status":"NOT_RUN"},{"evidence":null,"gate_id":"TOOLKIT_ACCEPTED","receipt":null,"status":"NOT_RUN"}],"generalisation_limits":["INTERNAL_ONLY_RESULTS","NO_CUSTOMER_EVIDENCE"],"internal_closeout_receipt":null,"internal_scope_sha256":null,"not_run_reasons":["CUSTOMER_EXECUTION_UNAVAILABLE","INTERNAL_CLOSEOUT_NOT_GRANTED","NO_CUSTOMER","NO_MANDATE","NO_SPONSOR_DECISION"],"publication_release":null,"result":"NOT_RUN","schema_version":1,"share_release":null,"sponsor_mandate":null,"state":{"evidence_completeness":"NONE","exit_state":"NOT_EXITED","lifecycle":"CLOSED","project_decision":"PAUSE","technical_result":"NOT_RUN","value_outcome":"NOT_EVALUATED"},"windows":[]}
+{
+    "checked_at": "2026-11-19T00:30:00Z",
+    "contract_id": "customer-delta-closeout",
+    "contract_type": "customer_delta_closeout",
+    "customer_operation_go": null,
+    "dossier": null,
+    "eligibility": "REFUSED",
+    "failures": [],
+    "final_environment_state": "NOT_TOUCHED",
+    "gate_reruns": [
+        {
+            "evidence": null,
+            "gate_id": "CUSTOMER_OPERATION_GO",
+            "receipt": null,
+            "status": "NOT_RUN"
+        },
+        {
+            "evidence": null,
+            "gate_id": "DATA_EVIDENCE_AUTHORIZED",
+            "receipt": null,
+            "status": "NOT_RUN"
+        },
+        {
+            "evidence": null,
+            "gate_id": "ORACLE_QUALIFIED",
+            "receipt": null,
+            "status": "NOT_RUN"
+        },
+        {
+            "evidence": null,
+            "gate_id": "QUALIFICATION_AUTHORIZED",
+            "receipt": null,
+            "status": "NOT_RUN"
+        },
+        {
+            "evidence": null,
+            "gate_id": "RECOVERY_REHEARSED",
+            "receipt": null,
+            "status": "NOT_RUN"
+        },
+        {
+            "evidence": null,
+            "gate_id": "RELEASE_SITE_QUALIFIED",
+            "receipt": null,
+            "status": "NOT_RUN"
+        },
+        {
+            "evidence": null,
+            "gate_id": "RESOURCE_ACCEPTED",
+            "receipt": null,
+            "status": "NOT_RUN"
+        },
+        {
+            "evidence": null,
+            "gate_id": "TOOLKIT_ACCEPTED",
+            "receipt": null,
+            "status": "NOT_RUN"
+        }
+    ],
+    "generalisation_limits": [
+        "INTERNAL_ONLY_RESULTS",
+        "NO_CUSTOMER_EVIDENCE"
+    ],
+    "internal_closeout_receipt": null,
+    "internal_closeout_validation": null,
+    "internal_scope_sha256": null,
+    "not_run_reasons": [
+        "CUSTOMER_EXECUTION_UNAVAILABLE",
+        "INTERNAL_CLOSEOUT_NOT_GRANTED",
+        "NO_CUSTOMER",
+        "NO_MANDATE",
+        "NO_SPONSOR_DECISION"
+    ],
+    "publication_release": null,
+    "result": "NOT_RUN",
+    "schema_version": 1,
+    "share_release": null,
+    "sponsor_mandate": null,
+    "state": {
+        "evidence_completeness": "NONE",
+        "exit_state": "NOT_EXITED",
+        "lifecycle": "CLOSED",
+        "project_decision": "PAUSE",
+        "technical_result": "NOT_RUN",
+        "value_outcome": "NOT_EVALUATED"
+    },
+    "windows": []
+}

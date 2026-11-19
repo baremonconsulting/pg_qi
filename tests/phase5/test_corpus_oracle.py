@@ -136,13 +136,17 @@ class QualificationTests(unittest.TestCase):
                     ORACLE.validate_qualification(value)
 
     def test_natural_execution_lineage_and_identifier_spaces_are_closed(self) -> None:
-        for mutation in ("missing_parent", "origin_mismatch", "control_collision"):
+        for mutation in ("missing_parent", "origin_mismatch", "customer_parent_derived",
+                         "control_collision"):
             with self.subTest(mutation=mutation):
                 value = qualification()
                 if mutation == "missing_parent":
                     value["execution_corpus"][0]["natural_query_id"] = None
                 elif mutation == "origin_mismatch":
                     value["execution_corpus"][0]["executed_sql_origin"] = "natural_customer"
+                elif mutation == "customer_parent_derived":
+                    value["natural_inventory"][0]["inventory_origin"] = "natural_customer"
+                    value["execution_corpus"][0]["executed_sql_origin"] = "derived_reproduction"
                 else:
                     value["synthetic_controls"][0]["query_id"] = "natural-eligible"
                 with self.assertRaises(ORACLE.OracleError):

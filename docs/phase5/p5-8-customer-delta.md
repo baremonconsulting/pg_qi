@@ -9,7 +9,8 @@ authoritative result is `NOT_RUN`, not an incomplete internal pass.
 
 Internal, customer, sharing and publication authority are independent:
 
-1. an exact internal scope and a human `INTERNAL_CLOSEOUT` receipt;
+1. an exact internal scope, a passing P5-7B validation and a human
+   `INTERNAL_CLOSEOUT` receipt bound to that validation;
 2. a new customer charter and `CUSTOMER_PILOT_MANDATE` bound to its digest;
 3. fresh evidence and receipts for every gate affected by the declared delta;
 4. a time-bounded `CUSTOMER_OPERATION_GO` for one revised scope;
@@ -21,17 +22,21 @@ Customer-origin SQL or data is refused by the internal evidence path.
 
 ## Dossier
 
-The dossier freezes an opaque customer reference, charter revision, one site,
+The dossier freezes a non-identifying `cust-<sha256>` reference, charter revision, one site,
 target/build/pool identities, workload and data authority, evidence policy,
 retention, recovery, support and incident procedures, five independent role
 approvals, a maximum fourteen-day non-production window, the exact changes and
 the affected gates. Production scope is fixed to `NONE`.
 
-The affected-gate table is derived, not trusted from the dossier. Workload,
-dataset, site, build, pool, toolkit, oracle, resource and recovery changes
-repeat their mapped qualification, data, release, toolkit, oracle, resource,
-recovery and operation gates. A copied internal receipt, stale scope, missing
-gate or invented unchanged delta is refused.
+The validator loads both complete scope contracts, compares every one of their
+thirteen input artifact digests and derives the delta and affected-gate table.
+The declared delta must match that result exactly, and workload, dataset and
+target must all be customer revisions. Workload, dataset, release, target,
+limits and any other changed scope input repeat their mapped qualification,
+data, release, toolkit, oracle, resource, recovery and operation gates. A
+copied internal receipt, stale scope, missing gate or invented unchanged delta
+is refused. `CUSTOMER_OPERATION_GO` is additionally bound to a passing
+customer-scope preflight and recovery validation.
 
 ## Current NOT_RUN closeout
 
@@ -49,7 +54,8 @@ python3 tools/phase5/customer_delta.py \
 Even a complete future dossier returns `NOT_RUN / REFUSED` in this tranche
 because the customer execution path is deliberately unavailable. Enabling any
 customer run requires a separately reviewed implementation and authority
-change.
+change. A fully prepared but unexecuted environment must be retired/off;
+`NOT_TOUCHED` is reserved for the empty no-customer state.
 
 ## Confidentiality and external attestations
 
