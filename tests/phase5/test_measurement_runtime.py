@@ -817,6 +817,23 @@ class EscalationTests(unittest.TestCase):
                 previous_path_prefix="private-level-1")
             self.assertEqual(level["level"], 2)
 
+    def test_previous_namespace_arguments_must_be_supplied_together(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); root.chmod(0o700)
+            value = plan(); digest = canonical_sha256(value)
+            _scope, scope_digest = measurement_scope(value)
+            authorization = level_one_authorization(root, digest, scope_digest)
+            with self.assertRaisesRegex(
+                    MeasurementError, "previous_level_namespace_arguments_incomplete"):
+                validate_level_authorization(
+                    authorization, value, digest, scope_digest, root,
+                    previous_evidence_root=root)
+            with self.assertRaisesRegex(
+                    MeasurementError, "previous_level_namespace_arguments_incomplete"):
+                validate_level_authorization(
+                    authorization, value, digest, scope_digest, root,
+                    previous_path_prefix="private-level-1")
+
 
 if __name__ == "__main__":
     unittest.main()

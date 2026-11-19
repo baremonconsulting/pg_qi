@@ -58,7 +58,10 @@ prefix and refuses any missing ledger record or subsequent retry.
 Attempt records are hash-chained and every window binds its exact record
 digest. The ledger location must provide externally enforced append-only/WORM
 semantics; ordinary operator-writable storage cannot prove absence of tail
-deletion and is not an approved ledger location.
+deletion and is not an approved ledger location. The closeout tool validates
+the declared storage control, ledger identity and hash chain, but cannot verify
+that the underlying storage is actually append-only/WORM; that property must
+be enforced and attested outside the tool.
 
 ## Closeout decisions
 
@@ -80,6 +83,10 @@ failure.
 
 Retention may remain `PENDING` only with the frozen owner and due date.
 Retirement itself may never remain unverified.
+
+A hard stop may be recorded as `CLOSED` only when the closeout bundle contains
+the dedicated `HARD_STOP_CLOSED` human approval receipt bound to that stop.
+Without that receipt the stop remains open and closeout is refused.
 
 ## Sharing
 

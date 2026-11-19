@@ -238,6 +238,8 @@ def validate_level_authorization(value: dict[str, Any], plan: dict[str, Any],
                                  previous_evidence_root: Path | None = None,
                                  previous_path_prefix: str | None = None) -> dict[str, Any]:
     """Validate the current GO and, above level one, the previous clean level."""
+    if (previous_evidence_root is None) != (previous_path_prefix is None):
+        raise MeasurementError("previous_level_namespace_arguments_incomplete")
     auth = _exact(value, {"schema_version", "document_type", "scope_sha256",
         "plan_sha256", "requested_level", "approval_reference",
         "operation_go", "operation_preflight", "operation_recovery_validation",
