@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import fcntl
 import math
 import os
 import re
@@ -585,9 +586,11 @@ class MeasurementRunner:
             pilot_attempt: dict[str, Any] | None = None,
             pilot_window_id: str | None = None,
             pilot_plan_sha256: str | None = None,
-            pilot_ledger_root: Path | None = None) -> dict[str, Any]:
+            pilot_ledger_root: Path | None = None,
+            pilot_plan: dict[str, Any] | None = None) -> dict[str, Any]:
         if len({pilot_attempt is None, pilot_window_id is None,
-                pilot_plan_sha256 is None, pilot_ledger_root is None}) != 1:
+                pilot_plan_sha256 is None, pilot_ledger_root is None,
+                pilot_plan is None}) != 1:
             raise MeasurementError("pilot_attempt_arguments_incomplete")
         level_definition = validate_level_authorization(level_authorization, self.plan,
             self.plan_sha256, self.scope_sha256, evidence_root,
@@ -605,6 +608,9 @@ class MeasurementRunner:
                 "run_id", "consumed_at"}, "pilot_attempt")
             _identifier(pilot_window_id, "pilot_window_id")
             _digest(pilot_plan_sha256, "pilot_plan_sha256")
+            if (not isinstance(pilot_plan, dict) or
+                    canonical_sha256(pilot_plan) != pilot_plan_sha256):
+                raise MeasurementError("pilot_plan_invalid")
             try:
                 consumed_at = datetime.fromisoformat(
                     attempt["consumed_at"].replace("Z", "+00:00"))
@@ -624,39 +630,60 @@ class MeasurementRunner:
             self._pilot_window_id = pilot_window_id
             ledger = pilot_ledger_root.resolve(strict=True)
             ledger_info = ledger.stat()
+            ledger_binding = pilot_plan.get("attempt_ledger", {})
             if (ledger != pilot_ledger_root.absolute() or not ledger.is_dir() or
                     ledger_info.st_uid != os.getuid() or
-                    stat.S_IMODE(ledger_info.st_mode) != 0o700):
+                    stat.S_IMODE(ledger_info.st_mode) != 0o700 or
+                    ledger_binding.get("path") != str(ledger) or
+                    ledger_binding.get("device") != ledger_info.st_dev or
+                    ledger_binding.get("inode") != ledger_info.st_ino or
+                    ledger_binding.get("storage_control") != "EXTERNAL_APPEND_ONLY"):
                 raise MeasurementError("pilot_ledger_invalid")
+            try:
+                verify_artifact(ledger, ledger_binding["identity"])
+                identity_path = ledger / ledger_binding["identity"]["path"]
+                lock_descriptor = os.open(identity_path, os.O_RDONLY | os.O_NOFOLLOW)
+            except (KeyError, TypeError, OSError, ContractError) as exc:
+                raise MeasurementError("pilot_ledger_invalid") from exc
             sequence = attempt["sequence"]
             if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
                 raise MeasurementError("pilot_attempt_invalid")
-            attempt_path = ledger / f"attempt-{sequence:04d}.json"
             try:
-                descriptor = os.open(attempt_path, os.O_RDONLY | os.O_NOFOLLOW)
-                with os.fdopen(descriptor, "rb") as stream:
-                    if stream.read() != canonical_bytes(attempt):
-                        raise MeasurementError("pilot_attempt_not_in_ledger")
-            except OSError as exc:
-                raise MeasurementError("pilot_attempt_not_in_ledger") from exc
-            dispatched_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-            marker = {"schema_version": 1, "document_type": "internal_pilot_dispatch",
-                "attempt_sha256": self._pilot_attempt_sha256,
-                "window_id": pilot_window_id, "level": level, "run_id": self.run_id,
-                "dispatched_at": dispatched_at}
-            marker_path = ledger / f"dispatch-{sequence:04d}.json"
-            try:
-                descriptor = os.open(marker_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
-                                     os.O_NOFOLLOW, 0o600)
-                with os.fdopen(descriptor, "wb") as stream:
-                    stream.write(canonical_bytes(marker)); stream.flush(); os.fsync(stream.fileno())
-                directory = os.open(ledger, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
+                attempt_names = sorted(path.name for path in ledger.glob("attempt-*.json"))
+                if not attempt_names or attempt_names[-1] != f"attempt-{sequence:04d}.json":
+                    raise MeasurementError("pilot_attempt_not_current")
+                attempt_path = ledger / f"attempt-{sequence:04d}.json"
                 try:
-                    os.fsync(directory)
-                finally:
-                    os.close(directory)
-            except OSError as exc:
-                raise MeasurementError("pilot_attempt_already_dispatched") from exc
+                    descriptor = os.open(attempt_path, os.O_RDONLY | os.O_NOFOLLOW)
+                    with os.fdopen(descriptor, "rb") as stream:
+                        if stream.read() != canonical_bytes(attempt):
+                            raise MeasurementError("pilot_attempt_not_in_ledger")
+                except OSError as exc:
+                    raise MeasurementError("pilot_attempt_not_in_ledger") from exc
+                dispatched_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                marker = {"schema_version": 1, "document_type": "internal_pilot_dispatch",
+                    "attempt_sha256": self._pilot_attempt_sha256,
+                    "window_id": pilot_window_id, "level": level, "run_id": self.run_id,
+                    "dispatched_at": dispatched_at}
+                marker_path = ledger / f"dispatch-{sequence:04d}.json"
+                try:
+                    descriptor = os.open(marker_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                                         os.O_NOFOLLOW, 0o600)
+                    with os.fdopen(descriptor, "wb") as stream:
+                        stream.write(canonical_bytes(marker)); stream.flush(); os.fsync(stream.fileno())
+                    directory = os.open(ledger, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                    try:
+                        os.fsync(directory)
+                    finally:
+                        os.close(directory)
+                except FileExistsError as exc:
+                    raise MeasurementError("pilot_attempt_already_dispatched") from exc
+                except OSError as exc:
+                    raise MeasurementError("pilot_dispatch_write_failed") from exc
+            finally:
+                fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+                os.close(lock_descriptor)
             self._pilot_dispatch_sha256 = canonical_sha256(marker)
             self._pilot_dispatched_at = dispatched_at
         self._authorization_valid_through = level_definition["_valid_through"]

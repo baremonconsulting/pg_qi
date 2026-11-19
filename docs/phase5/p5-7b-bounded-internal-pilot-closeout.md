@@ -30,8 +30,9 @@ For every approved window, in order:
 1. Consume the next ledger record before dispatch. A level cannot be retried,
    reordered or omitted from closeout.
 2. Pass that exact attempt record and its window ID to
-   `MeasurementRunner.run(...)`, together with the internal pilot plan digest.
-   Also pass the externally controlled ledger root. Before opening any session,
+   `MeasurementRunner.run(...)`, together with the internal pilot plan and its
+   digest. Also pass the externally controlled ledger root. The runner verifies
+   that the plan pins that exact ledger identity, device and inode. Before opening any session,
    the runner verifies the attempt file and exclusively appends a single-use
    dispatch marker. It seals both digests and the dispatch time into its report.
    Closeout requires the window start to equal that recorded dispatch time.

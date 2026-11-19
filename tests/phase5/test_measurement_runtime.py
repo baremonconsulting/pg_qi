@@ -818,16 +818,22 @@ class EscalationTests(unittest.TestCase):
             self.assertEqual(level["level"], 2)
             runner2, journal2, _stop2, _evidence2, _digest2, _scope2 = \
                 make_runner(root / "second", value)
-            pilot_plan_sha256 = "e" * 64
             pilot_attempt = {"schema_version": 1,
                 "document_type": "internal_pilot_attempt", "record_id": "attempt-2",
                 "pilot_id": "pilot-1", "sequence": 2, "scope_sha256": scope_digest,
-                "plan_sha256": pilot_plan_sha256,
+                "plan_sha256": "e" * 64,
                 "operation_go_sha256": authorization["operation_go"]["sha256"],
                 "previous_record_sha256": "0" * 64, "window_id": "window-2",
                 "level": 2, "run_id": "measurement-run-1",
                 "consumed_at": "2026-11-18T00:30:00Z"}
             ledger = root / "pilot-ledger"; ledger.mkdir(mode=0o700)
+            write_document(ledger / "ledger-id.json", {"ledger_id": "pilot-ledger-1"})
+            pilot_plan = {"attempt_ledger": {"path": str(ledger),
+                "device": ledger.stat().st_dev, "inode": ledger.stat().st_ino,
+                "identity": artifact(ledger, "ledger-id.json"),
+                "storage_control": "EXTERNAL_APPEND_ONLY"}}
+            pilot_plan_sha256 = canonical_sha256(pilot_plan)
+            pilot_attempt["plan_sha256"] = pilot_plan_sha256
             write_document(ledger / "attempt-0002.json", pilot_attempt)
             report2 = runner2.run(authorization, root,
                 correctness_gate(digest, scope_digest),
@@ -835,7 +841,8 @@ class EscalationTests(unittest.TestCase):
                 previous_evidence_root=private,
                 previous_path_prefix="private-level-1",
                 pilot_attempt=pilot_attempt, pilot_window_id="window-2",
-                pilot_plan_sha256=pilot_plan_sha256, pilot_ledger_root=ledger)
+                pilot_plan_sha256=pilot_plan_sha256, pilot_ledger_root=ledger,
+                pilot_plan=pilot_plan)
             journal2.close()
             self.assertEqual(report2["technical_result"], "PASS")
             self.assertEqual(report2["level"], 2)
@@ -849,7 +856,8 @@ class EscalationTests(unittest.TestCase):
                     previous_evidence_root=private,
                     previous_path_prefix="private-level-1",
                     pilot_attempt=pilot_attempt, pilot_window_id="window-2",
-                    pilot_plan_sha256=pilot_plan_sha256, pilot_ledger_root=ledger)
+                    pilot_plan_sha256=pilot_plan_sha256, pilot_ledger_root=ledger,
+                    pilot_plan=pilot_plan)
 
     def test_previous_namespace_arguments_must_be_supplied_together(self) -> None:
         with tempfile.TemporaryDirectory() as name:

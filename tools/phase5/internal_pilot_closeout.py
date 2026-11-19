@@ -382,6 +382,10 @@ def validate_internal_pilot(root: Path,
         raise CloseoutError("pilot_window_count_mismatch")
     ledger = _ledger(root, plan)
     attempts = _attempt_records(ledger, plan)
+    dispatch_names = {path.name for path in ledger.glob("dispatch-*.json")}
+    expected_dispatch_names = {f"dispatch-{item['sequence']:04d}.json" for item in attempts}
+    if dispatch_names != expected_dispatch_names:
+        raise CloseoutError("pilot_dispatch_history_mismatch")
     dispatches = [_dispatch_record(ledger, attempt) for attempt in attempts]
     if len(attempts) != len(closeout["windows"]):
         raise CloseoutError("pilot_attempt_history_mismatch")
@@ -626,7 +630,7 @@ def validate_internal_pilot(root: Path,
             closeout["retention"]["due_at"] != plan["retention_due_at"]:
         raise CloseoutError("retention_commitment_mismatch")
     if (closeout["retention"]["status"] == "PENDING" and
-            _time(closeout["retention"]["due_at"]) < recorded_checked):
+            _time(closeout["retention"]["due_at"]) < checked):
         raise CloseoutError("retention_commitment_overdue")
     if closeout["retention"]["evidence"] is not None:
         retention_evidence = _artifact(root, closeout["retention"]["evidence"],
