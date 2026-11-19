@@ -8,6 +8,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import stat
 import sys
 from datetime import datetime, timezone
@@ -204,13 +205,18 @@ def consume_attempt(root: Path, ledger_path: Path, window_id: str, level: int,
         raise CloseoutError("attempt_clock_is_not_utc_aware")
     approved = next((item for item in plan["approved_windows"]
                      if item["window_id"] == window_id and item["level"] == level), None)
-    if approved is None or not isinstance(run_id, str) or not run_id:
+    identifier = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
+    if (approved is None or not isinstance(run_id, str) or
+            not identifier.fullmatch(run_id) or not isinstance(window_id, str) or
+            not identifier.fullmatch(window_id)):
         raise CloseoutError("attempt_outside_approved_windows")
     lock_fd = os.open(ledger / plan["attempt_ledger"]["identity"]["path"],
                       os.O_RDONLY | os.O_NOFOLLOW)
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
         existing = _attempt_records(ledger, plan)
+        if any(item["run_id"] == run_id for item in existing):
+            raise CloseoutError("pilot_run_id_reuse_refused")
         if existing and existing[-1]["level"] >= level:
             raise CloseoutError("pilot_level_retry_or_reorder_refused")
         if level != len(existing) + 1:
@@ -459,6 +465,8 @@ def validate_internal_pilot(root: Path,
         if (report["scope_sha256"] != scope or
                 report["plan_sha256"] != canonical_sha256(measurement_plan) or
                 report["level"] != window["level"] or report["run_id"] != window["run_id"] or
+                report.get("pilot_attempt_sha256") != canonical_sha256(attempt) or
+                report.get("pilot_window_id") != window["window_id"] or
                 retirement["scope_sha256"] != scope or
                 retirement["run_id"] != window["run_id"]):
             raise CloseoutError("pilot_window_evidence_mismatch")

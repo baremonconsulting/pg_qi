@@ -621,6 +621,11 @@ def _ratio(value: Any, name: str) -> None:
 def _validate_measurement_report(value: dict[str, Any], catalog: dict[str, Any]) -> None:
     _scope_ref(value); _digest(value["plan_sha256"], "plan_sha256")
     _string(value["run_id"], "run_id"); _integer(value["level"], "level", 1)
+    if ("pilot_attempt_sha256" in value) != ("pilot_window_id" in value):
+        raise ContractError("pilot measurement binding is incomplete")
+    if "pilot_attempt_sha256" in value:
+        _digest(value["pilot_attempt_sha256"], "pilot_attempt_sha256")
+        _string(value["pilot_window_id"], "pilot_window_id")
     _artifact(value["sample_file"], "sample_file")
     sample_count = _integer(value["sample_count"], "sample_count", 0)
     raw_sample_count = _integer(value["raw_sample_count"], "raw_sample_count", 0)

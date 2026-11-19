@@ -29,13 +29,16 @@ For every approved window, in order:
 
 1. Consume the next ledger record before dispatch. A level cannot be retried,
    reordered or omitted from closeout.
-2. Confirm the same current operation approval and exact level authorization.
-3. Run that single frozen level; never escalate automatically.
-4. Stop admission after the window, including failed and partial windows.
-5. Retire all owned sessions and cached plans.
-6. Establish a fresh default-off/force-off reconnect using a session that was
+2. Pass that exact attempt record and its window ID to
+   `MeasurementRunner.run(...)`. The runner seals the attempt digest into its
+   report before that report can be accepted by closeout.
+3. Confirm the same current operation approval and exact level authorization.
+4. Run that single frozen level; never escalate automatically.
+5. Stop admission after the window, including failed and partial windows.
+6. Retire all owned sessions and cached plans.
+7. Establish a fresh default-off/force-off reconnect using a session that was
    not among the retired pilot sessions.
-7. Seal the raw stream, report, retirement and terminal state in a distinct
+8. Seal the raw stream, report, retirement and terminal state in a distinct
    private bundle. Never reuse a run ID or overwrite an earlier bundle.
 
 The next window may start only after the previous window has finished and
@@ -54,6 +57,10 @@ python3 tools/phase5/internal_pilot_closeout.py \
 
 If a window fails or is partial, stop. Closeout accepts that truthful executed
 prefix and refuses any missing ledger record or subsequent retry.
+If an attempt is consumed but dispatch never starts, that pilot is deliberately
+not recoverable: preserve the ledger, close the operation administratively and
+start a newly approved pilot with a new pilot ID. Never delete the record or
+reuse the pilot to conceal the aborted attempt.
 
 Attempt records are hash-chained and every window binds its exact record
 digest. The ledger location must provide externally enforced append-only/WORM

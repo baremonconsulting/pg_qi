@@ -127,7 +127,7 @@
         "stop_reason",
         "limitations"
       ],
-      "optional": []
+      "optional": ["pilot_attempt_sha256", "pilot_window_id"]
     },
     "retirement": {
       "required": ["scope_sha256", "run_id", "owned_sessions", "backend_absence_verified", "cached_plans_retired", "default_off_reconnect", "state"],

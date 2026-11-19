@@ -581,12 +581,41 @@ class MeasurementRunner:
             correctness_gate: CorrectnessGate,
             session_factory: Callable[[str, int, StopController], MeasurementSession], *,
             previous_evidence_root: Path | None = None,
-            previous_path_prefix: str | None = None) -> dict[str, Any]:
+            previous_path_prefix: str | None = None,
+            pilot_attempt: dict[str, Any] | None = None,
+            pilot_window_id: str | None = None) -> dict[str, Any]:
+        if (pilot_attempt is None) != (pilot_window_id is None):
+            raise MeasurementError("pilot_attempt_arguments_incomplete")
         level_definition = validate_level_authorization(level_authorization, self.plan,
             self.plan_sha256, self.scope_sha256, evidence_root,
             previous_evidence_root=previous_evidence_root,
             previous_path_prefix=previous_path_prefix)
         level = level_definition["level"]
+        self._pilot_attempt_sha256: str | None = None
+        self._pilot_window_id: str | None = None
+        if pilot_attempt is not None:
+            attempt = _exact(pilot_attempt, {"schema_version", "document_type", "record_id",
+                "pilot_id", "sequence", "scope_sha256", "plan_sha256",
+                "operation_go_sha256", "previous_record_sha256", "window_id", "level",
+                "run_id", "consumed_at"}, "pilot_attempt")
+            _identifier(pilot_window_id, "pilot_window_id")
+            try:
+                consumed_at = datetime.fromisoformat(
+                    attempt["consumed_at"].replace("Z", "+00:00"))
+            except (AttributeError, ValueError) as exc:
+                raise MeasurementError("pilot_attempt_invalid") from exc
+            if (attempt["schema_version"] != 1 or
+                    attempt["document_type"] != "internal_pilot_attempt" or
+                    attempt["scope_sha256"] != self.scope_sha256 or
+                    attempt["plan_sha256"] != self.plan_sha256 or
+                    attempt["operation_go_sha256"] !=
+                    level_authorization["operation_go"]["sha256"] or
+                    attempt["window_id"] != pilot_window_id or
+                    attempt["level"] != level or attempt["run_id"] != self.run_id or
+                    consumed_at.tzinfo is None):
+                raise MeasurementError("pilot_attempt_invalid")
+            self._pilot_attempt_sha256 = canonical_sha256(attempt)
+            self._pilot_window_id = pilot_window_id
         self._authorization_valid_through = level_definition["_valid_through"]
         self._active_level = level
         sessions_count = level_definition["sessions"]
@@ -903,6 +932,9 @@ class MeasurementRunner:
             "technical_result": technical,
             "stop_reason": self.controller.reason,
             "limitations": sorted(MEASUREMENT_LIMITATIONS)}
+        if self._pilot_attempt_sha256 is not None:
+            report["pilot_attempt_sha256"] = self._pilot_attempt_sha256
+            report["pilot_window_id"] = self._pilot_window_id
         validate_contract(report)
         return report
 

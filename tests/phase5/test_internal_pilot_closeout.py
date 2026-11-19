@@ -190,6 +190,16 @@ def build(root: Path, report_result: str = "PASS", retired: bool = True,
         "level": 1, "run_id": "run-1", "consumed_at": "2026-11-18T00:59:00Z"}
     if write_attempt_record:
         write(ledger / "attempt-0001.json", attempt)
+    result_report["pilot_attempt_sha256"] = canonical_sha256(attempt)
+    result_report["pilot_window_id"] = "window-1"
+    write(private / "report.json", result_report)
+    index["payloads"][0] = artifact(private, "report.json")
+    write(private / "index.json", index)
+    terminal["index_sha256"] = canonical_sha256(index)
+    write(private / "terminal.json", terminal)
+    validation["index_sha256"] = canonical_sha256(index)
+    validation["terminal_sha256"] = canonical_sha256(terminal)
+    write(root / "private-level-1-validation.json", validation)
     window_result = "PASS" if report_result == "PASS" and retired else \
         "INCOMPLETE" if report_result == "INCOMPLETE" or not retired else "FAIL"
     window = {"schema_version": 1, "contract_type": "internal_pilot_window",
