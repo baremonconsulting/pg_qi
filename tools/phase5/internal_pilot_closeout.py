@@ -638,6 +638,7 @@ def validate_internal_pilot(root: Path,
         if (retention_evidence["scope_sha256"] != scope or
                 retention_evidence["pilot_id"] != plan["pilot_id"] or
                 retention_evidence["owner"] != plan["retention_owner"] or
+                _time(retention_evidence["performed_at"]) < prior_finish or
                 _time(retention_evidence["performed_at"]) > recorded_checked):
             raise CloseoutError("retention_evidence_invalid")
 

@@ -59,12 +59,19 @@ python3 tools/phase5/internal_pilot_closeout.py \
   --window-id window-1 --level 1 --run-id run-1
 ```
 
+For level 2 and above, add `--previous-window` pointing to the preceding
+passing window. The runner call for those levels must also provide
+`previous_evidence_root` and `previous_path_prefix` for that preceding private
+bundle.
+
 If a window fails or is partial, stop. Closeout accepts that truthful executed
 prefix and refuses any missing ledger record or subsequent retry.
 If an attempt is consumed but dispatch never starts, that pilot is deliberately
 not recoverable: preserve the ledger, close the operation administratively and
 start a newly approved pilot with a new pilot ID. Never delete the record or
 reuse the pilot to conceal the aborted attempt.
+The same administrative-stop rule applies if the runner crashes or is aborted
+after writing its dispatch marker but before sealing a report.
 Stopping after a passing window without an open hard-stop finding likewise
 requires administrative closure and a newly approved pilot. An open hard stop
 may terminate an otherwise passing prefix, but the closeout result is refused.
@@ -97,6 +104,10 @@ failure.
 
 Retention may remain `PENDING` only with the frozen owner and due date.
 Retirement itself may never remain unverified.
+The stop, retirement, fresh-off and window contracts are operator-produced
+evidence. The validator checks their identities, ordering, seals and
+cross-bindings; it does not itself operate database sessions or independently
+observe those operational acts.
 
 A hard stop may be recorded as `CLOSED` only when the closeout bundle contains
 the dedicated `HARD_STOP_CLOSED` human approval receipt bound to that finding
