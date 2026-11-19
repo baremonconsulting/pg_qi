@@ -28,6 +28,11 @@ recovery, support and incident procedures, five independent role
 approvals, a maximum fourteen-day non-production window, the exact changes and
 the affected gates. Production scope is fixed to `NONE`.
 
+Role bindings and the charter window are typed customer-scope inputs and must
+match the dossier exactly. The customer GO is bound to the dossier and mandate
+digests. Each rerun uses gate-specific, customer-scope evidence; site and
+recovery gates use their dedicated preflight and recovery contracts.
+
 The validator loads both complete scope contracts, compares every one of their
 thirteen input artifact digests and derives the delta and affected-gate table.
 The declared delta must match that result exactly, and workload, dataset and
@@ -56,6 +61,8 @@ because the customer execution path is deliberately unavailable. Enabling any
 customer run requires a separately reviewed implementation and authority
 change. A fully prepared but unexecuted environment must be retired/off;
 `NOT_TOUCHED` is reserved for the empty no-customer state.
+The prepared closeout is accepted only after the bounded GO has expired and
+the prepared environment is recorded as `RETIRED_OFF`.
 
 ## Confidentiality and external attestations
 

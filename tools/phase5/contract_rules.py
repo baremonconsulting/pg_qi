@@ -297,8 +297,8 @@ def _validate_scope(value: dict[str, Any], catalog: dict[str, Any]) -> None:
 
 
 def _validate_approval_receipt(value: dict[str, Any], catalog: dict[str, Any]) -> None:
-    _enum(value["receipt_kind"], "approval receipt kind",
-          catalog["receipt_kinds"]["approval_receipt"])
+    kind = _enum(value["receipt_kind"], "approval receipt kind",
+                 catalog["receipt_kinds"]["approval_receipt"])
     _scope_ref(value); _digest(value["preflight_sha256"], "preflight_sha256")
     _digest(value["recovery_validation_sha256"], "recovery_validation_sha256")
     start = _timestamp(value["valid_from"], "valid_from")
@@ -306,6 +306,14 @@ def _validate_approval_receipt(value: dict[str, Any], catalog: dict[str, Any]) -
     _identifier_array(value["approvals"], "approvals", True); _string(value["nonce"], "nonce")
     if start >= end:
         raise ContractError("approval validity window is empty or reversed")
+    bindings = ("dossier_sha256", "mandate_sha256")
+    if kind == "CUSTOMER_OPERATION_GO":
+        if any(value.get(name) is None for name in bindings):
+            raise ContractError("customer operation GO lacks authority bindings")
+        for name in bindings:
+            _digest(value[name], name)
+    elif any(name in value for name in bindings):
+        raise ContractError("internal operation GO has customer authority bindings")
 
 
 def _validate_preflight(value: dict[str, Any], catalog: dict[str, Any]) -> None:
@@ -1431,6 +1439,34 @@ def _validate_customer_delta_validation(value: dict[str, Any], catalog: dict[str
     expected = "NOT_RUN" if value["result"] == "NOT_RUN" else "FAIL"
     if value["state"]["technical_result"] != expected:
         raise ContractError("customer validation state contradicts result")
+
+
+def _validate_customer_gate_evidence(value: dict[str, Any], catalog: dict[str, Any]) -> None:
+    gate = _enum(value["gate_id"], "gate_id", CUSTOMER_DELTA_GATES)
+    if gate in {"CUSTOMER_OPERATION_GO", "RELEASE_SITE_QUALIFIED",
+                "RECOVERY_REHEARSED"}:
+        raise ContractError("gate requires its dedicated evidence contract")
+    _scope_ref(value)
+    _digest(value["source_sha256"], "source_sha256")
+    _timestamp(value["checked_at"], "checked_at")
+    _enum(value["result"], "customer gate evidence result", {"PASS", "FAIL"})
+
+
+def _validate_customer_role_bindings(value: dict[str, Any], catalog: dict[str, Any]) -> None:
+    roles = _object(value["roles"], "roles")
+    required = {"technical", "operational", "data", "legal", "customer"}
+    if set(roles) != required:
+        raise ContractError("customer role bindings are incomplete")
+    approvers = [_string(roles[name], name) for name in sorted(required)]
+    if len(set(approvers)) != len(approvers):
+        raise ContractError("customer role bindings are not independent")
+
+
+def _validate_customer_window(value: dict[str, Any], catalog: dict[str, Any]) -> None:
+    start = _timestamp(value["valid_from"], "valid_from")
+    finish = _timestamp(value["valid_through"], "valid_through")
+    if finish <= start or finish - start > timedelta(days=14):
+        raise ContractError("customer scope window is invalid")
 
 
 def _validate_index(value: dict[str, Any], catalog: dict[str, Any]) -> None:

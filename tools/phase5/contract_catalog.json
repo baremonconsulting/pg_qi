@@ -45,7 +45,7 @@
     },
     "approval_receipt": {
       "required": ["receipt_kind", "scope_sha256", "preflight_sha256", "recovery_validation_sha256", "valid_from", "valid_through", "approvals", "nonce"],
-      "optional": []
+      "optional": ["dossier_sha256", "mandate_sha256"]
     },
     "preflight": {
       "required": ["scope_sha256", "target_identity_sha256", "checks", "state"],
@@ -222,6 +222,18 @@
     },
     "customer_delta_validation": {
       "required": ["closeout_sha256", "dossier_sha256", "checked_at", "result", "decision", "checks", "limitations", "state"],
+      "optional": []
+    },
+    "customer_gate_evidence": {
+      "required": ["gate_id", "scope_sha256", "source_sha256", "checked_at", "result"],
+      "optional": []
+    },
+    "customer_role_bindings": {
+      "required": ["roles"],
+      "optional": []
+    },
+    "customer_window": {
+      "required": ["valid_from", "valid_through"],
       "optional": []
     },
     "index": {
