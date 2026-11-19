@@ -153,6 +153,22 @@ class ParserTests(unittest.TestCase):
 
 
 class ScopeAndReceiptTests(unittest.TestCase):
+    def test_customer_go_requires_customer_bindings_only(self) -> None:
+        receipt = base("approval_receipt", "customer-go")
+        receipt.update({"receipt_kind": "CUSTOMER_OPERATION_GO",
+            "scope_sha256": ZERO, "preflight_sha256": ZERO,
+            "recovery_validation_sha256": ZERO,
+            "valid_from": "2026-01-01T00:00:00Z",
+            "valid_through": "2026-01-02T00:00:00Z",
+            "approvals": ["operator"], "nonce": "nonce"})
+        with self.assertRaisesRegex(RULES.ContractError, "authority bindings"):
+            RULES.validate_contract(receipt)
+        receipt.update({"dossier_sha256": ZERO, "mandate_sha256": ZERO})
+        RULES.validate_contract(receipt)
+        receipt["receipt_kind"] = "OPERATION_GO"
+        with self.assertRaisesRegex(RULES.ContractError, "customer authority"):
+            RULES.validate_contract(receipt)
+
     def test_exact_byte_mutation_invalidates_scope_input_and_old_go(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             root = Path(name); (root / "inputs").mkdir(); document = scope()

@@ -30,8 +30,11 @@ the affected gates. Production scope is fixed to `NONE`.
 
 Role bindings and the charter window are typed customer-scope inputs and must
 match the dossier exactly. The customer GO is bound to the dossier and mandate
-digests. Each rerun uses gate-specific, customer-scope evidence; site and
-recovery gates use their dedicated preflight and recovery contracts.
+digests. The mandate is granted before any customer-site preflight or recovery
+rehearsal; those fresh artifacts are carried by the closeout and bound by the
+later GO. Each rerun uses gate-specific, customer-scope evidence; site and
+recovery gates use their dedicated contracts. Generic gate evidence binds a
+digest closure over every scope input relevant to that gate.
 
 The validator loads both complete scope contracts, compares every one of their
 thirteen input artifact digests and derives the delta and affected-gate table.
@@ -73,7 +76,10 @@ environment is non-production; that property requires external attestation.
 
 ## Closeout content
 
-The closeout records failures, explicit NOT_RUN reasons, limits on
-generalisation and the final environment state. A customer window is rejected
-in this implementation. Share and publication receipts are also rejected here;
-they require their own exact package, recipient/channel and consent workflow.
+The closeout records explicit NOT_RUN reasons, limits on generalisation, the
+final environment state and passing retirement evidence after GO expiry. This
+preparation-only tranche refuses failed or partial authority graphs instead of
+turning them into customer evidence; accepted closeouts therefore have an
+empty `failures` list. A customer execution window is rejected in this
+implementation. Share and publication receipts are also rejected here; they
+require their own exact package, recipient/channel and consent workflow.

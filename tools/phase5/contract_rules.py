@@ -319,6 +319,8 @@ def _validate_approval_receipt(value: dict[str, Any], catalog: dict[str, Any]) -
 def _validate_preflight(value: dict[str, Any], catalog: dict[str, Any]) -> None:
     _scope_ref(value); _digest(value["target_identity_sha256"], "target_identity_sha256")
     _identifier_array(value["checks"], "checks", True); _state(value["state"], catalog)
+    if "checked_at" in value:
+        _timestamp(value["checked_at"], "checked_at")
 
 
 def _validate_workload(value: dict[str, Any], catalog: dict[str, Any]) -> None:
@@ -1328,8 +1330,7 @@ def _validate_customer_delta_dossier(value: dict[str, Any], catalog: dict[str, A
     _enum(value["environment_class"], "environment_class", {"NON_PRODUCTION"})
     _enum(value["production_scope"], "production_scope", {"NONE"})
     for name in ("workload_authority", "data_authority", "evidence_policy",
-                 "recovery_plan", "site_preflight", "recovery_validation",
-                 "support_plan", "incident_plan"):
+                 "recovery_plan", "support_plan", "incident_plan"):
         _artifact(value[name], name)
     roles = _object(value["role_approvals"], "role_approvals")
     required_roles = {"technical", "operational", "data", "legal", "customer"}
@@ -1375,8 +1376,9 @@ def _validate_customer_delta_closeout(value: dict[str, Any], catalog: dict[str, 
     if value["internal_scope_sha256"] is not None:
         _digest(value["internal_scope_sha256"], "internal_scope_sha256")
     for name in ("dossier", "sponsor_mandate", "internal_closeout_validation",
-                 "internal_closeout_receipt",
-                 "customer_operation_go", "share_release", "publication_release"):
+                 "internal_closeout_receipt", "site_preflight", "recovery_validation",
+                 "customer_operation_go", "retirement_evidence", "share_release",
+                 "publication_release"):
         if value[name] is not None:
             _artifact(value[name], name)
     reruns = _array(value["gate_reruns"], "gate_reruns")
@@ -1467,6 +1469,14 @@ def _validate_customer_window(value: dict[str, Any], catalog: dict[str, Any]) ->
     finish = _timestamp(value["valid_through"], "valid_through")
     if finish <= start or finish - start > timedelta(days=14):
         raise ContractError("customer scope window is invalid")
+
+
+def _validate_customer_retirement_evidence(value: dict[str, Any],
+                                            catalog: dict[str, Any]) -> None:
+    _scope_ref(value)
+    _digest(value["target_sha256"], "target_sha256")
+    _timestamp(value["retired_at"], "retired_at")
+    _enum(value["result"], "customer retirement result", {"PASS", "FAIL"})
 
 
 def _validate_index(value: dict[str, Any], catalog: dict[str, Any]) -> None:

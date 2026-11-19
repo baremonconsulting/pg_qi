@@ -56,7 +56,9 @@ def closeout() -> dict:
         "contract_id": "customer-delta-closeout", "internal_scope_sha256": None,
         "dossier": None, "sponsor_mandate": None, "internal_closeout_validation": None,
         "internal_closeout_receipt": None,
-        "customer_operation_go": None, "gate_reruns": matrix(), "windows": [],
+        "site_preflight": None, "recovery_validation": None,
+        "customer_operation_go": None, "retirement_evidence": None,
+        "gate_reruns": matrix(), "windows": [],
         "failures": [], "not_run_reasons": ["CUSTOMER_EXECUTION_UNAVAILABLE",
             "INTERNAL_CLOSEOUT_NOT_GRANTED", "NO_CUSTOMER", "NO_MANDATE",
             "NO_SPONSOR_DECISION"],
@@ -107,6 +109,7 @@ def build_prepared(root: Path, *, preflight_pass: bool = True) -> None:
     preflight = {"schema_version": 1, "contract_type": "preflight",
         "contract_id": "customer-preflight", "scope_sha256": customer_sha,
         "target_identity_sha256": customer_scope["scope_inputs"]["target"]["sha256"],
+        "checked_at": "2026-11-19T00:12:00Z",
         "checks": ["target_identity"], "state": pass_state() if preflight_pass else {
             **pass_state(), "technical_result": "FAIL", "value_outcome": "NEGATIVE",
             "project_decision": "STOP"}}
@@ -116,7 +119,7 @@ def build_prepared(root: Path, *, preflight_pass: bool = True) -> None:
         "rehearsal_id": "customer-rehearsal", "mandate_sha256": "a" * 64,
         "r1_terminal_sha256": "b" * 64, "r2_terminal_sha256": "c" * 64,
         "walkthrough_sha256": "d" * 64, "incident_sha256": "e" * 64,
-        "checked_at": "2026-11-19T00:05:00Z", "result": "PASS",
+        "checked_at": "2026-11-19T00:13:00Z", "result": "PASS",
         "decision": "ELIGIBLE_FOR_HUMAN_GRANT", "checks": RECOVERY_CHECKS,
         "limitations": ["NO_AUTOMATIC_GATE_GRANT", "NO_RTO_CLAIM", "NO_SLA_CLAIM"]}
     write(root / "customer-preflight.json", preflight)
@@ -157,8 +160,6 @@ def build_prepared(root: Path, *, preflight_pass: bool = True) -> None:
         "data_authority": customer_scope["scope_inputs"]["dataset"],
         "evidence_policy": customer_scope["scope_inputs"]["evidence_policy"],
         "recovery_plan": customer_scope["scope_inputs"]["recovery_plan"],
-        "site_preflight": artifact(root, "customer-preflight.json"),
-        "recovery_validation": artifact(root, "customer-recovery.json"),
         "support_plan": artifact(root, "support.txt"),
         "incident_plan": artifact(root, "incident.txt"), "role_approvals": roles,
         "valid_from": "2026-11-19T00:00:00Z", "valid_through": "2026-11-20T00:00:00Z",
@@ -175,7 +176,7 @@ def build_prepared(root: Path, *, preflight_pass: bool = True) -> None:
         "document_type": "internal_pilot_validation", "scope_sha256": internal_sha,
         "result": "PASS", "decision": "ELIGIBLE_FOR_HUMAN_GRANT",
         "project_decision": "CONTINUE", "window_count": 1, "pilot_id": "pilot-1",
-        "checked_at": "2026-11-19T00:00:00Z"}
+        "checked_at": "2026-11-19T00:00:00+00:00"}
     write(root / "internal-validation.json", internal_validation)
     internal_validation_artifact = artifact(root, "internal-validation.json")
     internal = gate_receipt("INTERNAL_CLOSEOUT", internal_sha,
@@ -185,6 +186,8 @@ def build_prepared(root: Path, *, preflight_pass: bool = True) -> None:
                            dossier_artifact["sha256"], "2026-11-19T00:10:00Z",
                            "cust-" + "f" * 64)
     mandate["approvals"] = ["independent-sponsor"]
+    recovery["mandate_sha256"] = canonical_sha256(mandate)
+    write(root / "customer-recovery.json", recovery)
     go = {"schema_version": 1, "contract_type": "approval_receipt",
         "contract_id": "customer-go", "receipt_kind": "CUSTOMER_OPERATION_GO",
         "scope_sha256": customer_sha, "preflight_sha256": canonical_sha256(preflight),
@@ -195,6 +198,12 @@ def build_prepared(root: Path, *, preflight_pass: bool = True) -> None:
         "approvals": sorted(roles.values()), "nonce": "customer-go-nonce"}
     write(root / "internal-closeout.json", internal); write(root / "mandate.json", mandate)
     write(root / "customer-go.json", go)
+    retirement = {"schema_version": 1,
+        "contract_type": "customer_retirement_evidence",
+        "contract_id": "customer-retirement", "scope_sha256": customer_sha,
+        "target_sha256": dossier["target_sha256"],
+        "retired_at": "2026-11-19T01:25:00Z", "result": "PASS"}
+    write(root / "customer-retirement.json", retirement)
     reruns = matrix()
     for item in reruns:
         if item["gate_id"] == "CUSTOMER_OPERATION_GO":
@@ -202,20 +211,19 @@ def build_prepared(root: Path, *, preflight_pass: bool = True) -> None:
                         receipt=artifact(root, "customer-go.json"))
         else:
             if item["gate_id"] == "RELEASE_SITE_QUALIFIED":
-                gate_evidence = dossier["site_preflight"]
+                gate_evidence = artifact(root, "customer-preflight.json")
             elif item["gate_id"] == "RECOVERY_REHEARSED":
-                gate_evidence = dossier["recovery_validation"]
+                gate_evidence = artifact(root, "customer-recovery.json")
             else:
                 evidence_path = f"{item['gate_id'].lower()}-evidence.json"
-                source_name = {"QUALIFICATION_AUTHORIZED": "workload_definition",
-                    "DATA_EVIDENCE_AUTHORIZED": "dataset", "TOOLKIT_ACCEPTED": "toolkit",
-                    "ORACLE_QUALIFIED": "measurement_plan",
-                    "RESOURCE_ACCEPTED": "limits"}[item["gate_id"]]
+                from tools.phase5.customer_delta import GATE_SOURCE_INPUTS
                 evidence_value = {"schema_version": 1,
                     "contract_type": "customer_gate_evidence",
                     "contract_id": f"{item['gate_id'].lower()}-evidence",
                     "gate_id": item["gate_id"], "scope_sha256": customer_sha,
-                    "source_sha256": customer_scope["scope_inputs"][source_name]["sha256"],
+                    "source_sha256": canonical_sha256({"gate_id": item["gate_id"],
+                        "inputs": {source: customer_scope["scope_inputs"][source]["sha256"]
+                                   for source in GATE_SOURCE_INPUTS[item["gate_id"]]}}),
                     "checked_at": "2026-11-19T00:14:00Z", "result": "PASS"}
                 write(root / evidence_path, evidence_value)
                 gate_evidence = artifact(root, evidence_path)
@@ -230,7 +238,10 @@ def build_prepared(root: Path, *, preflight_pass: bool = True) -> None:
         sponsor_mandate=artifact(root, "mandate.json"),
         internal_closeout_validation=internal_validation_artifact,
         internal_closeout_receipt=artifact(root, "internal-closeout.json"),
-        customer_operation_go=artifact(root, "customer-go.json"), gate_reruns=reruns,
+        site_preflight=artifact(root, "customer-preflight.json"),
+        recovery_validation=artifact(root, "customer-recovery.json"),
+        customer_operation_go=artifact(root, "customer-go.json"),
+        retirement_evidence=artifact(root, "customer-retirement.json"), gate_reruns=reruns,
         not_run_reasons=["CUSTOMER_EXECUTION_UNAVAILABLE"],
         final_environment_state="RETIRED_OFF", checked_at="2026-11-19T01:30:00Z")
     write(root / "customer-delta-closeout.json", value)

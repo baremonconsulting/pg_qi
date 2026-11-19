@@ -49,7 +49,7 @@
     },
     "preflight": {
       "required": ["scope_sha256", "target_identity_sha256", "checks", "state"],
-      "optional": []
+      "optional": ["checked_at"]
     },
     "workload": {
       "required": ["scope_sha256", "inventory_sha256", "entries"],
@@ -213,11 +213,11 @@
       "optional": []
     },
     "customer_delta_dossier": {
-      "required": ["internal_scope", "customer_scope", "internal_scope_sha256", "customer_scope_sha256", "customer_reference", "charter_revision", "environment_class", "production_scope", "site_sha256", "target_sha256", "build_sha256", "pool_sha256", "workload_authority", "data_authority", "evidence_policy", "recovery_plan", "site_preflight", "recovery_validation", "support_plan", "incident_plan", "role_approvals", "valid_from", "valid_through", "changes", "affected_gates", "confidentiality_classes"],
+      "required": ["internal_scope", "customer_scope", "internal_scope_sha256", "customer_scope_sha256", "customer_reference", "charter_revision", "environment_class", "production_scope", "site_sha256", "target_sha256", "build_sha256", "pool_sha256", "workload_authority", "data_authority", "evidence_policy", "recovery_plan", "support_plan", "incident_plan", "role_approvals", "valid_from", "valid_through", "changes", "affected_gates", "confidentiality_classes"],
       "optional": []
     },
     "customer_delta_closeout": {
-      "required": ["internal_scope_sha256", "dossier", "sponsor_mandate", "internal_closeout_validation", "internal_closeout_receipt", "customer_operation_go", "gate_reruns", "windows", "failures", "not_run_reasons", "generalisation_limits", "final_environment_state", "share_release", "publication_release", "checked_at", "result", "eligibility", "state"],
+      "required": ["internal_scope_sha256", "dossier", "sponsor_mandate", "internal_closeout_validation", "internal_closeout_receipt", "site_preflight", "recovery_validation", "customer_operation_go", "retirement_evidence", "gate_reruns", "windows", "failures", "not_run_reasons", "generalisation_limits", "final_environment_state", "share_release", "publication_release", "checked_at", "result", "eligibility", "state"],
       "optional": []
     },
     "customer_delta_validation": {
@@ -234,6 +234,10 @@
     },
     "customer_window": {
       "required": ["valid_from", "valid_through"],
+      "optional": []
+    },
+    "customer_retirement_evidence": {
+      "required": ["scope_sha256", "target_sha256", "retired_at", "result"],
       "optional": []
     },
     "index": {

@@ -51,6 +51,15 @@ CHANGE_GATES = {
     "window": {"CUSTOMER_OPERATION_GO"},
 }
 
+GATE_SOURCE_INPUTS = {
+    "QUALIFICATION_AUTHORIZED": ("workload_definition", "measurement_plan",
+                                  "baseline_manifest", "release_definition", "toolkit"),
+    "DATA_EVIDENCE_AUTHORIZED": ("dataset", "evidence_policy", "export_policy"),
+    "TOOLKIT_ACCEPTED": ("release_definition", "toolkit"),
+    "ORACLE_QUALIFIED": ("workload_definition", "dataset", "measurement_plan"),
+    "RESOURCE_ACCEPTED": ("target", "limits"),
+}
+
 
 def _root(path: Path) -> Path:
     resolved = path.resolve(strict=True)
@@ -173,8 +182,9 @@ def validate_customer_delta(bundle: Path,
         raise CustomerDeltaError("customer_gate_matrix_incomplete")
 
     authority_names = ("dossier", "sponsor_mandate", "internal_closeout_validation",
-                       "internal_closeout_receipt",
-                       "customer_operation_go")
+                       "internal_closeout_receipt", "site_preflight",
+                       "recovery_validation", "customer_operation_go",
+                       "retirement_evidence")
     present = {name for name in authority_names if closeout[name] is not None}
     if not present:
         expected_reasons = {"INTERNAL_CLOSEOUT_NOT_GRANTED", "NO_CUSTOMER",
@@ -243,8 +253,10 @@ def validate_customer_delta(bundle: Path,
         mandate = _artifact(root, closeout["sponsor_mandate"], "gate_receipt")
         customer_go = _artifact(root, closeout["customer_operation_go"],
                                 "approval_receipt")
-        preflight = _artifact(root, dossier["site_preflight"], "preflight")
-        recovery = _artifact(root, dossier["recovery_validation"], "recovery_validation")
+        preflight = _artifact(root, closeout["site_preflight"], "preflight")
+        recovery = _artifact(root, closeout["recovery_validation"], "recovery_validation")
+        retirement = _artifact(root, closeout["retirement_evidence"],
+                               "customer_retirement_evidence")
         if (internal_validation["result"] != "PASS" or
                 internal_validation["decision"] != "ELIGIBLE_FOR_HUMAN_GRANT" or
                 internal_validation["project_decision"] != "CONTINUE" or
@@ -262,8 +274,10 @@ def validate_customer_delta(bundle: Path,
                 customer_go["mandate_sha256"] != closeout["sponsor_mandate"]["sha256"] or
                 preflight["scope_sha256"] != dossier["customer_scope_sha256"] or
                 preflight["target_identity_sha256"] != dossier["target_sha256"] or
+                "checked_at" not in preflight or
                 not aggregate_pass(preflight["state"]) or
                 recovery["scope_sha256"] != dossier["customer_scope_sha256"] or
+                recovery["mandate_sha256"] != closeout["sponsor_mandate"]["sha256"] or
                 recovery["result"] != "PASS" or
                 recovery["decision"] != "ELIGIBLE_FOR_HUMAN_GRANT" or
                 customer_go["preflight_sha256"] != canonical_sha256(preflight) or
@@ -275,7 +289,9 @@ def validate_customer_delta(bundle: Path,
         mandate_time = _time(mandate["approved_at"])
         internal_validation_time = _time(internal_validation["checked_at"])
         internal_approval_time = _time(internal["approved_at"])
+        preflight_time = _time(preflight["checked_at"])
         recovery_time = _time(recovery["checked_at"])
+        retirement_time = _time(retirement["retired_at"])
         go_start, go_finish = _time(customer_go["valid_from"]), _time(customer_go["valid_through"])
         charter_start, charter_finish = (_time(dossier["valid_from"]),
                                          _time(dossier["valid_through"]))
@@ -286,11 +302,16 @@ def validate_customer_delta(bundle: Path,
                     dossier["role_approvals"].values()) or
                 not internal_validation_time <= internal_approval_time <= mandate_time or
                 not charter_start <= mandate_time or
-                not internal_validation_time <= recovery_time <= mandate_time or
+                not mandate_time <= preflight_time <= go_start or
+                not mandate_time <= recovery_time <= go_start or
                 go_start < mandate_time or go_finish <= go_start or
                 go_finish - go_start > timedelta(days=14) or
                 not charter_start <= go_start < go_finish <= charter_finish or
                 not go_finish <= recorded <= charter_finish or
+                not go_finish <= retirement_time <= recorded or
+                retirement["scope_sha256"] != dossier["customer_scope_sha256"] or
+                retirement["target_sha256"] != dossier["target_sha256"] or
+                retirement["result"] != "PASS" or
                 set(customer_go["approvals"]) != set(dossier["role_approvals"].values())):
             raise CustomerDeltaError("customer_operation_window_or_roles_invalid")
         affected = set(dossier["affected_gates"])
@@ -318,29 +339,30 @@ def validate_customer_delta(bundle: Path,
                     raise CustomerDeltaError("customer_gate_rerun_invalid")
                 if gate != "CUSTOMER_OPERATION_GO":
                     expected_evidence = {
-                        "RELEASE_SITE_QUALIFIED": dossier["site_preflight"],
-                        "RECOVERY_REHEARSED": dossier["recovery_validation"],
+                        "RELEASE_SITE_QUALIFIED": closeout["site_preflight"],
+                        "RECOVERY_REHEARSED": closeout["recovery_validation"],
                     }.get(gate)
                     if ((expected_evidence is not None and evidence != expected_evidence) or
                             evidence["sha256"] in evidence_digests):
                         raise CustomerDeltaError("customer_gate_evidence_not_specific")
                     if expected_evidence is None:
                         gate_evidence = _artifact(root, evidence, "customer_gate_evidence")
-                        source_name = {"QUALIFICATION_AUTHORIZED": "workload_definition",
-                            "DATA_EVIDENCE_AUTHORIZED": "dataset",
-                            "TOOLKIT_ACCEPTED": "toolkit",
-                            "ORACLE_QUALIFIED": "measurement_plan",
-                            "RESOURCE_ACCEPTED": "limits"}[gate]
+                        source_sha = canonical_sha256({"gate_id": gate,
+                            "inputs": {name: customer_scope["scope_inputs"][name]["sha256"]
+                                       for name in GATE_SOURCE_INPUTS[gate]}})
                         if (gate_evidence["gate_id"] != gate or
                                 gate_evidence["scope_sha256"] !=
                                     dossier["customer_scope_sha256"] or
-                                gate_evidence["source_sha256"] !=
-                                    customer_scope["scope_inputs"][source_name]["sha256"] or
+                                gate_evidence["source_sha256"] != source_sha or
                                 gate_evidence["result"] != "PASS" or
-                                not mandate_time <= _time(gate_evidence["checked_at"]) <= go_start):
+                                not mandate_time <= _time(gate_evidence["checked_at"]) <=
+                                    _time(receipt["approved_at"])):
                             raise CustomerDeltaError("customer_gate_evidence_invalid")
                     elif gate == "RECOVERY_REHEARSED" and \
                             _time(receipt["approved_at"]) < recovery_time:
+                        raise CustomerDeltaError("customer_gate_evidence_predates_validation")
+                    elif gate == "RELEASE_SITE_QUALIFIED" and \
+                            _time(receipt["approved_at"]) < preflight_time:
                         raise CustomerDeltaError("customer_gate_evidence_predates_validation")
                     if (receipt["contract_id"] in receipt_ids or
                             receipt["nonce"] in receipt_nonces or

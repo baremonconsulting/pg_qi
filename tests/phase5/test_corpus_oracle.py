@@ -149,8 +149,13 @@ class QualificationTests(unittest.TestCase):
                     value["execution_corpus"][0]["executed_sql_origin"] = "derived_reproduction"
                 else:
                     value["synthetic_controls"][0]["query_id"] = "natural-eligible"
-                with self.assertRaises(ORACLE.OracleError):
-                    ORACLE.validate_qualification(value)
+                if mutation == "customer_parent_derived":
+                    with self.assertRaisesRegex(ORACLE.OracleError,
+                                                "customer inventory cannot enter"):
+                        ORACLE.validate_qualification(value)
+                else:
+                    with self.assertRaises(ORACLE.OracleError):
+                        ORACLE.validate_qualification(value)
 
     def test_empty_inventory_is_not_false_coverage(self) -> None:
         value = qualification(); value["natural_inventory"] = []

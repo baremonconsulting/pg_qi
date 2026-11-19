@@ -3,6 +3,7 @@
     "contract_id": "customer-delta-closeout",
     "contract_type": "customer_delta_closeout",
     "customer_operation_go": null,
+    "retirement_evidence": null,
     "dossier": null,
     "eligibility": "REFUSED",
     "failures": [],
@@ -64,6 +65,7 @@
     "internal_closeout_receipt": null,
     "internal_closeout_validation": null,
     "internal_scope_sha256": null,
+    "recovery_validation": null,
     "not_run_reasons": [
         "CUSTOMER_EXECUTION_UNAVAILABLE",
         "INTERNAL_CLOSEOUT_NOT_GRANTED",
@@ -75,6 +77,7 @@
     "result": "NOT_RUN",
     "schema_version": 1,
     "share_release": null,
+    "site_preflight": null,
     "sponsor_mandate": null,
     "state": {
         "evidence_completeness": "NONE",
