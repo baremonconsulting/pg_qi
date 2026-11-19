@@ -180,6 +180,22 @@
       "required": ["scope_sha256", "canary_id", "plan_sha256", "run_sha256", "retirement_sha256", "validation_sha256", "result", "eligibility", "limitations", "state"],
       "optional": []
     },
+    "gate_receipt": {
+      "required": ["gate_id", "scope_sha256", "evidence_sha256", "approved_at", "approvals", "nonce"],
+      "optional": []
+    },
+    "internal_pilot_plan": {
+      "required": ["scope_sha256", "pilot_id", "measurement_plan", "operation_go", "canary_validation", "canary_acceptance", "approved_windows", "share_release", "shared_derived_paths", "retention_owner", "retention_due_at"],
+      "optional": []
+    },
+    "internal_pilot_window": {
+      "required": ["scope_sha256", "pilot_id", "plan_sha256", "window_id", "level", "run_id", "private_bundle_path", "level_authorization", "measurement_report", "retirement", "dispatch_stop_proof", "fresh_off_proof", "started_at", "finished_at", "duration_ms", "result", "state"],
+      "optional": []
+    },
+    "internal_pilot_closeout": {
+      "required": ["scope_sha256", "pilot_id", "plan_sha256", "windows", "hard_stop_findings", "service_work_records", "decisions", "retention", "shared_release_state", "checked_at", "result", "eligibility", "limitations", "state"],
+      "optional": []
+    },
     "index": {
       "required": ["scope_sha256", "payloads", "payload_flush_fsync_complete", "index_sequence"],
       "optional": []

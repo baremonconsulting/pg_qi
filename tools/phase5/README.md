@@ -127,6 +127,19 @@ not accepted as proof by assertion.
 See `docs/phase5/PGQI-5-measurement-concurrency.md` and the frozen-plan example
 in `docs/phase5/templates/measurement-plan.example.json`.
 
+## Bounded internal pilot closeout
+
+`internal_pilot_closeout.py` validates the ordered set of frozen measurement
+windows after an accepted single-session canary. It recomputes each private
+bundle, binds every report and retirement to its approved level and operation
+window, preserves failed and partial outcomes, and derives separate safety,
+evidence, exit, relevance and value decisions. It has no database or lifecycle
+control interface and cannot grant `INTERNAL_CLOSEOUT`.
+
+Private evidence cannot be named as shared-derived output without an exact
+`SHARE_RELEASE` receipt. See
+`docs/phase5/p5-7b-bounded-internal-pilot-closeout.md`.
+
 ## Recovery rehearsal and site readiness
 
 `recovery_rehearsal.py` is an offline validator for evidence produced by human

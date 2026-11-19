@@ -753,6 +753,10 @@ CANARY_CHECKS = ["OPERATION_GO_CURRENT", "SINGLE_DEDICATED_SESSION",
 CANARY_LIMITATIONS = {"NO_CUSTOMER_AUTHORIZATION", "NO_PRODUCTION_AUTHORIZATION",
     "NO_PUBLICATION_AUTHORIZATION", "NO_PERSISTENT_SETTING_AUTHORIZATION",
     "NO_AUTOMATIC_GATE_GRANT"}
+INTERNAL_PILOT_LIMITATIONS = {"NO_CUSTOMER_AUTHORIZATION",
+    "NO_PRODUCTION_AUTHORIZATION", "NO_PUBLICATION_AUTHORIZATION",
+    "NO_PERSISTENT_SETTING_AUTHORIZATION", "NO_AUTOMATIC_GATE_GRANT",
+    "MEASURED_SCOPE_ONLY", "VALUE_SEPARATE_FROM_SAFETY"}
 CANARY_EXPECTED_SNAPSHOT = {"contract_version": "1", "context": "proven_client",
     "policy_intent": "request_delegation", "reason": "delegation_verified",
     "force_origin": "qi_stack", "classifier_status": "candidate",
@@ -1075,6 +1079,144 @@ def _validate_canary(value: dict[str, Any], catalog: dict[str, Any]) -> None:
             technical != expected_technical or
             (result == "PASS" and not aggregate_pass(value["state"]))):
         raise ContractError("canary result, eligibility and state disagree")
+
+
+def _validate_gate_receipt(value: dict[str, Any], catalog: dict[str, Any]) -> None:
+    _enum(value["gate_id"], "gate_id", catalog["gate_ids"])
+    _scope_ref(value); _digest(value["evidence_sha256"], "evidence_sha256")
+    _timestamp(value["approved_at"], "approved_at")
+    if not _identifier_array(value["approvals"], "approvals", True):
+        raise ContractError("gate receipt lacks an approver")
+    _string(value["nonce"], "nonce")
+
+
+def _validate_internal_pilot_plan(value: dict[str, Any], catalog: dict[str, Any]) -> None:
+    _scope_ref(value); _string(value["pilot_id"], "pilot_id")
+    for name in ("measurement_plan", "operation_go", "canary_validation",
+                 "canary_acceptance"):
+        _artifact(value[name], name)
+    windows = _array(value["approved_windows"], "approved_windows", True)
+    identities: set[str] = set(); levels: list[int] = []
+    for raw in windows:
+        window = _object(raw, "approved window")
+        if set(window) != {"window_id", "level", "private_bundle_path",
+                           "level_authorization"}:
+            raise ContractError("approved window fields are not exact")
+        identity = _string(window["window_id"], "window_id")
+        if identity in identities:
+            raise ContractError("duplicate approved window")
+        identities.add(identity)
+        levels.append(_integer(window["level"], "level", 1))
+        validate_relative_path(window["private_bundle_path"])
+        _artifact(window["level_authorization"], "level_authorization")
+    if levels != list(range(1, len(levels) + 1)):
+        raise ContractError("approved windows must cover consecutive levels from one")
+    if value["share_release"] is not None:
+        _artifact(value["share_release"], "share_release")
+    shared = _array(value["shared_derived_paths"], "shared_derived_paths")
+    shared_paths: list[str] = []
+    for raw in shared:
+        item = _object(raw, "shared-derived path")
+        if set(item) != {"bundle_path", "private_validation_receipt"}:
+            raise ContractError("shared-derived path fields are not exact")
+        shared_paths.append(validate_relative_path(item["bundle_path"]))
+        validate_relative_path(item["private_validation_receipt"])
+    if len(shared_paths) != len(set(shared_paths)):
+        raise ContractError("duplicate shared-derived path")
+    if bool(shared) != (value["share_release"] is not None):
+        raise ContractError("shared-derived paths require SHARE_RELEASE")
+    _string(value["retention_owner"], "retention_owner")
+    if value["retention_due_at"] is not None:
+        _timestamp(value["retention_due_at"], "retention_due_at")
+
+
+def _validate_internal_pilot_window(value: dict[str, Any], catalog: dict[str, Any]) -> None:
+    _scope_ref(value)
+    for name in ("pilot_id", "window_id", "run_id"):
+        _string(value[name], name)
+    _digest(value["plan_sha256"], "plan_sha256")
+    _integer(value["level"], "level", 1)
+    validate_relative_path(value["private_bundle_path"])
+    for name in ("level_authorization", "measurement_report", "retirement",
+                 "dispatch_stop_proof", "fresh_off_proof"):
+        _artifact(value[name], name)
+    _timed_terminal(value, catalog)
+
+
+def _validate_internal_pilot_closeout(value: dict[str, Any], catalog: dict[str, Any]) -> None:
+    _scope_ref(value); _string(value["pilot_id"], "pilot_id")
+    _digest(value["plan_sha256"], "plan_sha256")
+    windows = _array(value["windows"], "windows", True)
+    for item in windows:
+        _artifact(item, "window")
+    findings = _array(value["hard_stop_findings"], "hard_stop_findings")
+    finding_ids: set[str] = set()
+    for raw in findings:
+        finding = _object(raw, "hard-stop finding")
+        if set(finding) != {"finding_id", "status", "evidence"}:
+            raise ContractError("hard-stop finding fields are not exact")
+        identity = _string(finding["finding_id"], "finding_id")
+        if identity in finding_ids:
+            raise ContractError("duplicate hard-stop finding")
+        finding_ids.add(identity)
+        _enum(finding["status"], "hard-stop status", {"OPEN", "CLOSED"})
+        _artifact(finding["evidence"], "hard-stop evidence")
+    records = _array(value["service_work_records"], "service_work_records", True)
+    record_ids: set[str] = set()
+    for raw in records:
+        record = _object(raw, "service-work record")
+        if set(record) != {"record_id", "category", "duration_minutes", "outcome"}:
+            raise ContractError("service-work record fields are not exact")
+        identity = _string(record["record_id"], "record_id")
+        if identity in record_ids:
+            raise ContractError("duplicate service-work record")
+        record_ids.add(identity)
+        _enum(record["category"], "service-work category",
+              {"SETUP", "OPERATION", "DIAGNOSIS", "RECOVERY", "CLOSEOUT"})
+        _integer(record["duration_minutes"], "duration_minutes", 0)
+        _enum(record["outcome"], "service-work outcome",
+              {"COMPLETED", "FAILED", "INCOMPLETE"})
+    decisions = _object(value["decisions"], "decisions")
+    expected = {"safety", "evidence_completeness", "exit", "workload_relevance",
+                "measured_value", "service_work", "project_decision"}
+    if set(decisions) != expected:
+        raise ContractError("closeout decisions are incomplete or unknown")
+    for name in ("safety", "evidence_completeness", "exit"):
+        _enum(decisions[name], name, {"PASS", "FAIL", "INCOMPLETE"})
+    _enum(decisions["workload_relevance"], "workload_relevance",
+          {"RELEVANT", "NOT_RELEVANT", "INCONCLUSIVE"})
+    _enum(decisions["measured_value"], "measured_value",
+          {"POSITIVE", "NEGATIVE", "INCONCLUSIVE", "NOT_EVALUATED"})
+    _enum(decisions["service_work"], "service_work",
+          {"ACCEPTABLE", "UNACCEPTABLE", "INCONCLUSIVE"})
+    _enum(decisions["project_decision"], "project_decision",
+          {"CONTINUE", "TARGETED_CHANGE", "PAUSE", "STOP"})
+    retention = _object(value["retention"], "retention")
+    if set(retention) != {"status", "owner", "due_at"}:
+        raise ContractError("retention fields are not exact")
+    _enum(retention["status"], "retention status", {"COMPLETE", "PENDING"})
+    _string(retention["owner"], "retention owner")
+    if retention["due_at"] is not None:
+        _timestamp(retention["due_at"], "retention due_at")
+    if retention["status"] == "PENDING" and retention["due_at"] is None:
+        raise ContractError("pending retention requires a due date")
+    _enum(value["shared_release_state"], "shared_release_state",
+          {"NOT_REQUESTED", "RELEASED"})
+    _timestamp(value["checked_at"], "checked_at")
+    result = _enum(value["result"], "closeout result", {"PASS", "FAIL", "INCOMPLETE"})
+    eligibility = _enum(value["eligibility"], "closeout eligibility",
+                        {"ELIGIBLE_FOR_HUMAN_GRANT", "REFUSED"})
+    limitations = set(_identifier_array(value["limitations"], "limitations", True))
+    if limitations != INTERNAL_PILOT_LIMITATIONS:
+        raise ContractError("internal pilot limitations are incomplete")
+    _state(value["state"], catalog)
+    expected_technical = {"PASS": "PASS", "FAIL": "FAIL",
+                          "INCOMPLETE": "INCONCLUSIVE"}[result]
+    if value["state"]["technical_result"] != expected_technical or \
+            (result == "PASS") != aggregate_pass(value["state"]):
+        raise ContractError("closeout result and aggregate state disagree")
+    if (result == "PASS") != (eligibility == "ELIGIBLE_FOR_HUMAN_GRANT"):
+        raise ContractError("closeout result and eligibility disagree")
 
 
 def _validate_index(value: dict[str, Any], catalog: dict[str, Any]) -> None:
