@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "document_type": "resource_policy",
+  "policy_id": "pilot-resource-policy-1",
+  "scope_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "feed_version": 1,
+  "source_id": "local-proc-feed",
+  "interval_ms": 1000,
+  "max_age_ms": 3000,
+  "stop_overshoot_ms": 1000,
+  "limits": {
+    "rss_bytes": 1073741824,
+    "cpu_milliseconds": 3600000,
+    "evidence_bytes": 1073741824,
+    "inflight_requests": 4
+  },
+  "units": {
+    "rss_bytes": "bytes",
+    "cpu_milliseconds": "milliseconds",
+    "evidence_bytes": "bytes",
+    "inflight_requests": "count"
+  }
+}

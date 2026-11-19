@@ -1,0 +1,10 @@
+\set ON_ERROR_STOP on
+SET plan_cache_mode = force_custom_plan;
+SET pg_qi.enabled = on;
+SET pg_qi.routing_mode = allowlist;
+SET duckdb.force_execution = off;
+SELECT id FROM p5_literal WHERE id = $1 \bind '1' \g
+SHOW pg_qi.shadow_decision_id;
+SHOW pg_qi.shadow_classifier_status;
+SHOW pg_qi.shadow_classifier_reason;
+SHOW pg_qi.shadow_request_applied;

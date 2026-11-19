@@ -1,0 +1,260 @@
+{
+  "schema_version": 1,
+  "maximum_bytes": 1048576,
+  "maximum_depth": 32,
+  "gate_ids": [
+    "QUALIFICATION_AUTHORIZED",
+    "INVESTMENT_APPROVED",
+    "SCOPE_AUTHORIZED",
+    "DATA_EVIDENCE_AUTHORIZED",
+    "RELEASE_SITE_QUALIFIED",
+    "TOOLKIT_ACCEPTED",
+    "RECOVERY_REHEARSED",
+    "OPERATION_GO",
+    "CANARY_ACCEPTED",
+    "INTERNAL_CLOSEOUT",
+    "HARD_STOP_CLOSED",
+    "CUSTOMER_PILOT_MANDATE",
+    "ORACLE_QUALIFIED",
+    "RESOURCE_ACCEPTED",
+    "CUSTOMER_OPERATION_GO",
+    "SHARE_RELEASE",
+    "PUBLICATION_RELEASE"
+  ],
+  "state_axes": {
+    "lifecycle": ["NEW", "RUNNING", "STOPPING", "RETIRED", "SEALED", "VALIDATED", "CLOSED", "INCOMPLETE"],
+    "technical_result": ["NOT_RUN", "PASS", "FAIL", "ERROR", "INCONCLUSIVE"],
+    "evidence_completeness": ["NONE", "PARTIAL", "COMPLETE", "INVALID"],
+    "exit_state": ["NOT_EXITED", "CLEAN", "DIRTY", "UNKNOWN"],
+    "value_outcome": ["NOT_EVALUATED", "POSITIVE", "NEGATIVE", "INCONCLUSIVE"],
+    "project_decision": ["CONTINUE", "PAUSE", "STOP", "CLOSE", "UNDECIDED"]
+  },
+  "request_axes": {
+    "execution_status": ["NOT_STARTED", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED"],
+    "planning_evidence": ["FRESH", "REUSED", "RETAINED_PREVIOUS", "UNAVAILABLE", "ERROR"],
+    "snapshot_relation": ["CURRENT", "PREVIOUS", "NO_SNAPSHOT"]
+  },
+  "receipt_kinds": {
+    "approval_receipt": ["OPERATION_GO", "CUSTOMER_OPERATION_GO"],
+    "export_receipt": ["SHARE_RELEASE", "PUBLICATION_RELEASE"]
+  },
+  "contract_fields": {
+    "scope": {
+      "required": ["scope_inputs", "gates_required"],
+      "optional": []
+    },
+    "approval_receipt": {
+      "required": ["receipt_kind", "scope_sha256", "preflight_sha256", "recovery_validation_sha256", "valid_from", "valid_through", "approvals", "nonce"],
+      "optional": ["dossier_sha256", "mandate_sha256", "canary_ledger_sha256"]
+    },
+    "preflight": {
+      "required": ["scope_sha256", "target_identity_sha256", "checks", "state"],
+      "optional": ["checked_at"]
+    },
+    "workload": {
+      "required": ["scope_sha256", "inventory_sha256", "entries"],
+      "optional": []
+    },
+    "release": {
+      "required": ["scope_sha256", "source_commit", "source_dirty", "server_build_sha256", "pg_qi_sha256", "pg_duckdb_sha256", "configuration_sha256"],
+      "optional": []
+    },
+    "request": {
+      "required": ["scope_sha256", "run_id", "session_id", "request_id", "query_id", "execution_status", "planning_evidence", "snapshot_relation"],
+      "optional": ["snapshot_id", "planning_request_id", "prepared_object_id", "prepared_generation", "sqlstate", "observed_spool", "request_interval"]
+    },
+    "snapshot": {
+      "required": ["scope_sha256", "snapshot_id", "session_id", "planning_request_id", "prepared_object_id", "prepared_generation", "decision_id", "tuple"],
+      "optional": []
+    },
+    "resource": {
+      "required": ["scope_sha256", "run_id", "sample_sequence", "monotonic_ns", "source_id", "values", "units", "source_age_ms"],
+      "optional": []
+    },
+    "measurement_plan": {
+      "required": [
+        "closure_inputs",
+        "required_scenarios",
+        "seed",
+        "order_algorithm",
+        "measurement_blocks",
+        "measurement_repetitions",
+        "warmup_repetitions",
+        "protocols",
+        "cache_states",
+        "concurrency_levels",
+        "statistics",
+        "value_rules"
+      ],
+      "optional": []
+    },
+    "measurement_sample": {
+      "required": [
+        "scope_sha256",
+        "plan_sha256",
+        "run_id",
+        "level",
+        "sample_id",
+        "scenario_id",
+        "protocol",
+        "cache_state",
+        "mode",
+        "phase",
+        "block_index",
+        "order_index",
+        "session_slot",
+        "request_interval",
+        "postprocess_duration_ns",
+        "terminal_state",
+        "reason_family",
+        "result_bytes",
+        "oracle_result"
+      ],
+      "optional": []
+    },
+    "measurement_report": {
+      "required": [
+        "scope_sha256",
+        "plan_sha256",
+        "run_id",
+        "level",
+        "sample_file",
+        "sample_count",
+        "raw_sample_count",
+        "warmup_sample_count",
+        "groups",
+        "contrasts",
+        "coverage",
+        "value_outcome",
+        "technical_result",
+        "stop_reason",
+        "limitations"
+      ],
+      "optional": ["pilot_attempt_sha256", "pilot_window_id", "pilot_dispatch_sha256", "pilot_dispatched_at"]
+    },
+    "retirement": {
+      "required": ["scope_sha256", "run_id", "owned_sessions", "backend_absence_verified", "cached_plans_retired", "default_off_reconnect", "state"],
+      "optional": []
+    },
+    "recovery": {
+      "required": ["scope_sha256", "rehearsal_id", "strategy", "artifact_sha256", "configuration_sha256", "r1_terminal_sha256", "r2_terminal_sha256", "walkthrough_sha256", "validation_sha256", "rehearsal_result", "eligibility", "limitations", "state"],
+      "optional": []
+    },
+    "rehearsal_mandate": {
+      "required": ["scope_sha256", "rehearsal_id", "target_copy_identity_sha256", "target_cluster_id", "target_initial_start_id", "source_environment_identity_sha256", "recovery_plan_sha256", "runbook_sha256", "artifact_identity_scheme", "candidate_artifact_sha256", "candidate_configuration_sha256", "approved_artifact_sha256", "approved_configuration_sha256", "approved_restore_source_sha256", "pool_profile", "valid_from", "valid_through", "primary_operator", "second_operator", "implementer", "approvals", "allowed_strategies", "allowed_actions", "recoverable_copy_verified", "lifecycle_executor"],
+      "optional": []
+    },
+    "recovery_r1": {
+      "required": ["scope_sha256", "rehearsal_id", "mandate_sha256", "run_id", "steps", "pool_profile", "pool_action", "pool_proof", "owned_sessions", "positive_probe", "off_proof", "backend_exit_proof", "fresh_control", "started_at", "finished_at", "duration_ms", "result", "state"],
+      "optional": []
+    },
+    "recovery_r2": {
+      "required": ["scope_sha256", "rehearsal_id", "mandate_sha256", "strategy", "r1_terminal_sha256", "steps", "source_artifact_sha256", "source_configuration_sha256", "result_artifact_sha256", "result_configuration_sha256", "restore_source_sha256", "before_cluster_id", "before_start_id", "after_cluster_id", "after_start_id", "same_data_continuity", "source_identity_proof", "identity_proof", "fresh_control", "started_at", "finished_at", "duration_ms", "result", "state"],
+      "optional": []
+    },
+    "operator_walkthrough": {
+      "required": ["scope_sha256", "rehearsal_id", "mandate_sha256", "primary_operator", "second_operator", "implementer", "runbook_sha256", "r1_terminal_sha256", "r2_terminal_sha256", "actions_performed", "signed_at", "result", "state"],
+      "optional": []
+    },
+    "recovery_incident": {
+      "required": ["scope_sha256", "rehearsal_id", "mandate_sha256", "incident_id", "steps", "poisoned_backend", "backend_exit_proof", "performed_at", "invalidated_go_sha256", "invalidated_go_nonce", "current_go_invalidated", "restart_requires_new_go", "result", "state"],
+      "optional": []
+    },
+    "recovery_validation": {
+      "required": ["scope_sha256", "rehearsal_id", "mandate_sha256", "r1_terminal_sha256", "r2_terminal_sha256", "walkthrough_sha256", "incident_sha256", "checked_at", "result", "decision", "checks", "limitations"],
+      "optional": []
+    },
+    "canary_plan": {
+      "required": ["scope_sha256", "canary_id", "measurement_plan", "level_authorization", "operation_go_sha256", "attempt_ledger", "private_bundle_path", "positive_query_id", "positive_sql", "positive_literal_sha256", "expected_spool", "negative_controls", "negative_control_sql", "expected_snapshot", "maximum_result_bytes", "session_count", "pool_profile"],
+      "optional": []
+    },
+    "canary_run": {
+      "required": ["scope_sha256", "canary_id", "plan_sha256", "operation_go_sha256", "session_id", "backend_identity", "positive_execution_proof", "positive_request", "positive_snapshot", "positive_spool", "control_proofs", "ambient_force_off_proof", "oracle_proof", "started_at", "finished_at", "duration_ms", "result", "state"],
+      "optional": []
+    },
+    "canary_retirement": {
+      "required": ["scope_sha256", "canary_id", "plan_sha256", "run_sha256", "owned_session_id", "backend_exit_proof", "fresh_reconnect_proof", "performed_at", "result", "state"],
+      "optional": []
+    },
+    "canary_validation": {
+      "required": ["scope_sha256", "canary_id", "plan_sha256", "run_sha256", "retirement_sha256", "checked_at", "result", "decision", "checks", "limitations"],
+      "optional": []
+    },
+    "canary": {
+      "required": ["scope_sha256", "canary_id", "plan_sha256", "run_sha256", "retirement_sha256", "validation_sha256", "result", "eligibility", "limitations", "state"],
+      "optional": []
+    },
+    "gate_receipt": {
+      "required": ["gate_id", "scope_sha256", "evidence_sha256", "approved_at", "approvals", "nonce"],
+      "optional": ["subject_id"]
+    },
+    "internal_pilot_plan": {
+      "required": ["scope_sha256", "pilot_id", "measurement_plan", "operation_go", "canary_bundle_path", "canary_validation", "canary_acceptance", "attempt_ledger", "approved_windows", "retention_owner", "retention_due_at"],
+      "optional": []
+    },
+    "internal_pilot_window": {
+      "required": ["scope_sha256", "pilot_id", "plan_sha256", "window_id", "level", "run_id", "attempt_record_sha256", "private_bundle_path", "private_validation_receipt", "level_authorization", "measurement_report", "retirement", "dispatch_stop_proof", "fresh_off_proof", "started_at", "finished_at", "duration_ms", "result", "state"],
+      "optional": []
+    },
+    "pilot_dispatch_stop": {
+      "required": ["scope_sha256", "pilot_id", "window_id", "run_id", "stopped_at", "admission_state"],
+      "optional": []
+    },
+    "pilot_fresh_off": {
+      "required": ["scope_sha256", "pilot_id", "window_id", "run_id", "observed_at", "session_id", "pg_qi_enabled", "routing_state", "duckdb_force_execution"],
+      "optional": []
+    },
+    "pilot_retention": {
+      "required": ["scope_sha256", "pilot_id", "owner", "performed_at", "artifacts_retained", "result"],
+      "optional": []
+    },
+    "internal_pilot_closeout": {
+      "required": ["scope_sha256", "pilot_id", "plan_sha256", "windows", "hard_stop_findings", "service_work_records", "decisions", "retention", "share_release", "shared_derived_paths", "shared_release_state", "checked_at", "result", "eligibility", "limitations", "state"],
+      "optional": []
+    },
+    "customer_delta_dossier": {
+      "required": ["internal_scope", "customer_scope", "internal_scope_sha256", "customer_scope_sha256", "customer_reference", "charter_revision", "environment_class", "production_scope", "site_sha256", "target_sha256", "build_sha256", "pool_sha256", "workload_authority", "data_authority", "evidence_policy", "recovery_plan", "support_plan", "incident_plan", "role_approvals", "valid_from", "valid_through", "changes", "affected_gates", "confidentiality_classes"],
+      "optional": []
+    },
+    "customer_delta_closeout": {
+      "required": ["internal_scope_sha256", "dossier", "sponsor_mandate", "internal_closeout_validation", "internal_closeout_receipt", "site_preflight", "recovery_validation", "customer_operation_go", "retirement_evidence", "gate_reruns", "windows", "failures", "not_run_reasons", "generalisation_limits", "final_environment_state", "share_release", "publication_release", "checked_at", "result", "eligibility", "state"],
+      "optional": []
+    },
+    "customer_delta_validation": {
+      "required": ["closeout_sha256", "dossier_sha256", "checked_at", "result", "decision", "checks", "limitations", "state"],
+      "optional": []
+    },
+    "customer_gate_evidence": {
+      "required": ["gate_id", "scope_sha256", "source_sha256", "checked_at", "result"],
+      "optional": []
+    },
+    "customer_role_bindings": {
+      "required": ["roles"],
+      "optional": []
+    },
+    "customer_window": {
+      "required": ["valid_from", "valid_through"],
+      "optional": []
+    },
+    "customer_retirement_evidence": {
+      "required": ["scope_sha256", "target_sha256", "retired_at", "result"],
+      "optional": []
+    },
+    "index": {
+      "required": ["scope_sha256", "payloads", "payload_flush_fsync_complete", "index_sequence"],
+      "optional": []
+    },
+    "terminal": {
+      "required": ["scope_sha256", "index_sha256", "state", "aggregate_pass"],
+      "optional": ["stop_reason"]
+    },
+    "validation": {
+      "required": ["scope_sha256", "index_sha256", "terminal_sha256", "profile", "result", "checks"],
+      "optional": []
+    },
+    "export_receipt": {
+      "required": ["receipt_kind", "scope_sha256", "index_sha256", "validation_sha256", "artifact_sha256", "recipients", "approved_at", "approval_reference"],
+      "optional": []
+    }
+  }
+}

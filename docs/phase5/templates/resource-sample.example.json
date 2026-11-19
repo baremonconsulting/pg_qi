@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "document_type": "resource_sample",
+  "scope_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "feed_version": 1,
+  "source_id": "local-proc-feed",
+  "sequence": 1,
+  "monotonic_ns": 1,
+  "values": {
+    "rss_bytes": 1,
+    "cpu_milliseconds": 1,
+    "evidence_bytes": 1,
+    "inflight_requests": 0
+  },
+  "units": {
+    "rss_bytes": "bytes",
+    "cpu_milliseconds": "milliseconds",
+    "evidence_bytes": "bytes",
+    "inflight_requests": "count"
+  }
+}

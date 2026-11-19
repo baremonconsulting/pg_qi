@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "contract_type": "measurement_plan",
+  "contract_id": "pilot-measurement-plan-001",
+  "closure_inputs": {
+    "workload_definition_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "qualification_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "baseline_manifest_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+    "resource_policy_sha256": "c91509a903ab7518979481678d806c475cabb3312988ee0a905ac22ae2a3c1b9",
+    "release_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+    "target_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+    "recovery_plan_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "release_artifact_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "release_configuration_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "baseline_artifact_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "baseline_configuration_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "dataset_sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+    "toolkit_sha256": "7777777777777777777777777777777777777777777777777777777777777777"
+  },
+  "required_scenarios": [
+    {
+      "scenario_id": "natural-q001-extended-first-use",
+      "query_id": "natural-q001",
+      "case_id": "natural_q001",
+      "protocol": "extended",
+      "cache_state": "first_use",
+      "oracle_case_id": "natural-q001",
+      "natural_query_id": "natural-q001",
+      "expected_result_bytes_max": 1048576
+    }
+  ],
+  "seed": 8241,
+  "order_algorithm": "seeded_balanced_williams_v1",
+  "measurement_blocks": [
+    {"block_id": "block-0001", "order": ["off", "disabled", "allowlist"]},
+    {"block_id": "block-0002", "order": ["allowlist", "off", "disabled"]},
+    {"block_id": "block-0003", "order": ["allowlist", "disabled", "off"]},
+    {"block_id": "block-0004", "order": ["disabled", "off", "allowlist"]},
+    {"block_id": "block-0005", "order": ["disabled", "allowlist", "off"]},
+    {"block_id": "block-0006", "order": ["off", "allowlist", "disabled"]}
+  ],
+  "measurement_repetitions": 1,
+  "warmup_repetitions": 1,
+  "protocols": ["extended"],
+  "cache_states": ["first_use"],
+  "concurrency_levels": [
+    {
+      "level": 1,
+      "sessions": 1,
+      "approval_reference": "pilot-level-1-approval",
+      "server_resource_feed_sha256": null
+    }
+  ],
+  "statistics": {
+    "percentile_method": "nearest_rank",
+    "minimum_n": {"p50": 1, "p95": 20, "p99": 100},
+    "outlier_policy": "retain_all",
+    "failure_policy": "retain_and_count",
+    "variability": "per_block_median_range"
+  },
+  "value_rules": {
+    "threshold_kind": "descriptive_only",
+    "minimum_relative_improvement_bps": null,
+    "minimum_paired_blocks": null,
+    "frequency_weights_sha256": null,
+    "baseline_weights_sha256": null,
+    "attribution": "measured_correct_natural_subset_only",
+    "incomplete_weights_outcome": "INCONCLUSIVE"
+  }
+}
