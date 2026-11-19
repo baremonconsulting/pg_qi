@@ -15,7 +15,8 @@ Before the first window, the bundle must bind all of the following:
 - one ordered window for every approved concurrency level, starting at level
   one without gaps;
 - the exact per-level authorization and a unique private evidence directory;
-- an external, identity-pinned append-only attempt ledger;
+- an external, identity-pinned append-only attempt ledger controlled by a
+  records custodian independent from the pilot operator;
 - the retention owner and, when pending, its due date.
 
 The closeout tool has no database, process-control, retry, escalation, or
@@ -37,8 +38,10 @@ For every approved window, in order:
 7. Seal the raw stream, report, retirement and terminal state in a distinct
    private bundle. Never reuse a run ID or overwrite an earlier bundle.
 
-The next window may start only after the previous window has finished. Every
-window must end within the operation approval interval.
+The next window may start only after the previous window has finished and
+passed. Every window must end within the operation approval interval. The
+pilot uses a new operation approval whose validity begins after the accepted
+canary; it does not reuse the canary operation window.
 
 Consume an attempt before opening a measurement session:
 
@@ -51,6 +54,11 @@ python3 tools/phase5/internal_pilot_closeout.py \
 
 If a window fails or is partial, stop. Closeout accepts that truthful executed
 prefix and refuses any missing ledger record or subsequent retry.
+
+Attempt records are hash-chained and every window binds its exact record
+digest. The ledger location must provide externally enforced append-only/WORM
+semantics; ordinary operator-writable storage cannot prove absence of tail
+deletion and is not an approved ledger location.
 
 ## Closeout decisions
 

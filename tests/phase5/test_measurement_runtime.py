@@ -782,6 +782,41 @@ class EscalationTests(unittest.TestCase):
             with self.assertRaises(MeasurementError):
                 validate_level_authorization(auth, value, digest, scope_digest, root)
 
+    def test_level_two_accepts_namespaced_previous_private_bundle(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); root.chmod(0o700)
+            private = root / "private-level-1"; private.mkdir(mode=0o700)
+            value = plan(); digest = canonical_sha256(value)
+            _scope, scope_digest = measurement_scope(value)
+            runner, journal, _stop, evidence, _digest, _scope_digest = \
+                make_runner(root / "runner", value)
+            generated = runner.run(level_one_authorization(evidence, digest, scope_digest),
+                evidence, correctness_gate(digest, scope_digest),
+                lambda mode, _slot, control: FakeSession(mode, control))
+            journal.close()
+            previous = self._previous_evidence(private,
+                root / "runner/output/measurement-report.json", digest, scope_digest)
+            validation_payload = (private / "level1-validation.json").read_bytes()
+            (root / "private-level-1-validation.json").write_bytes(validation_payload)
+            (root / "private-level-1-validation.json").chmod(0o600)
+            (private / "level1-validation.json").unlink()
+            for key in ("index", "terminal", "report", "retirement"):
+                previous[key] = {**previous[key],
+                    "path": f"private-level-1/{previous[key]['path']}"}
+            previous["validation"] = artifact(root, "private-level-1-validation.json")
+            authorization = {"schema_version": 1,
+                "document_type": "measurement_level_authorization",
+                "scope_sha256": scope_digest, "plan_sha256": digest,
+                "requested_level": 2, "approval_reference": "level-two-approval",
+                "operation_go": operation_go(root, scope_digest),
+                "operation_preflight": operation_preflight(root, scope_digest),
+                **operation_recovery_artifacts(root, scope_digest),
+                "previous_level": previous}
+            level = validate_level_authorization(authorization, value, digest, scope_digest,
+                root, previous_evidence_root=private,
+                previous_path_prefix="private-level-1")
+            self.assertEqual(level["level"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()

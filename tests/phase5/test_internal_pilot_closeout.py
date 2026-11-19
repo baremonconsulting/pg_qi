@@ -76,7 +76,7 @@ def report(scope: str, plan_sha: str, result: str = "PASS") -> dict:
 
 
 def build(root: Path, report_result: str = "PASS", retired: bool = True,
-          levels: int = 1) -> datetime:
+          levels: int = 1, write_attempt_record: bool = True) -> datetime:
     root.chmod(0o700)
     (root / "canary-bundle").mkdir(mode=0o700)
     ledger = root.parent / "attempt-ledger"; ledger.mkdir(mode=0o700)
@@ -177,22 +177,26 @@ def build(root: Path, report_result: str = "PASS", retired: bool = True,
         "canary_validation": artifact(root, "canary-validation.json"),
         "canary_acceptance": artifact(root, "canary-acceptance.json"),
         "attempt_ledger": {"path": str(ledger.resolve()), "device": ledger.stat().st_dev,
-            "inode": ledger.stat().st_ino, "identity": artifact(ledger, "ledger-id.json")},
+            "inode": ledger.stat().st_ino, "identity": artifact(ledger, "ledger-id.json"),
+            "storage_control": "EXTERNAL_APPEND_ONLY", "custodian": "records-custodian"},
         "approved_windows": approved_windows, "retention_owner": "records-owner",
         "retention_due_at": "2026-12-31T00:00:00Z"}
     write(root / "internal-pilot-plan.json", pilot_plan)
     attempt = {"schema_version": 1, "document_type": "internal_pilot_attempt",
-        "record_id": "pilot-1-attempt-0001", "pilot_id": "pilot-1", "sequence": 1,
+        "record_id": "pilot-1-attempt-0001-run-1", "pilot_id": "pilot-1", "sequence": 1,
         "scope_sha256": scope, "plan_sha256": canonical_sha256(pilot_plan),
-        "operation_go_sha256": canonical_sha256(go), "window_id": "window-1",
+        "operation_go_sha256": canonical_sha256(go), "previous_record_sha256": ZERO,
+        "window_id": "window-1",
         "level": 1, "run_id": "run-1", "consumed_at": "2026-11-18T00:59:00Z"}
-    write(ledger / "attempt-0001.json", attempt)
+    if write_attempt_record:
+        write(ledger / "attempt-0001.json", attempt)
     window_result = "PASS" if report_result == "PASS" and retired else \
         "INCOMPLETE" if report_result == "INCOMPLETE" or not retired else "FAIL"
     window = {"schema_version": 1, "contract_type": "internal_pilot_window",
         "contract_id": "window-1", "scope_sha256": scope, "pilot_id": "pilot-1",
         "plan_sha256": canonical_sha256(pilot_plan), "window_id": "window-1", "level": 1,
-        "run_id": "run-1", "private_bundle_path": "private-level-1",
+        "run_id": "run-1", "attempt_record_sha256": canonical_sha256(attempt),
+        "private_bundle_path": "private-level-1",
         "private_validation_receipt": artifact(root, "private-level-1-validation.json"),
         "level_authorization": approved["level_authorization"],
         "measurement_report": artifact(root, "private-level-1/report.json"),
@@ -278,9 +282,13 @@ def enable_share_release(root: Path, wrong_artifact: bool = False) -> None:
 
 
 class InternalPilotCloseoutTests(unittest.TestCase):
-    def validate(self, root: Path, checked: datetime) -> dict:
+    def validate(self, root: Path, checked: datetime,
+                 canary_result: dict | None = None) -> dict:
         receipt = json.loads((root / "private-level-1-validation.json").read_text())
         terminal = json.loads((root / "private-level-1/terminal.json").read_text())
+        canary = json.loads((root / "canary-validation.json").read_text())
+        canary_result = canary_result or {**canary,
+            "checked_at": "2026-11-18T00:15:00.000Z"}
         with patch("tools.phase5.internal_pilot_closeout.validate_private",
                    return_value={"result": receipt["result"], "terminal": terminal,
                        "scope": {"scope_inputs": {"measurement_plan":
@@ -288,8 +296,7 @@ class InternalPilotCloseoutTests(unittest.TestCase):
                    "tools.phase5.internal_pilot_closeout.validate_level_authorization",
                    return_value={"level": 1, "sessions": 1}), patch(
                    "tools.phase5.internal_pilot_closeout.validate_canary_bundle",
-                   return_value={"result": "PASS", "decision": "ELIGIBLE_FOR_HUMAN_GRANT",
-                       "scope_sha256": "1" * 64}):
+                   return_value=canary_result):
             return validate_internal_pilot(root, checked)
 
     def test_complete_pilot_is_only_eligible_for_human_closeout(self) -> None:
@@ -308,17 +315,33 @@ class InternalPilotCloseoutTests(unittest.TestCase):
             self.assertEqual(result["decision"], "REFUSED")
             self.assertEqual(result["window_count"], 1)
 
+    def test_accepted_canary_must_equal_recomputed_canary(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = bundle_root(name); checked = build(root)
+            canary = json.loads((root / "canary-validation.json").read_text())
+            canary["canary_id"] = "different-canary"
+            with self.assertRaisesRegex(CloseoutError, "accepted_canary_differs"):
+                self.validate(root, checked, canary)
+
     def test_attempt_must_be_consumed_once_before_dispatch(self) -> None:
         with tempfile.TemporaryDirectory() as name:
-            root = bundle_root(name); build(root)
+            root = bundle_root(name); build(root, write_attempt_record=False)
             ledger = root.parent / "attempt-ledger"
-            (ledger / "attempt-0001.json").unlink()
             record = consume_attempt(root, ledger, "window-1", 1, "fresh-run",
                 datetime(2026, 11, 18, 0, 30, tzinfo=timezone.utc))
             self.assertEqual(record["sequence"], 1)
             with self.assertRaisesRegex(CloseoutError, "retry_or_reorder"):
                 consume_attempt(root, ledger, "window-1", 1, "retry-run",
                     datetime(2026, 11, 18, 0, 31, tzinfo=timezone.utc))
+
+    def test_attempt_hash_chain_and_window_binding_are_enforced(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = bundle_root(name); checked = build(root)
+            path = root.parent / "attempt-ledger/attempt-0001.json"
+            record = json.loads(path.read_text()); record["previous_record_sha256"] = "f" * 64
+            write(path, record)
+            with self.assertRaisesRegex(CloseoutError, "hash_chain"):
+                self.validate(root, checked)
 
     def test_unretired_window_cannot_be_administratively_relabelled_pass(self) -> None:
         with tempfile.TemporaryDirectory() as name:

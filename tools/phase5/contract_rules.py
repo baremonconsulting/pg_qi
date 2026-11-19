@@ -1097,7 +1097,8 @@ def _validate_internal_pilot_plan(value: dict[str, Any], catalog: dict[str, Any]
         _artifact(value[name], name)
     validate_relative_path(value["canary_bundle_path"])
     ledger = _object(value["attempt_ledger"], "attempt_ledger")
-    if set(ledger) != {"path", "device", "inode", "identity"}:
+    if set(ledger) != {"path", "device", "inode", "identity", "storage_control",
+                       "custodian"}:
         raise ContractError("pilot attempt ledger identity is not exact")
     if (not isinstance(ledger["path"], str) or not ledger["path"].startswith("/") or
             "\x00" in ledger["path"]):
@@ -1107,6 +1108,9 @@ def _validate_internal_pilot_plan(value: dict[str, Any], catalog: dict[str, Any]
     _artifact(ledger["identity"], "pilot attempt ledger identity")
     if "/" in ledger["identity"]["path"]:
         raise ContractError("pilot attempt ledger identity must be a root file")
+    _enum(ledger["storage_control"], "pilot attempt ledger storage control",
+          {"EXTERNAL_APPEND_ONLY"})
+    _string(ledger["custodian"], "pilot attempt ledger custodian")
     windows = _array(value["approved_windows"], "approved_windows", True)
     identities: set[str] = set(); levels: list[int] = []
     for raw in windows:
@@ -1141,6 +1145,7 @@ def _validate_internal_pilot_window(value: dict[str, Any], catalog: dict[str, An
     for name in ("pilot_id", "window_id", "run_id"):
         _string(value[name], name)
     _digest(value["plan_sha256"], "plan_sha256")
+    _digest(value["attempt_record_sha256"], "attempt_record_sha256")
     _integer(value["level"], "level", 1)
     validate_relative_path(value["private_bundle_path"])
     for name in ("private_validation_receipt", "level_authorization",
@@ -1165,6 +1170,14 @@ def _validate_pilot_fresh_off(value: dict[str, Any], catalog: dict[str, Any]) ->
     _timestamp(value["observed_at"], "observed_at")
     for name in ("pg_qi_enabled", "routing_state", "duckdb_force_execution"):
         _enum(value[name], name, {"off"})
+
+
+def _validate_pilot_retention(value: dict[str, Any], catalog: dict[str, Any]) -> None:
+    _scope_ref(value); _string(value["pilot_id"], "pilot_id")
+    _string(value["owner"], "retention owner")
+    _timestamp(value["performed_at"], "performed_at")
+    _identifier_array(value["artifacts_retained"], "artifacts_retained", True)
+    _enum(value["result"], "retention result", {"PASS"})
 
 
 def _validate_internal_pilot_closeout(value: dict[str, Any], catalog: dict[str, Any]) -> None:

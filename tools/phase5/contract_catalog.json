@@ -190,7 +190,7 @@
       "optional": []
     },
     "internal_pilot_window": {
-      "required": ["scope_sha256", "pilot_id", "plan_sha256", "window_id", "level", "run_id", "private_bundle_path", "private_validation_receipt", "level_authorization", "measurement_report", "retirement", "dispatch_stop_proof", "fresh_off_proof", "started_at", "finished_at", "duration_ms", "result", "state"],
+      "required": ["scope_sha256", "pilot_id", "plan_sha256", "window_id", "level", "run_id", "attempt_record_sha256", "private_bundle_path", "private_validation_receipt", "level_authorization", "measurement_report", "retirement", "dispatch_stop_proof", "fresh_off_proof", "started_at", "finished_at", "duration_ms", "result", "state"],
       "optional": []
     },
     "pilot_dispatch_stop": {
@@ -199,6 +199,10 @@
     },
     "pilot_fresh_off": {
       "required": ["scope_sha256", "pilot_id", "window_id", "run_id", "observed_at", "session_id", "pg_qi_enabled", "routing_state", "duckdb_force_execution"],
+      "optional": []
+    },
+    "pilot_retention": {
+      "required": ["scope_sha256", "pilot_id", "owner", "performed_at", "artifacts_retained", "result"],
       "optional": []
     },
     "internal_pilot_closeout": {

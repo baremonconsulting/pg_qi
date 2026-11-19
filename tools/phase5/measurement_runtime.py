@@ -234,7 +234,9 @@ def _read_contract_artifact(root: Path, artifact: dict[str, Any]) -> dict[str, A
 def validate_level_authorization(value: dict[str, Any], plan: dict[str, Any],
                                  plan_sha256: str, scope_sha256: str,
                                  evidence_root: Path | None,
-                                 now: datetime | None = None) -> dict[str, Any]:
+                                 now: datetime | None = None,
+                                 previous_evidence_root: Path | None = None,
+                                 previous_path_prefix: str | None = None) -> dict[str, Any]:
     """Validate the current GO and, above level one, the previous clean level."""
     auth = _exact(value, {"schema_version", "document_type", "scope_sha256",
         "plan_sha256", "requested_level", "approval_reference",
@@ -347,10 +349,26 @@ def validate_level_authorization(value: dict[str, Any], plan: dict[str, Any],
         "report", "retirement"}, "previous_level")
     if previous["level"] != auth["requested_level"] - 1:
         raise MeasurementError("previous_level_is_not_immediate")
-    documents = {name: _read_contract_artifact(evidence_root, previous[name])
-                 for name in ("index", "terminal", "validation", "report", "retirement")}
+    previous_root = previous_evidence_root or evidence_root
+    if (previous_root is None or previous_root.resolve(strict=True) !=
+            previous_root.absolute() or previous_root.stat().st_uid != os.getuid() or
+            stat.S_IMODE(previous_root.stat().st_mode) != 0o700):
+        raise MeasurementError("invalid_previous_level_evidence_root")
+    def previous_artifact(name: str) -> dict[str, Any]:
+        artifact = previous[name]
+        if name == "validation" or previous_path_prefix is None:
+            return artifact
+        prefix = previous_path_prefix.rstrip("/") + "/"
+        path = artifact.get("path")
+        if not isinstance(path, str) or not path.startswith(prefix):
+            raise MeasurementError("previous_level_artifact_prefix_mismatch")
+        return {**artifact, "path": path[len(prefix):]}
+    documents = {name: _read_contract_artifact(
+        evidence_root if name == "validation" else previous_root,
+        previous_artifact(name)) for name in
+        ("index", "terminal", "validation", "report", "retirement")}
     try:
-        verify_seal(evidence_root, documents["index"], documents["terminal"],
+        verify_seal(previous_root, documents["index"], documents["terminal"],
                     documents["validation"])
     except ContractError as exc:
         raise MeasurementError("previous_level_seal_invalid") from exc
@@ -374,9 +392,9 @@ def validate_level_authorization(value: dict[str, Any], plan: dict[str, Any],
             retirement.get("cached_plans_retired") is not True or
             retirement.get("default_off_reconnect") is not True or
             retirement.get("state", {}).get("exit_state") != "CLEAN" or
-            previous["report"]["path"] not in payload_paths or
+            previous_artifact("report")["path"] not in payload_paths or
             report.get("sample_file", {}).get("path") not in payload_paths or
-            previous["retirement"]["path"] not in payload_paths):
+            previous_artifact("retirement")["path"] not in payload_paths):
         raise MeasurementError("previous_level_did_not_pass_cleanly")
     if (documents["index"].get("scope_sha256") != scope_sha256 or
             documents["terminal"].get("scope_sha256") != scope_sha256 or
@@ -384,12 +402,12 @@ def validate_level_authorization(value: dict[str, Any], plan: dict[str, Any],
             retirement.get("run_id") != report.get("run_id")):
         raise MeasurementError("previous_level_identity_graph_mismatch")
     try:
-        verify_artifact(evidence_root, report["sample_file"])
+        verify_artifact(previous_root, report["sample_file"])
         try:
             from .evidence_tool import validate_measurement_level
         except ImportError:
             from evidence_tool import validate_measurement_level
-        validate_measurement_level(evidence_root, documents["index"], report,
+        validate_measurement_level(previous_root, documents["index"], report,
                                    plan, scope_sha256)
     except ContractError as exc:
         raise MeasurementError("previous_level_sample_stream_invalid") from exc

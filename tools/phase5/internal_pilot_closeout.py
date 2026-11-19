@@ -139,19 +139,25 @@ def _attempt_records(ledger: Path, plan: dict[str, Any]) -> list[dict[str, Any]]
             continue
         if path.is_symlink() or not path.is_file() or path.suffix != ".json":
             raise CloseoutError("unexpected_pilot_attempt_ledger_entry")
-        info = path.stat()
-        if (info.st_uid != os.getuid() or info.st_nlink != 1 or
-                stat.S_IMODE(info.st_mode) != 0o600 or info.st_size > 65536):
-            raise CloseoutError("unsafe_pilot_attempt_record")
         try:
-            record = json.loads(path.read_text("utf-8"), object_pairs_hook=_pairs,
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            try:
+                info = os.fstat(descriptor)
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or
+                        info.st_nlink != 1 or stat.S_IMODE(info.st_mode) != 0o600 or
+                        info.st_size > 65536):
+                    raise CloseoutError("unsafe_pilot_attempt_record")
+                payload = os.read(descriptor, info.st_size + 1)
+            finally:
+                os.close(descriptor)
+            record = json.loads(payload.decode("utf-8"), object_pairs_hook=_pairs,
                 parse_constant=lambda _value: (_ for _ in ()).throw(
                     CloseoutError("invalid_pilot_attempt_number")))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise CloseoutError("invalid_pilot_attempt_record") from exc
         expected = {"schema_version", "document_type", "record_id", "pilot_id",
             "sequence", "scope_sha256", "plan_sha256", "operation_go_sha256",
-            "window_id", "level", "run_id", "consumed_at"}
+            "previous_record_sha256", "window_id", "level", "run_id", "consumed_at"}
         if (not isinstance(record, dict) or set(record) != expected or
                 record["schema_version"] != 1 or
                 record["document_type"] != "internal_pilot_attempt" or
@@ -160,7 +166,17 @@ def _attempt_records(ledger: Path, plan: dict[str, Any]) -> list[dict[str, Any]]
                 record["plan_sha256"] != canonical_sha256(plan) or
                 not isinstance(record["sequence"], int) or isinstance(record["sequence"], bool) or
                 record["sequence"] < 1 or not isinstance(record["level"], int) or
-                isinstance(record["level"], bool) or record["level"] < 1):
+                isinstance(record["level"], bool) or record["level"] < 1 or
+                not isinstance(record["consumed_at"], str)):
+            raise CloseoutError("invalid_pilot_attempt_record")
+        if (path.name != f"attempt-{record['sequence']:04d}.json" or
+                not isinstance(record["record_id"], str) or
+                record["record_id"] !=
+                f"{plan['pilot_id']}-attempt-{record['sequence']:04d}-{record['run_id']}" or
+                not isinstance(record["window_id"], str) or not record["window_id"] or
+                not isinstance(record["run_id"], str) or not record["run_id"] or
+                not isinstance(record["previous_record_sha256"], str) or
+                len(record["previous_record_sha256"]) != 64):
             raise CloseoutError("invalid_pilot_attempt_record")
         _time(record["consumed_at"])
         records.append(record)
@@ -168,11 +184,17 @@ def _attempt_records(ledger: Path, plan: dict[str, Any]) -> list[dict[str, Any]]
             len({item["record_id"] for item in records}) != len(records) or \
             len({item["run_id"] for item in records}) != len(records):
         raise CloseoutError("pilot_attempt_history_invalid")
+    previous_digest = "0" * 64
+    for record in records:
+        if record["previous_record_sha256"] != previous_digest:
+            raise CloseoutError("pilot_attempt_hash_chain_invalid")
+        previous_digest = canonical_sha256(record)
     return records
 
 
 def consume_attempt(root: Path, ledger_path: Path, window_id: str, level: int,
-                    run_id: str, now: datetime | None = None) -> dict[str, Any]:
+                    run_id: str, now: datetime | None = None,
+                    previous_window_path: str | None = None) -> dict[str, Any]:
     """Durably consume one attempt before any measurement dispatch."""
     root = _root(root)
     plan = _load(root, "internal-pilot-plan.json", "internal_pilot_plan")
@@ -194,14 +216,38 @@ def consume_attempt(root: Path, ledger_path: Path, window_id: str, level: int,
         if level != len(existing) + 1:
             raise CloseoutError("pilot_attempt_level_gap")
         operation_go = _artifact(root, plan["operation_go"], "approval_receipt")
+        instant_utc = instant.astimezone(timezone.utc)
+        if not (_time(operation_go["valid_from"]) <= instant_utc <
+                _time(operation_go["valid_through"])):
+            raise CloseoutError("pilot_attempt_outside_operation_window")
+        if level == 1 and previous_window_path is not None:
+            raise CloseoutError("level_one_attempt_has_previous_window")
+        if level > 1:
+            if previous_window_path is None:
+                raise CloseoutError("next_level_attempt_requires_previous_window")
+            previous_window = _load(root, previous_window_path, "internal_pilot_window")
+            previous_attempt = existing[-1]
+            if (previous_window["result"] != "PASS" or
+                    previous_window["scope_sha256"] != plan["scope_sha256"] or
+                    previous_window["pilot_id"] != plan["pilot_id"] or
+                    previous_window["plan_sha256"] != canonical_sha256(plan) or
+                    (previous_window["window_id"], previous_window["level"],
+                     previous_window["run_id"]) !=
+                    (previous_attempt["window_id"], previous_attempt["level"],
+                     previous_attempt["run_id"]) or
+                    previous_window["attempt_record_sha256"] !=
+                    canonical_sha256(previous_attempt)):
+                raise CloseoutError("previous_window_not_eligible_for_next_attempt")
         sequence = len(existing) + 1
+        previous_digest = canonical_sha256(existing[-1]) if existing else "0" * 64
         record = {"schema_version": 1, "document_type": "internal_pilot_attempt",
-            "record_id": f"{plan['pilot_id']}-attempt-{sequence:04d}",
+            "record_id": f"{plan['pilot_id']}-attempt-{sequence:04d}-{run_id}",
             "pilot_id": plan["pilot_id"], "sequence": sequence,
             "scope_sha256": plan["scope_sha256"], "plan_sha256": canonical_sha256(plan),
             "operation_go_sha256": canonical_sha256(operation_go),
+            "previous_record_sha256": previous_digest,
             "window_id": window_id, "level": level, "run_id": run_id,
-            "consumed_at": instant.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")}
+            "consumed_at": instant_utc.isoformat().replace("+00:00", "Z")}
         filename = f"attempt-{sequence:04d}.json"
         descriptor = os.open(ledger / filename,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
@@ -285,6 +331,9 @@ def validate_internal_pilot(root: Path,
             canary_result["decision"] != "ELIGIBLE_FOR_HUMAN_GRANT" or
             canary_result["scope_sha256"] != scope):
         raise CloseoutError("pilot_authority_invalid")
+    if ({key: value for key, value in canary_result.items() if key != "checked_at"} !=
+            {key: value for key, value in canary_validation.items() if key != "checked_at"}):
+        raise CloseoutError("accepted_canary_differs_from_recomputed_canary")
     levels = measurement_plan["concurrency_levels"]
     approved = plan["approved_windows"]
     if (len(approved) != len(levels) or
@@ -313,6 +362,9 @@ def validate_internal_pilot(root: Path,
     reports: list[dict[str, Any]] = []
     private_results: list[dict[str, Any]] = []
     retirements: list[dict[str, Any]] = []
+    retired_results: list[bool] = []
+    pilot_session_ids: set[str] = set()
+    fresh_session_ids: set[str] = set()
     prior_finish: datetime | None = None
     first_start: datetime | None = None
     run_ids: set[str] = set()
@@ -328,7 +380,8 @@ def validate_internal_pilot(root: Path,
             raise CloseoutError("pilot_window_identity_mismatch")
         if ((attempt["window_id"], attempt["level"], attempt["run_id"]) !=
                 (window["window_id"], window["level"], window["run_id"]) or
-                attempt["operation_go_sha256"] != canonical_sha256(operation_go)):
+                attempt["operation_go_sha256"] != canonical_sha256(operation_go) or
+                window["attempt_record_sha256"] != canonical_sha256(attempt)):
             raise CloseoutError("pilot_attempt_window_mismatch")
         if window["run_id"] in run_ids:
             raise CloseoutError("pilot_run_history_overwritten")
@@ -339,7 +392,9 @@ def validate_internal_pilot(root: Path,
         if not (go_start <= started < finished <= min(go_end, checked)) or \
                 (prior_finish is not None and started < prior_finish):
             raise CloseoutError("pilot_window_timeline_invalid")
-        if _time(attempt["consumed_at"]) > started:
+        consumed_at = _time(attempt["consumed_at"])
+        if consumed_at > started or consumed_at < go_start or \
+                (prior_finish is not None and consumed_at < prior_finish):
             raise CloseoutError("pilot_attempt_not_consumed_before_dispatch")
         prior_finish = finished
 
@@ -347,7 +402,11 @@ def validate_internal_pilot(root: Path,
                                       "measurement_level_authorization")
         try:
             authorized_level = validate_level_authorization(authorization,
-                measurement_plan, canonical_sha256(measurement_plan), scope, root, started)
+                measurement_plan, canonical_sha256(measurement_plan), scope, root, started,
+                previous_evidence_root=(None if previous_window is None else
+                    resolve_bundle_path(root, Path(previous_window["private_bundle_path"]))),
+                previous_path_prefix=(None if previous_window is None else
+                    previous_window["private_bundle_path"]))
         except (MeasurementError, ContractError, OSError) as exc:
             raise CloseoutError("pilot_level_authorization_invalid") from exc
         if authorized_level["level"] != window["level"]:
@@ -358,6 +417,8 @@ def validate_internal_pilot(root: Path,
             if authorization.get("previous_level") is not None:
                 raise CloseoutError("level_one_has_previous_pilot_evidence")
         else:
+            if previous_window["result"] != "PASS":
+                raise CloseoutError("pilot_continued_after_nonpassing_window")
             previous = authorization.get("previous_level")
             if (not isinstance(previous, dict) or
                     previous.get("level") != previous_window["level"] or
@@ -366,7 +427,7 @@ def validate_internal_pilot(root: Path,
                     previous.get("validation") != previous_window["private_validation_receipt"]):
                 raise CloseoutError("previous_level_not_bound_to_pilot_window")
             previous_root = Path(previous_window["private_bundle_path"])
-            for name in ("index", "terminal", "validation", "report", "retirement"):
+            for name in ("index", "terminal", "report", "retirement"):
                 path = previous.get(name, {}).get("path") if isinstance(previous.get(name), dict) else None
                 if not isinstance(path, str) or not Path(path).is_relative_to(previous_root):
                     raise CloseoutError("previous_level_outside_pilot_bundle")
@@ -415,10 +476,13 @@ def validate_internal_pilot(root: Path,
         if ((stop_proof["pilot_id"], stop_proof["window_id"], stop_proof["run_id"]) !=
                 identity or stop_proof["scope_sha256"] != scope):
             raise CloseoutError("dispatch_stop_proof_invalid")
+        owned_sessions = set(retirement["owned_sessions"])
+        if owned_sessions & fresh_session_ids:
+            raise CloseoutError("pilot_session_reused_a_fresh_control_identity")
         if ((off_proof["pilot_id"], off_proof["window_id"], off_proof["run_id"]) !=
                 identity or not isinstance(off_proof["session_id"], str) or
                 not off_proof["session_id"] or
-                off_proof["session_id"] in retirement["owned_sessions"] or
+                off_proof["session_id"] in owned_sessions | pilot_session_ids | fresh_session_ids or
                 off_proof["scope_sha256"] != scope or
                 (off_proof["pg_qi_enabled"], off_proof["routing_state"],
                  off_proof["duckdb_force_execution"]) != ("off", "off", "off")):
@@ -432,6 +496,8 @@ def validate_internal_pilot(root: Path,
                    retirement["cached_plans_retired"] is True and
                    retirement["default_off_reconnect"] is True and
                    aggregate_pass(retirement["state"]))
+        if not retired:
+            raise CloseoutError("pilot_retirement_unverified")
         expected_result = ("PASS" if report["technical_result"] == "PASS" and retired and
                            private_result["result"] == "PASS" else
                            "FAIL" if report["technical_result"] == "FAIL" or
@@ -442,6 +508,8 @@ def validate_internal_pilot(root: Path,
             raise CloseoutError("pilot_window_result_false_pass")
         windows.append(window); reports.append(report)
         private_results.append(private_result); retirements.append(retirement)
+        retired_results.append(retired); pilot_session_ids.update(owned_sessions)
+        fresh_session_ids.add(off_proof["session_id"])
         previous_window = window
 
     if prior_finish is None or recorded_checked < prior_finish or \
@@ -475,12 +543,7 @@ def validate_internal_pilot(root: Path,
                               for item in private_results) else
                 "INCOMPLETE" if any(item["terminal"]["state"]["evidence_completeness"] !=
                                     "COMPLETE" for item in private_results) else "PASS")
-    exit_decision = ("FAIL" if any(item["state"]["exit_state"] == "DIRTY"
-                                   for item in retirements) else
-                     "INCOMPLETE" if any(not (item["backend_absence_verified"] and
-                         item["cached_plans_retired"] and item["default_off_reconnect"] and
-                         item["state"]["exit_state"] == "CLEAN") for item in retirements)
-                     else "PASS")
+    exit_decision = "PASS" if all(retired_results) else "INCOMPLETE"
     if (decisions["safety"], decisions["evidence_completeness"], decisions["exit"]) != \
             (safety, evidence, exit_decision):
         raise CloseoutError("core_decisions_not_derived_from_evidence")
@@ -509,10 +572,13 @@ def validate_internal_pilot(root: Path,
             _time(closeout["retention"]["due_at"]) < recorded_checked):
         raise CloseoutError("retention_commitment_overdue")
     if closeout["retention"]["evidence"] is not None:
-        try:
-            verify_artifact(root, closeout["retention"]["evidence"])
-        except ContractError as exc:
-            raise CloseoutError("retention_evidence_invalid") from exc
+        retention_evidence = _artifact(root, closeout["retention"]["evidence"],
+                                       "pilot_retention")
+        if (retention_evidence["scope_sha256"] != scope or
+                retention_evidence["pilot_id"] != plan["pilot_id"] or
+                retention_evidence["owner"] != plan["retention_owner"] or
+                _time(retention_evidence["performed_at"]) > recorded_checked):
+            raise CloseoutError("retention_evidence_invalid")
 
     if closeout["share_release"] is None:
         if closeout["shared_derived_paths"] or closeout["shared_release_state"] != "NOT_REQUESTED":
@@ -559,8 +625,8 @@ def validate_internal_pilot(root: Path,
         raise CloseoutError("closeout_result_false_pass")
     if closeout["limitations"] != sorted(INTERNAL_PILOT_LIMITATIONS):
         raise CloseoutError("closeout_limitations_not_canonical")
-    if decisions["project_decision"] == "CONTINUE" and \
-            (safety, evidence, exit_decision) != ("PASS", "PASS", "PASS"):
+    if decisions["project_decision"] == "CONTINUE" and (not technical_pass or
+            (safety, evidence, exit_decision) != ("PASS", "PASS", "PASS")):
         raise CloseoutError("continue_requires_clean_core_decisions")
     return {"result": expected_result,
             "decision": "ELIGIBLE_FOR_HUMAN_GRANT" if expected_result == "PASS" else "REFUSED",
@@ -578,6 +644,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--window-id")
     parser.add_argument("--level", type=int)
     parser.add_argument("--run-id")
+    parser.add_argument("--previous-window")
     args = parser.parse_args(argv)
     try:
         if args.consume_attempt:
@@ -585,12 +652,14 @@ def main(argv: list[str] | None = None) -> int:
                     args.run_id is None or args.output is not None):
                 raise CloseoutError("invalid_consume_attempt_arguments")
             record = consume_attempt(args.bundle, args.ledger, args.window_id,
-                                     args.level, args.run_id)
+                                     args.level, args.run_id,
+                                     previous_window_path=args.previous_window)
             print(json.dumps({"record_id": record["record_id"], "result": "CONSUMED"},
                              sort_keys=True, separators=(",", ":")))
             return 0
         if args.output is None or any(item is not None for item in
-                (args.ledger, args.window_id, args.level, args.run_id)):
+                (args.ledger, args.window_id, args.level, args.run_id,
+                 args.previous_window)):
             raise CloseoutError("invalid_closeout_arguments")
         result = validate_internal_pilot(args.bundle)
         payload = canonical_bytes({"schema_version": 1,

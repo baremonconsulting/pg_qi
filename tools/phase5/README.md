@@ -132,8 +132,9 @@ in `docs/phase5/templates/measurement-plan.example.json`.
 `internal_pilot_closeout.py` validates the ordered set of frozen measurement
 windows after an accepted single-session canary. It recomputes each private
 bundle, binds every report and retirement to its approved level and operation
-window, consumes an external durable attempt record before dispatch, preserves
-failed and partial prefixes without permitting a retry, and derives separate safety,
+window, consumes an externally custodied append-only/WORM attempt record before
+dispatch, preserves failed and partial prefixes without permitting a retry,
+and derives separate safety,
 evidence, exit, relevance and value decisions. It has no database or lifecycle
 control interface and cannot grant `INTERNAL_CLOSEOUT`.
 
