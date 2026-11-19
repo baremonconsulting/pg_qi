@@ -13,6 +13,7 @@
     "OPERATION_GO",
     "CANARY_ACCEPTED",
     "INTERNAL_CLOSEOUT",
+    "HARD_STOP_CLOSED",
     "CUSTOMER_OPERATION_GO",
     "SHARE_RELEASE",
     "PUBLICATION_RELEASE"
@@ -185,15 +186,23 @@
       "optional": []
     },
     "internal_pilot_plan": {
-      "required": ["scope_sha256", "pilot_id", "measurement_plan", "operation_go", "canary_validation", "canary_acceptance", "approved_windows", "share_release", "shared_derived_paths", "retention_owner", "retention_due_at"],
+      "required": ["scope_sha256", "pilot_id", "measurement_plan", "operation_go", "canary_bundle_path", "canary_validation", "canary_acceptance", "attempt_ledger", "approved_windows", "retention_owner", "retention_due_at"],
       "optional": []
     },
     "internal_pilot_window": {
-      "required": ["scope_sha256", "pilot_id", "plan_sha256", "window_id", "level", "run_id", "private_bundle_path", "level_authorization", "measurement_report", "retirement", "dispatch_stop_proof", "fresh_off_proof", "started_at", "finished_at", "duration_ms", "result", "state"],
+      "required": ["scope_sha256", "pilot_id", "plan_sha256", "window_id", "level", "run_id", "private_bundle_path", "private_validation_receipt", "level_authorization", "measurement_report", "retirement", "dispatch_stop_proof", "fresh_off_proof", "started_at", "finished_at", "duration_ms", "result", "state"],
+      "optional": []
+    },
+    "pilot_dispatch_stop": {
+      "required": ["scope_sha256", "pilot_id", "window_id", "run_id", "stopped_at", "admission_state"],
+      "optional": []
+    },
+    "pilot_fresh_off": {
+      "required": ["scope_sha256", "pilot_id", "window_id", "run_id", "observed_at", "session_id", "pg_qi_enabled", "routing_state", "duckdb_force_execution"],
       "optional": []
     },
     "internal_pilot_closeout": {
-      "required": ["scope_sha256", "pilot_id", "plan_sha256", "windows", "hard_stop_findings", "service_work_records", "decisions", "retention", "shared_release_state", "checked_at", "result", "eligibility", "limitations", "state"],
+      "required": ["scope_sha256", "pilot_id", "plan_sha256", "windows", "hard_stop_findings", "service_work_records", "decisions", "retention", "share_release", "shared_derived_paths", "shared_release_state", "checked_at", "result", "eligibility", "limitations", "state"],
       "optional": []
     },
     "index": {

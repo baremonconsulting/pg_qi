@@ -1095,6 +1095,18 @@ def _validate_internal_pilot_plan(value: dict[str, Any], catalog: dict[str, Any]
     for name in ("measurement_plan", "operation_go", "canary_validation",
                  "canary_acceptance"):
         _artifact(value[name], name)
+    validate_relative_path(value["canary_bundle_path"])
+    ledger = _object(value["attempt_ledger"], "attempt_ledger")
+    if set(ledger) != {"path", "device", "inode", "identity"}:
+        raise ContractError("pilot attempt ledger identity is not exact")
+    if (not isinstance(ledger["path"], str) or not ledger["path"].startswith("/") or
+            "\x00" in ledger["path"]):
+        raise ContractError("pilot attempt ledger path is not absolute")
+    _integer(ledger["device"], "pilot attempt ledger device", 1)
+    _integer(ledger["inode"], "pilot attempt ledger inode", 1)
+    _artifact(ledger["identity"], "pilot attempt ledger identity")
+    if "/" in ledger["identity"]["path"]:
+        raise ContractError("pilot attempt ledger identity must be a root file")
     windows = _array(value["approved_windows"], "approved_windows", True)
     identities: set[str] = set(); levels: list[int] = []
     for raw in windows:
@@ -1111,20 +1123,14 @@ def _validate_internal_pilot_plan(value: dict[str, Any], catalog: dict[str, Any]
         _artifact(window["level_authorization"], "level_authorization")
     if levels != list(range(1, len(levels) + 1)):
         raise ContractError("approved windows must cover consecutive levels from one")
-    if value["share_release"] is not None:
-        _artifact(value["share_release"], "share_release")
-    shared = _array(value["shared_derived_paths"], "shared_derived_paths")
-    shared_paths: list[str] = []
-    for raw in shared:
-        item = _object(raw, "shared-derived path")
-        if set(item) != {"bundle_path", "private_validation_receipt"}:
-            raise ContractError("shared-derived path fields are not exact")
-        shared_paths.append(validate_relative_path(item["bundle_path"]))
-        validate_relative_path(item["private_validation_receipt"])
-    if len(shared_paths) != len(set(shared_paths)):
-        raise ContractError("duplicate shared-derived path")
-    if bool(shared) != (value["share_release"] is not None):
-        raise ContractError("shared-derived paths require SHARE_RELEASE")
+    paths = [item["private_bundle_path"] for item in windows]
+    for index, left in enumerate(paths):
+        left_parts = Path(left).parts
+        for right in paths[index + 1:]:
+            right_parts = Path(right).parts
+            common = min(len(left_parts), len(right_parts))
+            if left_parts[:common] == right_parts[:common]:
+                raise ContractError("approved windows require distinct non-nested bundles")
     _string(value["retention_owner"], "retention_owner")
     if value["retention_due_at"] is not None:
         _timestamp(value["retention_due_at"], "retention_due_at")
@@ -1137,10 +1143,28 @@ def _validate_internal_pilot_window(value: dict[str, Any], catalog: dict[str, An
     _digest(value["plan_sha256"], "plan_sha256")
     _integer(value["level"], "level", 1)
     validate_relative_path(value["private_bundle_path"])
-    for name in ("level_authorization", "measurement_report", "retirement",
+    for name in ("private_validation_receipt", "level_authorization",
+                 "measurement_report", "retirement",
                  "dispatch_stop_proof", "fresh_off_proof"):
         _artifact(value[name], name)
     _timed_terminal(value, catalog)
+
+
+def _validate_pilot_dispatch_stop(value: dict[str, Any], catalog: dict[str, Any]) -> None:
+    _scope_ref(value)
+    for name in ("pilot_id", "window_id", "run_id"):
+        _string(value[name], name)
+    _timestamp(value["stopped_at"], "stopped_at")
+    _enum(value["admission_state"], "admission_state", {"STOPPED"})
+
+
+def _validate_pilot_fresh_off(value: dict[str, Any], catalog: dict[str, Any]) -> None:
+    _scope_ref(value)
+    for name in ("pilot_id", "window_id", "run_id", "session_id"):
+        _string(value[name], name)
+    _timestamp(value["observed_at"], "observed_at")
+    for name in ("pg_qi_enabled", "routing_state", "duckdb_force_execution"):
+        _enum(value[name], name, {"off"})
 
 
 def _validate_internal_pilot_closeout(value: dict[str, Any], catalog: dict[str, Any]) -> None:
@@ -1153,7 +1177,7 @@ def _validate_internal_pilot_closeout(value: dict[str, Any], catalog: dict[str, 
     finding_ids: set[str] = set()
     for raw in findings:
         finding = _object(raw, "hard-stop finding")
-        if set(finding) != {"finding_id", "status", "evidence"}:
+        if set(finding) != {"finding_id", "status", "evidence", "closure_approval"}:
             raise ContractError("hard-stop finding fields are not exact")
         identity = _string(finding["finding_id"], "finding_id")
         if identity in finding_ids:
@@ -1161,6 +1185,10 @@ def _validate_internal_pilot_closeout(value: dict[str, Any], catalog: dict[str, 
         finding_ids.add(identity)
         _enum(finding["status"], "hard-stop status", {"OPEN", "CLOSED"})
         _artifact(finding["evidence"], "hard-stop evidence")
+        if finding["closure_approval"] is not None:
+            _artifact(finding["closure_approval"], "hard-stop closure approval")
+        if (finding["status"] == "CLOSED") != (finding["closure_approval"] is not None):
+            raise ContractError("hard-stop status and closure approval disagree")
     records = _array(value["service_work_records"], "service_work_records", True)
     record_ids: set[str] = set()
     for raw in records:
@@ -1192,14 +1220,32 @@ def _validate_internal_pilot_closeout(value: dict[str, Any], catalog: dict[str, 
     _enum(decisions["project_decision"], "project_decision",
           {"CONTINUE", "TARGETED_CHANGE", "PAUSE", "STOP"})
     retention = _object(value["retention"], "retention")
-    if set(retention) != {"status", "owner", "due_at"}:
+    if set(retention) != {"status", "owner", "due_at", "evidence"}:
         raise ContractError("retention fields are not exact")
     _enum(retention["status"], "retention status", {"COMPLETE", "PENDING"})
     _string(retention["owner"], "retention owner")
     if retention["due_at"] is not None:
         _timestamp(retention["due_at"], "retention due_at")
+    if retention["evidence"] is not None:
+        _artifact(retention["evidence"], "retention evidence")
     if retention["status"] == "PENDING" and retention["due_at"] is None:
         raise ContractError("pending retention requires a due date")
+    if (retention["status"] == "COMPLETE") != (retention["evidence"] is not None):
+        raise ContractError("retention completion and evidence disagree")
+    if value["share_release"] is not None:
+        _artifact(value["share_release"], "share_release")
+    shared = _array(value["shared_derived_paths"], "shared_derived_paths")
+    shared_paths: list[str] = []
+    for raw in shared:
+        item = _object(raw, "shared-derived path")
+        if set(item) != {"bundle_path", "private_validation_receipt"}:
+            raise ContractError("shared-derived path fields are not exact")
+        shared_paths.append(validate_relative_path(item["bundle_path"]))
+        validate_relative_path(item["private_validation_receipt"])
+    if len(shared_paths) != len(set(shared_paths)):
+        raise ContractError("duplicate shared-derived path")
+    if bool(shared) != (value["share_release"] is not None):
+        raise ContractError("shared-derived paths require SHARE_RELEASE")
     _enum(value["shared_release_state"], "shared_release_state",
           {"NOT_REQUESTED", "RELEASED"})
     _timestamp(value["checked_at"], "checked_at")

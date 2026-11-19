@@ -15,6 +15,7 @@ Before the first window, the bundle must bind all of the following:
 - one ordered window for every approved concurrency level, starting at level
   one without gaps;
 - the exact per-level authorization and a unique private evidence directory;
+- an external, identity-pinned append-only attempt ledger;
 - the retention owner and, when pending, its due date.
 
 The closeout tool has no database, process-control, retry, escalation, or
@@ -25,16 +26,31 @@ The tool only recomputes the sealed evidence graph after execution.
 
 For every approved window, in order:
 
-1. Confirm the same current operation approval and exact level authorization.
-2. Run that single frozen level; never escalate automatically.
-3. Stop admission after the window, including failed and partial windows.
-4. Retire all owned sessions and cached plans.
-5. Establish a fresh default-off/force-off reconnect.
-6. Seal the raw stream, report, retirement and terminal state in a distinct
+1. Consume the next ledger record before dispatch. A level cannot be retried,
+   reordered or omitted from closeout.
+2. Confirm the same current operation approval and exact level authorization.
+3. Run that single frozen level; never escalate automatically.
+4. Stop admission after the window, including failed and partial windows.
+5. Retire all owned sessions and cached plans.
+6. Establish a fresh default-off/force-off reconnect using a session that was
+   not among the retired pilot sessions.
+7. Seal the raw stream, report, retirement and terminal state in a distinct
    private bundle. Never reuse a run ID or overwrite an earlier bundle.
 
 The next window may start only after the previous window has finished. Every
 window must end within the operation approval interval.
+
+Consume an attempt before opening a measurement session:
+
+```sh
+python3 tools/phase5/internal_pilot_closeout.py \
+  --bundle /private/pilot-closeout \
+  --consume-attempt --ledger /private/pilot-attempt-ledger \
+  --window-id window-1 --level 1 --run-id run-1
+```
+
+If a window fails or is partial, stop. Closeout accepts that truthful executed
+prefix and refuses any missing ledger record or subsequent retry.
 
 ## Closeout decisions
 
@@ -59,15 +75,19 @@ Retirement itself may never remain unverified.
 
 ## Sharing
 
-Private evidence remains private. `shared_derived_paths` must be empty unless
-the plan contains a valid `SHARE_RELEASE` receipt for the exact scope. A share
-release does not alter the private result and does not imply publication.
+Private evidence remains private. Closeout `shared_derived_paths` must be empty
+unless it contains a valid `SHARE_RELEASE` receipt bound to the derived index,
+private validation receipt and shared manifest. The release must follow the
+pilot evidence, and the private receipt must belong to the final recorded pilot
+window. A share release does not alter the private result and does not imply
+publication.
 
 ## Validation
 
 The bundle root must be an owner-only mode-0700 directory containing:
 
 - `internal-pilot-plan.json`;
+- a separate mode-0700 attempt ledger pinned by the plan;
 - one immutable `internal_pilot_window` contract per approved level;
 - the referenced private evidence bundles;
 - `internal-pilot-closeout.json`.
