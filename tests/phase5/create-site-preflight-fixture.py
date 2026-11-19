@@ -18,20 +18,31 @@ for name in ("commit", "tree_sha", "postgres", "pg_qi", "pg_duckdb", "config_sha
              "port", "rootcert", "rootcert_sha", "socket_uid"):
     parser.add_argument("--" + name.replace("_", "-"))
 parser.add_argument("--kind", choices=("socket", "tls"), required=True)
+parser.add_argument("--duckdb-linkage", choices=tuple(sorted(policy.DUCKDB_LINKAGE_MODES)),
+                    default="static_in_pg_duckdb")
+parser.add_argument("--duckdb")
 parser.add_argument("--output", type=Path, required=True)
 args = parser.parse_args()
+
+if args.duckdb_linkage == "dynamic_separate_library" and not args.duckdb:
+    parser.error("--duckdb is required for dynamic_separate_library")
+if args.duckdb_linkage == "static_in_pg_duckdb" and args.duckdb:
+    parser.error("--duckdb is forbidden for static_in_pg_duckdb")
 
 sha = lambda path: hashlib.sha256(Path(path).read_bytes()).hexdigest()
 build = {"production": True, "pg_qi_testing": False, "postgresql_major": int(args.major),
          "postgresql_source_sha256": "a" * 64, "pg_duckdb_source_commit": "b" * 40,
-         "duckdb_source_commit": "c" * 40, "duckdb_linkage": "static_in_pg_duckdb",
+         "duckdb_source_commit": "c" * 40, "duckdb_linkage": args.duckdb_linkage,
          "server_build_sha256": sha(args.postgres), "pg_qi_sha256": sha(args.pg_qi),
-         "pg_duckdb_sha256": sha(args.pg_duckdb), "duckdb_sha256": "d" * 64,
+         "pg_duckdb_sha256": sha(args.pg_duckdb),
+         "duckdb_sha256": sha(args.duckdb) if args.duckdb else "d" * 64,
          "configuration_sha256": args.config_sha, "toolchain_sha256": "e" * 64}
 installed = {"postgres_path": args.postgres, "postgres_sha256": build["server_build_sha256"],
              "pg_qi_path": args.pg_qi, "pg_qi_sha256": build["pg_qi_sha256"],
              "pg_duckdb_path": args.pg_duckdb, "pg_duckdb_sha256": build["pg_duckdb_sha256"],
              "duckdb_sha256": build["duckdb_sha256"], "configuration_sha256": args.config_sha}
+if args.duckdb:
+    installed["duckdb_path"] = args.duckdb
 start = {"install_event_id": "ci-install-1", "start_id": "placeholder",
          "install_sequence": 1, "start_sequence": 2, "cluster_id": args.cluster_id,
          "boot_id": args.boot_id, "postmaster_start_time": args.postmaster_start,
@@ -42,6 +53,8 @@ start = {"install_event_id": "ci-install-1", "start_id": "placeholder",
          "configuration_sha256": args.config_sha,
          "shared_preload_libraries": ["pg_duckdb", "pg_qi"],
          "hook_inventory": ["pg_duckdb", "pg_qi"]}
+if args.duckdb:
+    start["duckdb_mapped_path"] = args.duckdb
 start["start_id"] = policy._start_id(start["cluster_id"], start["postmaster_start_time"])
 start["attestation_sha256"] = hashlib.sha256(policy.canonical_bytes(start)).hexdigest()
 if args.kind == "socket":

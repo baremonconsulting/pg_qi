@@ -69,6 +69,8 @@ postgres_path="$pgbin/postgres"
 pkglibdir=$($pg_config_bin --pkglibdir)
 pg_qi_path="$pkglibdir/pg_qi.so"
 pg_duckdb_path="$pkglibdir/pg_duckdb.so"
+duckdb_path=$(ldd "$pg_duckdb_path" | awk '$1 == "libduckdb.so" {print $3}')
+test -n "$duckdb_path" && test -f "$duckdb_path"
 config_sha=$(sha256sum "$data/postgresql.conf" | awk '{print $1}')
 commit=$(git -C "$repo" rev-parse HEAD)
 tree_sha=$(git -C "$repo" rev-parse 'HEAD^{tree}' | sha256sum | awk '{print $1}')
@@ -81,7 +83,8 @@ create_dossier() {
   if [[ $kind == tls ]]; then role=pilot_reader; fi
   python3 "$fixture" --kind "$kind" --output "$output" --commit "$commit" \
     --tree-sha "$tree_sha" --postgres "$postgres_path" --pg-qi "$pg_qi_path" \
-    --pg-duckdb "$pg_duckdb_path" --config-sha "$config_sha" --major 16 \
+    --pg-duckdb "$pg_duckdb_path" --duckdb-linkage dynamic_separate_library \
+    --duckdb "$duckdb_path" --config-sha "$config_sha" --major 16 \
     --server-version "$server_version" --database-oid "$database_oid" --role "$role" \
     --postmaster-start "$postmaster_start" --pg-qi-version "$pg_qi_version" \
     --pg-duckdb-version "$pg_duckdb_version" --cluster-id "$cluster_id" --boot-id "$boot_id" \

@@ -20,6 +20,14 @@ missing or untrusted start attestation refuses qualification. Restart, build,
 configuration, preload, hook, database or role changes require a new dossier,
 preflight and approval.
 
+DuckDB linkage is explicit and fail-closed. A statically linked candidate
+records `static_in_pg_duckdb` and cannot include a separate DuckDB path. A
+dynamically linked candidate records `dynamic_separate_library`, identifies
+the separate installed library by absolute path and SHA-256, and binds the
+same absolute mapped path and digest into the externally trusted start
+attestation. Unknown linkage modes, an omitted path, an alias of the
+pg_duckdb path or any install/start mismatch are refused.
+
 The caller supplies separate trusted scope, complete-dossier and start-
 attestation SHA-256 anchors. Changing an internally consistent endpoint,
 candidate, replay or start record without renewing its external anchor is
