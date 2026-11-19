@@ -521,6 +521,8 @@ def validate_internal_pilot(root: Path,
         raise CloseoutError("pilot_prefix_stopped_without_terminal_failure")
     technical_pass = full_scope and all(item["result"] == "PASS" for item in windows)
     decisions = closeout["decisions"]
+    closed_evidence: set[str] = set()
+    closed_receipts: set[str] = set()
     for finding in closeout["hard_stop_findings"]:
         try:
             verify_artifact(root, finding["evidence"])
@@ -528,11 +530,18 @@ def validate_internal_pilot(root: Path,
             raise CloseoutError("hard_stop_evidence_invalid") from exc
         if finding["status"] == "CLOSED":
             approval = _artifact(root, finding["closure_approval"], "gate_receipt")
+            evidence_digest = finding["evidence"]["sha256"]
+            approval_digest = finding["closure_approval"]["sha256"]
             if (approval["gate_id"] != "HARD_STOP_CLOSED" or
+                    approval.get("subject_id") != finding["finding_id"] or
                     approval["scope_sha256"] != scope or
-                    approval["evidence_sha256"] != finding["evidence"]["sha256"] or
-                    _time(approval["approved_at"]) > recorded_checked):
+                    approval["evidence_sha256"] != evidence_digest or
+                    not prior_finish <= _time(approval["approved_at"]) <= recorded_checked or
+                    evidence_digest in closed_evidence or
+                    approval_digest in closed_receipts):
                 raise CloseoutError("hard_stop_closure_not_authorized")
+            closed_evidence.add(evidence_digest)
+            closed_receipts.add(approval_digest)
     open_hard_stop = any(item["status"] == "OPEN"
                          for item in closeout["hard_stop_findings"])
     safety = ("FAIL" if open_hard_stop or

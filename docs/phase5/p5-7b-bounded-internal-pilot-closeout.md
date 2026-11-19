@@ -85,8 +85,10 @@ Retention may remain `PENDING` only with the frozen owner and due date.
 Retirement itself may never remain unverified.
 
 A hard stop may be recorded as `CLOSED` only when the closeout bundle contains
-the dedicated `HARD_STOP_CLOSED` human approval receipt bound to that stop.
-Without that receipt the stop remains open and closeout is refused.
+the dedicated `HARD_STOP_CLOSED` human approval receipt bound to that finding
+ID and its unique evidence digest. The approval must be issued after the final
+pilot window and before closeout. Without that receipt the stop remains open
+and closeout is refused.
 
 ## Sharing
 

@@ -579,9 +579,13 @@ class MeasurementRunner:
 
     def run(self, level_authorization: dict[str, Any], evidence_root: Path,
             correctness_gate: CorrectnessGate,
-            session_factory: Callable[[str, int, StopController], MeasurementSession]) -> dict[str, Any]:
+            session_factory: Callable[[str, int, StopController], MeasurementSession], *,
+            previous_evidence_root: Path | None = None,
+            previous_path_prefix: str | None = None) -> dict[str, Any]:
         level_definition = validate_level_authorization(level_authorization, self.plan,
-            self.plan_sha256, self.scope_sha256, evidence_root)
+            self.plan_sha256, self.scope_sha256, evidence_root,
+            previous_evidence_root=previous_evidence_root,
+            previous_path_prefix=previous_path_prefix)
         level = level_definition["level"]
         self._authorization_valid_through = level_definition["_valid_through"]
         self._active_level = level

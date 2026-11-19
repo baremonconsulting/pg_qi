@@ -1088,6 +1088,10 @@ def _validate_gate_receipt(value: dict[str, Any], catalog: dict[str, Any]) -> No
     if not _identifier_array(value["approvals"], "approvals", True):
         raise ContractError("gate receipt lacks an approver")
     _string(value["nonce"], "nonce")
+    if "subject_id" in value:
+        _string(value["subject_id"], "subject_id")
+    if value["gate_id"] == "HARD_STOP_CLOSED" and "subject_id" not in value:
+        raise ContractError("hard-stop closure receipt lacks subject_id")
 
 
 def _validate_internal_pilot_plan(value: dict[str, Any], catalog: dict[str, Any]) -> None:

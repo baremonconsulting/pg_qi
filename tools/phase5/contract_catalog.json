@@ -183,7 +183,7 @@
     },
     "gate_receipt": {
       "required": ["gate_id", "scope_sha256", "evidence_sha256", "approved_at", "approvals", "nonce"],
-      "optional": []
+      "optional": ["subject_id"]
     },
     "internal_pilot_plan": {
       "required": ["scope_sha256", "pilot_id", "measurement_plan", "operation_go", "canary_bundle_path", "canary_validation", "canary_acceptance", "attempt_ledger", "approved_windows", "retention_owner", "retention_due_at"],

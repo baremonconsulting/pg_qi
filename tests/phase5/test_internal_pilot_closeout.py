@@ -458,6 +458,33 @@ class InternalPilotCloseoutTests(unittest.TestCase):
             with self.assertRaisesRegex(CloseoutError, "service_work"):
                 self.validate(root, checked)
 
+    def test_closed_hard_stop_requires_finding_bound_post_pilot_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = bundle_root(name); checked = build(root)
+            (root / "finding.txt").write_text("closed\n"); (root / "finding.txt").chmod(0o600)
+            evidence = artifact(root, "finding.txt")
+            closeout = json.loads((root / "internal-pilot-closeout.json").read_text())
+            approval = {"schema_version": 1, "contract_type": "gate_receipt",
+                "contract_id": "hard-stop-approval", "gate_id": "HARD_STOP_CLOSED",
+                "subject_id": "hard-1", "scope_sha256": closeout["scope_sha256"],
+                "evidence_sha256": evidence["sha256"],
+                "approved_at": "2026-11-18T01:02:00Z",
+                "approvals": ["human-reviewer"], "nonce": "hard-stop-approval-1"}
+            write(root / "hard-stop-approval.json", approval)
+            closeout["hard_stop_findings"] = [{"finding_id": "hard-1", "status": "CLOSED",
+                "evidence": evidence,
+                "closure_approval": artifact(root, "hard-stop-approval.json")}]
+            write(root / "internal-pilot-closeout.json", closeout)
+            self.assertEqual(self.validate(root, checked)["result"], "PASS")
+
+            approval["subject_id"] = "hard-2"
+            write(root / "hard-stop-approval.json", approval)
+            closeout["hard_stop_findings"][0]["closure_approval"] = \
+                artifact(root, "hard-stop-approval.json")
+            write(root / "internal-pilot-closeout.json", closeout)
+            with self.assertRaisesRegex(CloseoutError, "hard_stop_closure_not_authorized"):
+                self.validate(root, checked)
+
 
 if __name__ == "__main__":
     unittest.main()

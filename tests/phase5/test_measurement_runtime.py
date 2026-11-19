@@ -816,6 +816,15 @@ class EscalationTests(unittest.TestCase):
                 root, previous_evidence_root=private,
                 previous_path_prefix="private-level-1")
             self.assertEqual(level["level"], 2)
+            runner2, journal2, _stop2, _evidence2, _digest2, _scope2 = \
+                make_runner(root / "second", value)
+            report2 = runner2.run(authorization, root,
+                correctness_gate(digest, scope_digest),
+                lambda mode, _slot, control: FakeSession(mode, control),
+                previous_evidence_root=private,
+                previous_path_prefix="private-level-1")
+            journal2.close()
+            self.assertEqual(report2["technical_result"], "PASS")
 
     def test_previous_namespace_arguments_must_be_supplied_together(self) -> None:
         with tempfile.TemporaryDirectory() as name:
