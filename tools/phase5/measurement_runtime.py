@@ -583,8 +583,11 @@ class MeasurementRunner:
             previous_evidence_root: Path | None = None,
             previous_path_prefix: str | None = None,
             pilot_attempt: dict[str, Any] | None = None,
-            pilot_window_id: str | None = None) -> dict[str, Any]:
-        if (pilot_attempt is None) != (pilot_window_id is None):
+            pilot_window_id: str | None = None,
+            pilot_plan_sha256: str | None = None,
+            pilot_ledger_root: Path | None = None) -> dict[str, Any]:
+        if len({pilot_attempt is None, pilot_window_id is None,
+                pilot_plan_sha256 is None, pilot_ledger_root is None}) != 1:
             raise MeasurementError("pilot_attempt_arguments_incomplete")
         level_definition = validate_level_authorization(level_authorization, self.plan,
             self.plan_sha256, self.scope_sha256, evidence_root,
@@ -593,12 +596,15 @@ class MeasurementRunner:
         level = level_definition["level"]
         self._pilot_attempt_sha256: str | None = None
         self._pilot_window_id: str | None = None
+        self._pilot_dispatch_sha256: str | None = None
+        self._pilot_dispatched_at: str | None = None
         if pilot_attempt is not None:
             attempt = _exact(pilot_attempt, {"schema_version", "document_type", "record_id",
                 "pilot_id", "sequence", "scope_sha256", "plan_sha256",
                 "operation_go_sha256", "previous_record_sha256", "window_id", "level",
                 "run_id", "consumed_at"}, "pilot_attempt")
             _identifier(pilot_window_id, "pilot_window_id")
+            _digest(pilot_plan_sha256, "pilot_plan_sha256")
             try:
                 consumed_at = datetime.fromisoformat(
                     attempt["consumed_at"].replace("Z", "+00:00"))
@@ -607,7 +613,7 @@ class MeasurementRunner:
             if (attempt["schema_version"] != 1 or
                     attempt["document_type"] != "internal_pilot_attempt" or
                     attempt["scope_sha256"] != self.scope_sha256 or
-                    attempt["plan_sha256"] != self.plan_sha256 or
+                    attempt["plan_sha256"] != pilot_plan_sha256 or
                     attempt["operation_go_sha256"] !=
                     level_authorization["operation_go"]["sha256"] or
                     attempt["window_id"] != pilot_window_id or
@@ -616,6 +622,43 @@ class MeasurementRunner:
                 raise MeasurementError("pilot_attempt_invalid")
             self._pilot_attempt_sha256 = canonical_sha256(attempt)
             self._pilot_window_id = pilot_window_id
+            ledger = pilot_ledger_root.resolve(strict=True)
+            ledger_info = ledger.stat()
+            if (ledger != pilot_ledger_root.absolute() or not ledger.is_dir() or
+                    ledger_info.st_uid != os.getuid() or
+                    stat.S_IMODE(ledger_info.st_mode) != 0o700):
+                raise MeasurementError("pilot_ledger_invalid")
+            sequence = attempt["sequence"]
+            if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+                raise MeasurementError("pilot_attempt_invalid")
+            attempt_path = ledger / f"attempt-{sequence:04d}.json"
+            try:
+                descriptor = os.open(attempt_path, os.O_RDONLY | os.O_NOFOLLOW)
+                with os.fdopen(descriptor, "rb") as stream:
+                    if stream.read() != canonical_bytes(attempt):
+                        raise MeasurementError("pilot_attempt_not_in_ledger")
+            except OSError as exc:
+                raise MeasurementError("pilot_attempt_not_in_ledger") from exc
+            dispatched_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            marker = {"schema_version": 1, "document_type": "internal_pilot_dispatch",
+                "attempt_sha256": self._pilot_attempt_sha256,
+                "window_id": pilot_window_id, "level": level, "run_id": self.run_id,
+                "dispatched_at": dispatched_at}
+            marker_path = ledger / f"dispatch-{sequence:04d}.json"
+            try:
+                descriptor = os.open(marker_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                                     os.O_NOFOLLOW, 0o600)
+                with os.fdopen(descriptor, "wb") as stream:
+                    stream.write(canonical_bytes(marker)); stream.flush(); os.fsync(stream.fileno())
+                directory = os.open(ledger, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                try:
+                    os.fsync(directory)
+                finally:
+                    os.close(directory)
+            except OSError as exc:
+                raise MeasurementError("pilot_attempt_already_dispatched") from exc
+            self._pilot_dispatch_sha256 = canonical_sha256(marker)
+            self._pilot_dispatched_at = dispatched_at
         self._authorization_valid_through = level_definition["_valid_through"]
         self._active_level = level
         sessions_count = level_definition["sessions"]
@@ -935,6 +978,8 @@ class MeasurementRunner:
         if self._pilot_attempt_sha256 is not None:
             report["pilot_attempt_sha256"] = self._pilot_attempt_sha256
             report["pilot_window_id"] = self._pilot_window_id
+            report["pilot_dispatch_sha256"] = self._pilot_dispatch_sha256
+            report["pilot_dispatched_at"] = self._pilot_dispatched_at
         validate_contract(report)
         return report
 

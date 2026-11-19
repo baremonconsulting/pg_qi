@@ -138,6 +138,8 @@ def _attempt_records(ledger: Path, plan: dict[str, Any]) -> list[dict[str, Any]]
     for path in sorted(ledger.iterdir()):
         if path.name == identity_name:
             continue
+        if re.fullmatch(r"dispatch-[0-9]{4}\.json", path.name):
+            continue
         if path.is_symlink() or not path.is_file() or path.suffix != ".json":
             raise CloseoutError("unexpected_pilot_attempt_ledger_entry")
         try:
@@ -191,6 +193,37 @@ def _attempt_records(ledger: Path, plan: dict[str, Any]) -> list[dict[str, Any]]
             raise CloseoutError("pilot_attempt_hash_chain_invalid")
         previous_digest = canonical_sha256(record)
     return records
+
+
+def _dispatch_record(ledger: Path, attempt: dict[str, Any]) -> dict[str, Any]:
+    path = ledger / f"dispatch-{attempt['sequence']:04d}.json"
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            info = os.fstat(descriptor)
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or
+                    info.st_nlink != 1 or stat.S_IMODE(info.st_mode) != 0o600 or
+                    info.st_size > 65536):
+                raise CloseoutError("unsafe_pilot_dispatch_record")
+            payload = os.read(descriptor, info.st_size + 1)
+        finally:
+            os.close(descriptor)
+        marker = json.loads(payload.decode("utf-8"), object_pairs_hook=_pairs,
+            parse_constant=lambda _value: (_ for _ in ()).throw(
+                CloseoutError("invalid_pilot_dispatch_number")))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise CloseoutError("invalid_pilot_dispatch_record") from exc
+    expected = {"schema_version", "document_type", "attempt_sha256", "window_id",
+                "level", "run_id", "dispatched_at"}
+    if (not isinstance(marker, dict) or set(marker) != expected or
+            marker["schema_version"] != 1 or
+            marker["document_type"] != "internal_pilot_dispatch" or
+            marker["attempt_sha256"] != canonical_sha256(attempt) or
+            (marker["window_id"], marker["level"], marker["run_id"]) !=
+            (attempt["window_id"], attempt["level"], attempt["run_id"])):
+        raise CloseoutError("invalid_pilot_dispatch_record")
+    _time(marker["dispatched_at"])
+    return marker
 
 
 def consume_attempt(root: Path, ledger_path: Path, window_id: str, level: int,
@@ -250,7 +283,7 @@ def consume_attempt(root: Path, ledger_path: Path, window_id: str, level: int,
             "record_id": f"{plan['pilot_id']}-attempt-{sequence:04d}-{run_id}",
             "pilot_id": plan["pilot_id"], "sequence": sequence,
             "scope_sha256": plan["scope_sha256"], "plan_sha256": canonical_sha256(plan),
-            "operation_go_sha256": canonical_sha256(operation_go),
+            "operation_go_sha256": plan["operation_go"]["sha256"],
             "previous_record_sha256": previous_digest,
             "window_id": window_id, "level": level, "run_id": run_id,
             "consumed_at": instant_utc.isoformat().replace("+00:00", "Z")}
@@ -349,6 +382,7 @@ def validate_internal_pilot(root: Path,
         raise CloseoutError("pilot_window_count_mismatch")
     ledger = _ledger(root, plan)
     attempts = _attempt_records(ledger, plan)
+    dispatches = [_dispatch_record(ledger, attempt) for attempt in attempts]
     if len(attempts) != len(closeout["windows"]):
         raise CloseoutError("pilot_attempt_history_mismatch")
 
@@ -375,7 +409,8 @@ def validate_internal_pilot(root: Path,
     first_start: datetime | None = None
     run_ids: set[str] = set()
     previous_window: dict[str, Any] | None = None
-    for expected, attempt, artifact in zip(approved, attempts, closeout["windows"]):
+    for expected, attempt, dispatch, artifact in zip(
+            approved, attempts, dispatches, closeout["windows"]):
         window = _artifact(root, artifact, "internal_pilot_window")
         if (window["scope_sha256"] != scope or window["pilot_id"] != plan["pilot_id"] or
                 window["plan_sha256"] != plan_sha or
@@ -386,7 +421,7 @@ def validate_internal_pilot(root: Path,
             raise CloseoutError("pilot_window_identity_mismatch")
         if ((attempt["window_id"], attempt["level"], attempt["run_id"]) !=
                 (window["window_id"], window["level"], window["run_id"]) or
-                attempt["operation_go_sha256"] != canonical_sha256(operation_go) or
+                attempt["operation_go_sha256"] != plan["operation_go"]["sha256"] or
                 window["attempt_record_sha256"] != canonical_sha256(attempt)):
             raise CloseoutError("pilot_attempt_window_mismatch")
         if window["run_id"] in run_ids:
@@ -399,8 +434,10 @@ def validate_internal_pilot(root: Path,
                 (prior_finish is not None and started < prior_finish):
             raise CloseoutError("pilot_window_timeline_invalid")
         consumed_at = _time(attempt["consumed_at"])
-        if consumed_at > started or consumed_at < go_start or \
-                (prior_finish is not None and consumed_at < prior_finish):
+        dispatched_at = _time(dispatch["dispatched_at"])
+        if (consumed_at > dispatched_at or dispatched_at != started or
+                consumed_at < go_start or
+                (prior_finish is not None and consumed_at < prior_finish)):
             raise CloseoutError("pilot_attempt_not_consumed_before_dispatch")
         prior_finish = finished
 
@@ -467,6 +504,8 @@ def validate_internal_pilot(root: Path,
                 report["level"] != window["level"] or report["run_id"] != window["run_id"] or
                 report.get("pilot_attempt_sha256") != canonical_sha256(attempt) or
                 report.get("pilot_window_id") != window["window_id"] or
+                report.get("pilot_dispatch_sha256") != canonical_sha256(dispatch) or
+                report.get("pilot_dispatched_at") != dispatch["dispatched_at"] or
                 retirement["scope_sha256"] != scope or
                 retirement["run_id"] != window["run_id"]):
             raise CloseoutError("pilot_window_evidence_mismatch")
@@ -525,7 +564,8 @@ def validate_internal_pilot(root: Path,
         raise CloseoutError("pilot_closeout_or_acceptance_timeline_invalid")
 
     full_scope = len(windows) == len(approved)
-    if not full_scope and windows[-1]["result"] == "PASS":
+    if (not full_scope and windows[-1]["result"] == "PASS" and
+            not any(item["status"] == "OPEN" for item in closeout["hard_stop_findings"])):
         raise CloseoutError("pilot_prefix_stopped_without_terminal_failure")
     technical_pass = full_scope and all(item["result"] == "PASS" for item in windows)
     decisions = closeout["decisions"]

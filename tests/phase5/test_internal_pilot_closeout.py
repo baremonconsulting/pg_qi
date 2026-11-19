@@ -190,8 +190,15 @@ def build(root: Path, report_result: str = "PASS", retired: bool = True,
         "level": 1, "run_id": "run-1", "consumed_at": "2026-11-18T00:59:00Z"}
     if write_attempt_record:
         write(ledger / "attempt-0001.json", attempt)
+    dispatch = {"schema_version": 1, "document_type": "internal_pilot_dispatch",
+        "attempt_sha256": canonical_sha256(attempt), "window_id": "window-1",
+        "level": 1, "run_id": "run-1", "dispatched_at": "2026-11-18T01:00:00Z"}
+    if write_attempt_record:
+        write(ledger / "dispatch-0001.json", dispatch)
     result_report["pilot_attempt_sha256"] = canonical_sha256(attempt)
     result_report["pilot_window_id"] = "window-1"
+    result_report["pilot_dispatch_sha256"] = canonical_sha256(dispatch)
+    result_report["pilot_dispatched_at"] = dispatch["dispatched_at"]
     write(private / "report.json", result_report)
     index["payloads"][0] = artifact(private, "report.json")
     write(private / "index.json", index)

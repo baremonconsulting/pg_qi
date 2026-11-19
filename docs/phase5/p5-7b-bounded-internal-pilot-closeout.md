@@ -30,8 +30,11 @@ For every approved window, in order:
 1. Consume the next ledger record before dispatch. A level cannot be retried,
    reordered or omitted from closeout.
 2. Pass that exact attempt record and its window ID to
-   `MeasurementRunner.run(...)`. The runner seals the attempt digest into its
-   report before that report can be accepted by closeout.
+   `MeasurementRunner.run(...)`, together with the internal pilot plan digest.
+   Also pass the externally controlled ledger root. Before opening any session,
+   the runner verifies the attempt file and exclusively appends a single-use
+   dispatch marker. It seals both digests and the dispatch time into its report.
+   Closeout requires the window start to equal that recorded dispatch time.
 3. Confirm the same current operation approval and exact level authorization.
 4. Run that single frozen level; never escalate automatically.
 5. Stop admission after the window, including failed and partial windows.
@@ -61,6 +64,9 @@ If an attempt is consumed but dispatch never starts, that pilot is deliberately
 not recoverable: preserve the ledger, close the operation administratively and
 start a newly approved pilot with a new pilot ID. Never delete the record or
 reuse the pilot to conceal the aborted attempt.
+Stopping after a passing window without an open hard-stop finding likewise
+requires administrative closure and a newly approved pilot. An open hard stop
+may terminate an otherwise passing prefix, but the closeout result is refused.
 
 Attempt records are hash-chained and every window binds its exact record
 digest. The ledger location must provide externally enforced append-only/WORM
