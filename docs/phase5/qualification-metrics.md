@@ -27,6 +27,10 @@ Weights are non-negative decimal values in units declared by the charter:
 
 - `inventory_origin`: `natural_internal`, `natural_customer`,
   `derived_reproduction` or `synthetic_control`.
+- `natural_customer` remains a vocabulary value for inventory classification,
+  but the internal execution path refuses it, including a derived reproduction
+  linked to customer inventory. Customer execution requires a separate,
+  explicitly authorised path that is not implemented in P5-8.
 - Each `*_source_ref` or `*_ref` is a safe opaque controlled reference, never
   query text, credentials, personal data or an endpoint.
 - Each `*_authority` is `AUTHORISED`, `INVENTORY_ONLY`, `PROHIBITED`,

@@ -16,11 +16,13 @@ from typing import Any
 try:
     from .contract_rules import (ContractError, CUSTOMER_DELTA_GATES,
         CUSTOMER_DELTA_LIMITATIONS, canonical_bytes, canonical_sha256,
-        strict_load_path, validate_contract, verify_artifact)
+        aggregate_pass, strict_load_path, validate_contract, verify_artifact,
+        verify_scope_inputs)
 except ImportError:
     from contract_rules import (ContractError, CUSTOMER_DELTA_GATES,
         CUSTOMER_DELTA_LIMITATIONS, canonical_bytes, canonical_sha256,
-        strict_load_path, validate_contract, verify_artifact)
+        aggregate_pass, strict_load_path, validate_contract, verify_artifact,
+        verify_scope_inputs)
 
 
 class CustomerDeltaError(RuntimeError):
@@ -72,7 +74,11 @@ def _load(root: Path, relative: str, expected: str) -> dict[str, Any]:
 def _artifact(root: Path, value: dict[str, Any], expected: str) -> dict[str, Any]:
     try:
         verify_artifact(root, value)
-        return _load(root, value["path"], expected)
+        loaded = _load(root, value["path"], expected)
+        if (canonical_sha256(loaded) != value["sha256"] or
+                len(canonical_bytes(loaded)) != value["bytes"]):
+            raise CustomerDeltaError(f"invalid_{expected}_artifact")
+        return loaded
     except (ContractError, CustomerDeltaError, KeyError, TypeError) as exc:
         raise CustomerDeltaError(f"invalid_{expected}_artifact") from exc
 
@@ -92,14 +98,24 @@ def _internal_validation(root: Path, artifact: dict[str, Any]) -> dict[str, Any]
         if (len(payload) != artifact["bytes"] or
                 hashlib.sha256(payload).hexdigest() != artifact["sha256"]):
             raise CustomerDeltaError("invalid_internal_closeout_validation")
-        value = json.loads(payload.decode("utf-8"))
+        def unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+            result: dict[str, Any] = {}
+            for key, item in pairs:
+                if key in result:
+                    raise ValueError("duplicate key")
+                result[key] = item
+            return result
+        value = json.loads(payload.decode("utf-8"), object_pairs_hook=unique)
     except (ContractError, OSError, KeyError, TypeError, ValueError) as exc:
         raise CustomerDeltaError("invalid_internal_closeout_validation") from exc
     required = {"schema_version", "document_type", "scope_sha256", "result",
-                "decision", "checked_at"}
+                "decision", "project_decision", "window_count", "pilot_id",
+                "checked_at"}
     if (not isinstance(value, dict) or set(value) != required or
             value["schema_version"] != 1 or
-            value["document_type"] != "internal_pilot_validation"):
+            value["document_type"] != "internal_pilot_validation" or
+            not isinstance(value["window_count"], int) or value["window_count"] < 1 or
+            not isinstance(value["pilot_id"], str) or not value["pilot_id"]):
         raise CustomerDeltaError("invalid_internal_closeout_validation")
     return value
 
@@ -179,6 +195,11 @@ def validate_customer_delta(bundle: Path,
         dossier_sha = canonical_sha256(dossier)
         internal_scope = _artifact(root, dossier["internal_scope"], "scope")
         customer_scope = _artifact(root, dossier["customer_scope"], "scope")
+        try:
+            verify_scope_inputs(root, internal_scope)
+            verify_scope_inputs(root, customer_scope)
+        except ContractError as exc:
+            raise CustomerDeltaError("customer_scope_input_invalid") from exc
         for name in ("workload_authority", "data_authority", "evidence_policy",
                      "recovery_plan", "support_plan", "incident_plan"):
             try:
@@ -194,6 +215,8 @@ def validate_customer_delta(bundle: Path,
                     {item["scope_input"] for item in actual_changes} or
                 set(dossier["affected_gates"]) != _expected_affected(dossier)):
             raise CustomerDeltaError("customer_delta_scope_or_gate_claim_invalid")
+        if set(customer_scope["gates_required"]) != set(dossier["affected_gates"]):
+            raise CustomerDeltaError("customer_scope_gate_closure_invalid")
         bindings = {"workload_authority": "workload_definition",
                     "data_authority": "dataset", "evidence_policy": "evidence_policy",
                     "recovery_plan": "recovery_plan"}
@@ -214,6 +237,7 @@ def validate_customer_delta(bundle: Path,
         recovery = _artifact(root, dossier["recovery_validation"], "recovery_validation")
         if (internal_validation["result"] != "PASS" or
                 internal_validation["decision"] != "ELIGIBLE_FOR_HUMAN_GRANT" or
+                internal_validation["project_decision"] != "CONTINUE" or
                 internal_validation["scope_sha256"] != dossier["internal_scope_sha256"] or
                 internal["gate_id"] != "INTERNAL_CLOSEOUT" or
                 internal["scope_sha256"] != dossier["internal_scope_sha256"] or
@@ -226,6 +250,7 @@ def validate_customer_delta(bundle: Path,
                 customer_go["scope_sha256"] != dossier["customer_scope_sha256"] or
                 preflight["scope_sha256"] != dossier["customer_scope_sha256"] or
                 preflight["target_identity_sha256"] != dossier["target_sha256"] or
+                not aggregate_pass(preflight["state"]) or
                 recovery["scope_sha256"] != dossier["customer_scope_sha256"] or
                 recovery["result"] != "PASS" or
                 recovery["decision"] != "ELIGIBLE_FOR_HUMAN_GRANT" or
@@ -236,12 +261,17 @@ def validate_customer_delta(bundle: Path,
                      customer_go["contract_id"]}) != 3):
             raise CustomerDeltaError("customer_authority_graph_invalid")
         mandate_time = _time(mandate["approved_at"])
+        internal_validation_time = _time(internal_validation["checked_at"])
+        internal_approval_time = _time(internal["approved_at"])
+        recovery_time = _time(recovery["checked_at"])
         go_start, go_finish = _time(customer_go["valid_from"]), _time(customer_go["valid_through"])
         charter_start, charter_finish = (_time(dossier["valid_from"]),
                                          _time(dossier["valid_through"]))
         if (len(set(mandate["approvals"])) != len(mandate["approvals"]) or
                 not set(mandate["approvals"]).isdisjoint(dossier["role_approvals"].values()) or
-                mandate_time < _time(internal["approved_at"]) or
+                not internal_validation_time <= internal_approval_time <= mandate_time or
+                not charter_start <= mandate_time or
+                not mandate_time <= recovery_time <= go_start or
                 go_start < mandate_time or go_finish <= go_start or
                 go_finish - go_start > timedelta(days=14) or
                 not charter_start <= go_start < go_finish <= charter_finish or
@@ -249,6 +279,10 @@ def validate_customer_delta(bundle: Path,
                 set(customer_go["approvals"]) != set(dossier["role_approvals"].values())):
             raise CustomerDeltaError("customer_operation_window_or_roles_invalid")
         affected = set(dossier["affected_gates"])
+        receipt_ids = {internal["contract_id"], mandate["contract_id"],
+                       customer_go["contract_id"]}
+        receipt_nonces = {internal["nonce"], mandate["nonce"], customer_go["nonce"]}
+        evidence_digests: set[str] = set()
         for gate, item in matrix.items():
             expected_status = "PASS" if gate in affected else "NOT_RUN"
             if item["status"] != expected_status:
@@ -260,14 +294,31 @@ def validate_customer_delta(bundle: Path,
                                     else "gate_receipt")
                 verify_artifact(root, evidence)
                 if gate == "CUSTOMER_OPERATION_GO":
-                    if receipt != customer_go:
+                    if receipt != customer_go or evidence != closeout["dossier"]:
                         raise CustomerDeltaError("customer_go_rerun_differs_from_go")
                 elif (receipt["gate_id"] != gate or
                       receipt["scope_sha256"] != dossier["customer_scope_sha256"] or
                       receipt["evidence_sha256"] != evidence["sha256"] or
                       not mandate_time <= _time(receipt["approved_at"]) <= go_start):
                     raise CustomerDeltaError("customer_gate_rerun_invalid")
+                if gate != "CUSTOMER_OPERATION_GO":
+                    expected_evidence = {
+                        "RELEASE_SITE_QUALIFIED": dossier["site_preflight"],
+                        "RECOVERY_REHEARSED": dossier["recovery_validation"],
+                    }.get(gate)
+                    if ((expected_evidence is not None and evidence != expected_evidence) or
+                            evidence["sha256"] in evidence_digests):
+                        raise CustomerDeltaError("customer_gate_evidence_not_specific")
+                    if (receipt["contract_id"] in receipt_ids or
+                            receipt["nonce"] in receipt_nonces or
+                            not set(receipt["approvals"]).isdisjoint(
+                                set(internal["approvals"]) | set(mandate["approvals"]))):
+                        raise CustomerDeltaError("customer_gate_rerun_not_independent")
+                    receipt_ids.add(receipt["contract_id"])
+                    receipt_nonces.add(receipt["nonce"])
+                    evidence_digests.add(evidence["sha256"])
         if (closeout["not_run_reasons"] != ["CUSTOMER_EXECUTION_UNAVAILABLE"] or
+                closeout["failures"] or
                 closeout["final_environment_state"] != "RETIRED_OFF" or
                 closeout["share_release"] is not None or
                 closeout["publication_release"] is not None):

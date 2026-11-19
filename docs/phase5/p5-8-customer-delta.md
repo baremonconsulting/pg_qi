@@ -24,7 +24,7 @@ Customer-origin SQL or data is refused by the internal evidence path.
 
 The dossier freezes a non-identifying `cust-<sha256>` reference, charter revision, one site,
 target/build/pool identities, workload and data authority, evidence policy,
-retention, recovery, support and incident procedures, five independent role
+recovery, support and incident procedures, five independent role
 approvals, a maximum fourteen-day non-production window, the exact changes and
 the affected gates. Production scope is fixed to `NONE`.
 

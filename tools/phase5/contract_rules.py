@@ -1410,10 +1410,9 @@ def _validate_customer_delta_closeout(value: dict[str, Any], catalog: dict[str, 
     _enum(value["result"], "customer delta result", {"NOT_RUN"})
     _enum(value["eligibility"], "customer delta eligibility", {"REFUSED"})
     _state(value["state"], catalog)
-    if (value["state"]["technical_result"] != "NOT_RUN" or
-            value["state"]["evidence_completeness"] not in {"NONE", "COMPLETE"} or
-            value["state"]["value_outcome"] != "NOT_EVALUATED" or
-            value["state"]["project_decision"] not in {"PAUSE", "STOP"}):
+    if value["state"] != {"lifecycle": "CLOSED", "technical_result": "NOT_RUN",
+            "evidence_completeness": "NONE", "exit_state": "NOT_EXITED",
+            "value_outcome": "NOT_EVALUATED", "project_decision": "PAUSE"}:
         raise ContractError("customer NOT_RUN state is contradictory")
 
 

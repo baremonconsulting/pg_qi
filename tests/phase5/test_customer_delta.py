@@ -82,7 +82,7 @@ def gate_receipt(gate: str, scope: str, evidence: str, approved: str,
     return value
 
 
-def build_prepared(root: Path) -> None:
+def build_prepared(root: Path, *, preflight_pass: bool = True) -> None:
     root.mkdir(mode=0o700)
     scope_names = ("workload_definition", "measurement_plan", "baseline_manifest",
         "dataset", "release_definition", "target", "limits", "evidence_policy",
@@ -107,14 +107,16 @@ def build_prepared(root: Path) -> None:
     preflight = {"schema_version": 1, "contract_type": "preflight",
         "contract_id": "customer-preflight", "scope_sha256": customer_sha,
         "target_identity_sha256": customer_scope["scope_inputs"]["target"]["sha256"],
-        "checks": ["target_identity"], "state": pass_state()}
+        "checks": ["target_identity"], "state": pass_state() if preflight_pass else {
+            **pass_state(), "technical_result": "FAIL", "value_outcome": "NEGATIVE",
+            "project_decision": "STOP"}}
     from tools.phase5.contract_rules import RECOVERY_CHECKS
     recovery = {"schema_version": 1, "contract_type": "recovery_validation",
         "contract_id": "customer-recovery", "scope_sha256": customer_sha,
         "rehearsal_id": "customer-rehearsal", "mandate_sha256": "a" * 64,
         "r1_terminal_sha256": "b" * 64, "r2_terminal_sha256": "c" * 64,
         "walkthrough_sha256": "d" * 64, "incident_sha256": "e" * 64,
-        "checked_at": "2026-11-19T00:05:00Z", "result": "PASS",
+        "checked_at": "2026-11-19T00:12:00Z", "result": "PASS",
         "decision": "ELIGIBLE_FOR_HUMAN_GRANT", "checks": RECOVERY_CHECKS,
         "limitations": ["NO_AUTOMATIC_GATE_GRANT", "NO_RTO_CLAIM", "NO_SLA_CLAIM"]}
     write(root / "customer-preflight.json", preflight)
@@ -156,6 +158,7 @@ def build_prepared(root: Path) -> None:
     internal_validation = {"schema_version": 1,
         "document_type": "internal_pilot_validation", "scope_sha256": internal_sha,
         "result": "PASS", "decision": "ELIGIBLE_FOR_HUMAN_GRANT",
+        "project_decision": "CONTINUE", "window_count": 1, "pilot_id": "pilot-1",
         "checked_at": "2026-11-19T00:00:00Z"}
     write(root / "internal-validation.json", internal_validation)
     internal_validation_artifact = artifact(root, "internal-validation.json")
@@ -173,19 +176,26 @@ def build_prepared(root: Path) -> None:
         "valid_from": "2026-11-19T00:20:00Z", "valid_through": "2026-11-19T01:20:00Z",
         "approvals": sorted(roles.values()), "nonce": "customer-go-nonce"}
     write(root / "internal-closeout.json", internal); write(root / "mandate.json", mandate)
-    write(root / "customer-go.json", go); write(root / "resource-evidence.txt", b"resource\n")
-    resource_evidence = artifact(root, "resource-evidence.txt")
+    write(root / "customer-go.json", go)
     reruns = matrix()
     for item in reruns:
         if item["gate_id"] == "CUSTOMER_OPERATION_GO":
             item.update(status="PASS", evidence=dossier_artifact,
                         receipt=artifact(root, "customer-go.json"))
         else:
+            if item["gate_id"] == "RELEASE_SITE_QUALIFIED":
+                gate_evidence = dossier["site_preflight"]
+            elif item["gate_id"] == "RECOVERY_REHEARSED":
+                gate_evidence = dossier["recovery_validation"]
+            else:
+                evidence_path = f"{item['gate_id'].lower()}-evidence.txt"
+                write(root / evidence_path, f"{item['gate_id']}\n".encode())
+                gate_evidence = artifact(root, evidence_path)
             receipt = gate_receipt(item["gate_id"], customer_sha,
-                                   resource_evidence["sha256"], "2026-11-19T00:15:00Z")
+                                   gate_evidence["sha256"], "2026-11-19T00:15:00Z")
             receipt_path = f"{item['gate_id'].lower()}-receipt.json"
             write(root / receipt_path, receipt)
-            item.update(status="PASS", evidence=resource_evidence,
+            item.update(status="PASS", evidence=gate_evidence,
                         receipt=artifact(root, receipt_path))
     value = closeout()
     value.update(internal_scope_sha256=internal_sha, dossier=dossier_artifact,
@@ -245,14 +255,60 @@ class CustomerDeltaTests(unittest.TestCase):
             dossier = json.loads((root / "dossier.json").read_text())
             dossier["changes"] = dossier["changes"][:-1]
             write(root / "dossier.json", dossier)
-            with self.assertRaises(CustomerDeltaError):
+            value = json.loads((root / "customer-delta-closeout.json").read_text())
+            value["dossier"] = artifact(root, "dossier.json")
+            mandate = json.loads((root / "mandate.json").read_text())
+            mandate["evidence_sha256"] = value["dossier"]["sha256"]
+            write(root / "mandate.json", mandate)
+            value["sponsor_mandate"] = artifact(root, "mandate.json")
+            value["gate_reruns"] = [({**row, "evidence": value["dossier"]}
+                if row["gate_id"] == "CUSTOMER_OPERATION_GO" else row)
+                for row in value["gate_reruns"]]
+            write(root / "customer-delta-closeout.json", value)
+            with self.assertRaisesRegex(CustomerDeltaError, "scope_or_gate_claim_invalid"):
                 validate_customer_delta(root, CHECKED)
         with tempfile.TemporaryDirectory() as name:
             root = Path(name) / "bundle"; build_prepared(root)
             validation = json.loads((root / "internal-validation.json").read_text())
             validation["result"] = "FAIL"
             write(root / "internal-validation.json", validation)
-            with self.assertRaises(CustomerDeltaError):
+            value = json.loads((root / "customer-delta-closeout.json").read_text())
+            value["internal_closeout_validation"] = artifact(root, "internal-validation.json")
+            receipt = json.loads((root / "internal-closeout.json").read_text())
+            receipt["evidence_sha256"] = value["internal_closeout_validation"]["sha256"]
+            write(root / "internal-closeout.json", receipt)
+            value["internal_closeout_receipt"] = artifact(root, "internal-closeout.json")
+            write(root / "customer-delta-closeout.json", value)
+            with self.assertRaisesRegex(CustomerDeltaError, "authority_graph_invalid"):
+                validate_customer_delta(root, CHECKED)
+
+    def test_failing_preflight_cannot_support_customer_go(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name) / "bundle"; build_prepared(root, preflight_pass=False)
+            with self.assertRaisesRegex(CustomerDeltaError, "authority_graph_invalid"):
+                validate_customer_delta(root, CHECKED)
+
+    def test_approval_order_independence_and_final_state_are_enforced(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name) / "bundle"; build_prepared(root)
+            value = json.loads((root / "customer-delta-closeout.json").read_text())
+            receipt_path = "qualification_authorized-receipt.json"
+            receipt = json.loads((root / receipt_path).read_text())
+            mandate = json.loads((root / "mandate.json").read_text())
+            receipt["nonce"] = mandate["nonce"]
+            write(root / receipt_path, receipt)
+            for row in value["gate_reruns"]:
+                if row["gate_id"] == "QUALIFICATION_AUTHORIZED":
+                    row["receipt"] = artifact(root, receipt_path)
+            write(root / "customer-delta-closeout.json", value)
+            with self.assertRaisesRegex(CustomerDeltaError, "not_independent"):
+                validate_customer_delta(root, CHECKED)
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name) / "bundle"; build_prepared(root)
+            value = json.loads((root / "customer-delta-closeout.json").read_text())
+            value["final_environment_state"] = "NOT_TOUCHED"
+            write(root / "customer-delta-closeout.json", value)
+            with self.assertRaisesRegex(CustomerDeltaError, "false_execution_claim"):
                 validate_customer_delta(root, CHECKED)
 
     def test_customer_go_never_unlocks_existing_measurement_runtime(self) -> None:
