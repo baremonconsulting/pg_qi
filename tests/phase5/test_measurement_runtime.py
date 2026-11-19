@@ -437,6 +437,23 @@ class PlanTests(unittest.TestCase):
             with self.assertRaisesRegex(MeasurementError, "invalid_document"):
                 validate_level_authorization(authorization, value, digest,
                                              scope_digest, root)
+
+    def test_customer_go_cannot_authorize_internal_measurement(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); root.chmod(0o700)
+            value = plan(); digest = canonical_sha256(value)
+            _scope, scope_digest = measurement_scope(value)
+            authorization = level_one_authorization(root, digest, scope_digest)
+            receipt_path = root / "operation-go.json"
+            receipt = json.loads(receipt_path.read_text())
+            receipt["receipt_kind"] = "CUSTOMER_OPERATION_GO"
+            receipt["dossier_sha256"] = "d" * 64
+            receipt["mandate_sha256"] = "e" * 64
+            write_document(receipt_path, receipt)
+            authorization["operation_go"] = artifact(root, "operation-go.json")
+            with self.assertRaisesRegex(MeasurementError, "does_not_authorize"):
+                validate_level_authorization(authorization, value, digest,
+                                             scope_digest, root)
             authorization = level_one_authorization(root, digest, scope_digest)
             receipt = json.loads(receipt_path.read_text())
             receipt["approvals"] = ["operation-owner"]

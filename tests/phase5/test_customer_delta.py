@@ -368,6 +368,43 @@ class CustomerDeltaTests(unittest.TestCase):
                                         "invalid_customer_gate_evidence_artifact"):
                 validate_customer_delta(root, CHECKED)
 
+    def test_evidence_retirement_and_closeout_chronology_are_enforced(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name) / "bundle"; build_prepared(root)
+            value = json.loads((root / "customer-delta-closeout.json").read_text())
+            retirement = json.loads((root / "customer-retirement.json").read_text())
+            retirement["retired_at"] = "2026-11-19T01:00:00Z"
+            write(root / "customer-retirement.json", retirement)
+            value["retirement_evidence"] = artifact(root, "customer-retirement.json")
+            write(root / "customer-delta-closeout.json", value)
+            with self.assertRaisesRegex(CustomerDeltaError, "window_or_roles_invalid"):
+                validate_customer_delta(root, CHECKED)
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name) / "bundle"; build_prepared(root)
+            value = json.loads((root / "customer-delta-closeout.json").read_text())
+            evidence_path = "qualification_authorized-evidence.json"
+            receipt_path = "qualification_authorized-receipt.json"
+            evidence = json.loads((root / evidence_path).read_text())
+            evidence["checked_at"] = "2026-11-19T00:16:00Z"
+            write(root / evidence_path, evidence)
+            receipt = json.loads((root / receipt_path).read_text())
+            receipt["evidence_sha256"] = artifact(root, evidence_path)["sha256"]
+            write(root / receipt_path, receipt)
+            for row in value["gate_reruns"]:
+                if row["gate_id"] == "QUALIFICATION_AUTHORIZED":
+                    row["evidence"] = artifact(root, evidence_path)
+                    row["receipt"] = artifact(root, receipt_path)
+            write(root / "customer-delta-closeout.json", value)
+            with self.assertRaisesRegex(CustomerDeltaError, "evidence_invalid"):
+                validate_customer_delta(root, CHECKED)
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name) / "bundle"; build_prepared(root)
+            value = json.loads((root / "customer-delta-closeout.json").read_text())
+            value["checked_at"] = "2026-11-19T02:00:00Z"
+            write(root / "customer-delta-closeout.json", value)
+            with self.assertRaisesRegex(CustomerDeltaError, "from_future"):
+                validate_customer_delta(root, CHECKED)
+
     def test_customer_go_never_unlocks_existing_measurement_runtime(self) -> None:
         source = (ROOT / "tools/phase5/measurement_runtime.py").read_text()
         self.assertIn('receipt_kind") != "OPERATION_GO"', source)
