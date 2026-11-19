@@ -57,5 +57,13 @@ accepting person.
 - `RELEASE_SITE_QUALIFIED`: NOT_GRANTED
 - `RECOVERY_REHEARSED`: NOT_GRANTED
 - `OPERATION_GO`: NOT_GRANTED
+- `CUSTOMER_PILOT_MANDATE`: NOT_GRANTED
+- `ORACLE_QUALIFIED`: NOT_GRANTED for any customer scope
+- `RESOURCE_ACCEPTED`: NOT_GRANTED for any customer scope
+- `CUSTOMER_OPERATION_GO`: NOT_GRANTED
+- `SHARE_RELEASE`: NOT_GRANTED for customer material
+- `PUBLICATION_RELEASE`: NOT_GRANTED
 
 Natural workload relevance and customer value remain `INCONCLUSIVE`.
+P5-8 customer execution is explicitly `NOT_RUN`; no customer, mandate, sponsor
+decision or customer environment has been supplied or touched.

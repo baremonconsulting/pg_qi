@@ -14,6 +14,9 @@
     "CANARY_ACCEPTED",
     "INTERNAL_CLOSEOUT",
     "HARD_STOP_CLOSED",
+    "CUSTOMER_PILOT_MANDATE",
+    "ORACLE_QUALIFIED",
+    "RESOURCE_ACCEPTED",
     "CUSTOMER_OPERATION_GO",
     "SHARE_RELEASE",
     "PUBLICATION_RELEASE"
@@ -207,6 +210,18 @@
     },
     "internal_pilot_closeout": {
       "required": ["scope_sha256", "pilot_id", "plan_sha256", "windows", "hard_stop_findings", "service_work_records", "decisions", "retention", "share_release", "shared_derived_paths", "shared_release_state", "checked_at", "result", "eligibility", "limitations", "state"],
+      "optional": []
+    },
+    "customer_delta_dossier": {
+      "required": ["internal_scope_sha256", "customer_scope_sha256", "customer_reference", "charter_revision", "environment_class", "production_scope", "site_sha256", "target_sha256", "build_sha256", "pool_sha256", "workload_authority", "data_authority", "evidence_policy", "recovery_plan", "support_plan", "incident_plan", "role_approvals", "valid_from", "valid_through", "changes", "affected_gates", "confidentiality_classes"],
+      "optional": []
+    },
+    "customer_delta_closeout": {
+      "required": ["internal_scope_sha256", "dossier", "sponsor_mandate", "internal_closeout_receipt", "customer_operation_go", "gate_reruns", "windows", "failures", "not_run_reasons", "generalisation_limits", "final_environment_state", "share_release", "publication_release", "checked_at", "result", "eligibility", "state"],
+      "optional": []
+    },
+    "customer_delta_validation": {
+      "required": ["closeout_sha256", "dossier_sha256", "checked_at", "result", "decision", "checks", "limitations", "state"],
       "optional": []
     },
     "index": {

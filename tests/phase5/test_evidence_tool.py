@@ -759,7 +759,8 @@ class PrivateValidationTests(unittest.TestCase):
                 workload = json.loads((root / "payload/workload.json").read_text())
                 workload["entries"][0][field] = value
                 write_json(root / "payload/workload.json", workload); reseal(root)
-                with self.assertRaisesRegex(rules.ContractError, "frozen definition"):
+                with self.assertRaisesRegex(rules.ContractError,
+                                            "frozen definition|customer-origin"):
                     tool.validate_private(root, scope_hash(root))
 
     def test_mandatory_site_not_run_forces_incomplete(self) -> None:

@@ -142,6 +142,16 @@ Private evidence cannot be named as shared-derived output without an exact
 `SHARE_RELEASE` receipt. See
 `docs/phase5/p5-7b-bounded-internal-pilot-closeout.md`.
 
+## Conditional customer delta
+
+`customer_delta.py` is an offline P5-8 dossier validator. It separates the
+internal closeout, customer mandate and operation approval, and refuses copied
+or missing gate evidence. It has no database, driver, dispatch, sharing or
+publication interface. In this tranche every outcome remains `NOT_RUN`; a
+complete dossier still cannot unlock customer execution.
+
+See `docs/phase5/p5-8-customer-delta.md`.
+
 ## Recovery rehearsal and site readiness
 
 `recovery_rehearsal.py` is an offline validator for evidence produced by human

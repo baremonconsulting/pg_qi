@@ -19,6 +19,17 @@ DIGEST = re.compile(r"^[0-9a-f]{64}$")
 IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 UTC = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.(?:\d{3}|\d{6}))?Z$")
 COMMON = {"schema_version", "contract_type", "contract_id"}
+CUSTOMER_DELTA_GATES = {"QUALIFICATION_AUTHORIZED", "DATA_EVIDENCE_AUTHORIZED",
+                        "RELEASE_SITE_QUALIFIED",
+                        "TOOLKIT_ACCEPTED", "ORACLE_QUALIFIED",
+                        "RESOURCE_ACCEPTED", "RECOVERY_REHEARSED",
+                        "CUSTOMER_OPERATION_GO"}
+CUSTOMER_DELTA_LIMITATIONS = {"NO_CUSTOMER_EXECUTION_PATH",
+                              "NO_PRODUCTION_AUTHORIZATION",
+                              "NO_AUTOMATIC_GATE_GRANT",
+                              "NO_SHARING_AUTHORIZATION",
+                              "NO_PUBLICATION_AUTHORIZATION",
+                              "NON_PRODUCTION_ATTESTATION_EXTERNAL"}
 
 
 class ContractError(ValueError):
@@ -330,6 +341,9 @@ def _validate_workload(value: dict[str, Any], catalog: dict[str, Any]) -> None:
                    "execution_authority": {"OPERATION_GO"}}
         for name, allowed in domains.items():
             _enum(item[name], name, allowed)
+        if (item["executed_sql_origin"] == "natural_customer" or
+                item["dataset_origin"] == "natural_customer"):
+            raise ContractError("customer-origin execution requires a separate customer path")
 
 
 def _validate_release(value: dict[str, Any], catalog: dict[str, Any]) -> None:
@@ -1289,6 +1303,122 @@ def _validate_internal_pilot_closeout(value: dict[str, Any], catalog: dict[str, 
         raise ContractError("closeout result and aggregate state disagree")
     if (result == "PASS") != (eligibility == "ELIGIBLE_FOR_HUMAN_GRANT"):
         raise ContractError("closeout result and eligibility disagree")
+
+
+def _validate_customer_delta_dossier(value: dict[str, Any], catalog: dict[str, Any]) -> None:
+    for name in ("internal_scope_sha256", "customer_scope_sha256", "site_sha256",
+                 "target_sha256", "build_sha256", "pool_sha256"):
+        _digest(value[name], name)
+    if value["internal_scope_sha256"] == value["customer_scope_sha256"]:
+        raise ContractError("customer scope must be a new revision")
+    _string(value["customer_reference"], "customer_reference")
+    _string(value["charter_revision"], "charter_revision")
+    _enum(value["environment_class"], "environment_class", {"NON_PRODUCTION"})
+    _enum(value["production_scope"], "production_scope", {"NONE"})
+    for name in ("workload_authority", "data_authority", "evidence_policy",
+                 "recovery_plan", "support_plan", "incident_plan"):
+        _artifact(value[name], name)
+    roles = _object(value["role_approvals"], "role_approvals")
+    required_roles = {"technical", "operational", "data", "legal", "customer"}
+    if set(roles) != required_roles:
+        raise ContractError("customer role approvals are incomplete")
+    approvers = [_string(roles[name], name) for name in sorted(required_roles)]
+    if len(set(approvers)) != len(approvers):
+        raise ContractError("customer approval roles must be independent")
+    start = _timestamp(value["valid_from"], "valid_from")
+    finish = _timestamp(value["valid_through"], "valid_through")
+    if finish <= start or finish - start > timedelta(days=14):
+        raise ContractError("customer charter window is invalid")
+    changes = _array(value["changes"], "changes", True)
+    dimensions: set[str] = set()
+    allowed_dimensions = {"workload", "dataset", "site", "build", "pool",
+                          "toolkit", "oracle", "resource", "recovery"}
+    for raw in changes:
+        item = _object(raw, "customer change")
+        if set(item) != {"dimension", "before_sha256", "after_sha256"}:
+            raise ContractError("customer change fields are not exact")
+        dimension = _enum(item["dimension"], "dimension", allowed_dimensions)
+        if dimension in dimensions:
+            raise ContractError("duplicate customer change dimension")
+        dimensions.add(dimension)
+        _digest(item["before_sha256"], "before_sha256")
+        _digest(item["after_sha256"], "after_sha256")
+        if item["before_sha256"] == item["after_sha256"]:
+            raise ContractError("declared customer change is unchanged")
+    gates = set(_identifier_array(value["affected_gates"], "affected_gates", True))
+    if not gates <= CUSTOMER_DELTA_GATES:
+        raise ContractError("unknown customer affected gate")
+    classes = set(_identifier_array(value["confidentiality_classes"],
+                                    "confidentiality_classes", True))
+    required_classes = {"CUSTOMER_SQL", "CUSTOMER_DATA", "CUSTOMER_IDENTITY",
+                        "CUSTOMER_QUOTES", "CUSTOMER_RESULTS"}
+    if classes != required_classes:
+        raise ContractError("customer confidentiality classes are incomplete")
+
+
+def _validate_customer_delta_closeout(value: dict[str, Any], catalog: dict[str, Any]) -> None:
+    if value["internal_scope_sha256"] is not None:
+        _digest(value["internal_scope_sha256"], "internal_scope_sha256")
+    for name in ("dossier", "sponsor_mandate", "internal_closeout_receipt",
+                 "customer_operation_go", "share_release", "publication_release"):
+        if value[name] is not None:
+            _artifact(value[name], name)
+    reruns = _array(value["gate_reruns"], "gate_reruns")
+    seen: set[str] = set()
+    for raw in reruns:
+        item = _object(raw, "gate rerun")
+        if set(item) != {"gate_id", "status", "evidence", "receipt"}:
+            raise ContractError("gate rerun fields are not exact")
+        gate = _enum(item["gate_id"], "gate_id", CUSTOMER_DELTA_GATES)
+        if gate in seen:
+            raise ContractError("duplicate customer gate rerun")
+        seen.add(gate)
+        status = _enum(item["status"], "gate status", {"NOT_RUN", "PASS", "FAIL"})
+        for name in ("evidence", "receipt"):
+            if item[name] is not None:
+                _artifact(item[name], name)
+        if (status == "NOT_RUN") != (item["evidence"] is None and item["receipt"] is None):
+            raise ContractError("gate status and evidence disagree")
+    if seen != CUSTOMER_DELTA_GATES:
+        raise ContractError("customer gate matrix is incomplete")
+    if _array(value["windows"], "windows"):
+        raise ContractError("customer execution windows are unsupported")
+    _identifier_array(value["failures"], "failures")
+    reasons = set(_identifier_array(value["not_run_reasons"], "not_run_reasons", True))
+    allowed_reasons = {"INTERNAL_CLOSEOUT_NOT_GRANTED", "NO_CUSTOMER",
+                       "NO_MANDATE", "NO_SPONSOR_DECISION",
+                       "CUSTOMER_EXECUTION_UNAVAILABLE"}
+    if not reasons <= allowed_reasons:
+        raise ContractError("unknown customer NOT_RUN reason")
+    _identifier_array(value["generalisation_limits"], "generalisation_limits", True)
+    _enum(value["final_environment_state"], "final_environment_state",
+          {"NOT_TOUCHED", "RETIRED_OFF"})
+    _timestamp(value["checked_at"], "checked_at")
+    _enum(value["result"], "customer delta result", {"NOT_RUN"})
+    _enum(value["eligibility"], "customer delta eligibility", {"REFUSED"})
+    _state(value["state"], catalog)
+    if (value["state"]["technical_result"] != "NOT_RUN" or
+            value["state"]["evidence_completeness"] not in {"NONE", "COMPLETE"} or
+            value["state"]["value_outcome"] != "NOT_EVALUATED" or
+            value["state"]["project_decision"] not in {"PAUSE", "STOP"}):
+        raise ContractError("customer NOT_RUN state is contradictory")
+
+
+def _validate_customer_delta_validation(value: dict[str, Any], catalog: dict[str, Any]) -> None:
+    _digest(value["closeout_sha256"], "closeout_sha256")
+    if value["dossier_sha256"] is not None:
+        _digest(value["dossier_sha256"], "dossier_sha256")
+    _timestamp(value["checked_at"], "checked_at")
+    _enum(value["result"], "customer delta validation result", {"NOT_RUN", "REFUSED"})
+    _enum(value["decision"], "customer delta validation decision", {"REFUSED"})
+    _identifier_array(value["checks"], "checks", True)
+    if set(_identifier_array(value["limitations"], "limitations", True)) != \
+            CUSTOMER_DELTA_LIMITATIONS:
+        raise ContractError("customer delta limitations are incomplete")
+    _state(value["state"], catalog)
+    expected = "NOT_RUN" if value["result"] == "NOT_RUN" else "FAIL"
+    if value["state"]["technical_result"] != expected:
+        raise ContractError("customer validation state contradicts result")
 
 
 def _validate_index(value: dict[str, Any], catalog: dict[str, Any]) -> None:

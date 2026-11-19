@@ -1,0 +1,234 @@
+#!/usr/bin/env python3
+"""Offline, non-executing validator for a conditional customer delta dossier."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import stat
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+
+try:
+    from .contract_rules import (ContractError, CUSTOMER_DELTA_GATES,
+        CUSTOMER_DELTA_LIMITATIONS, canonical_bytes, canonical_sha256,
+        strict_load_path, validate_contract, verify_artifact)
+except ImportError:
+    from contract_rules import (ContractError, CUSTOMER_DELTA_GATES,
+        CUSTOMER_DELTA_LIMITATIONS, canonical_bytes, canonical_sha256,
+        strict_load_path, validate_contract, verify_artifact)
+
+
+class CustomerDeltaError(RuntimeError):
+    """A fixed-message refusal from the offline customer-delta validator."""
+
+
+CHANGE_GATES = {
+    "workload": {"QUALIFICATION_AUTHORIZED", "ORACLE_QUALIFIED",
+                 "CUSTOMER_OPERATION_GO"},
+    "dataset": {"DATA_EVIDENCE_AUTHORIZED", "ORACLE_QUALIFIED",
+                "CUSTOMER_OPERATION_GO"},
+    "site": {"RELEASE_SITE_QUALIFIED", "RESOURCE_ACCEPTED",
+             "RECOVERY_REHEARSED", "CUSTOMER_OPERATION_GO"},
+    "build": {"RELEASE_SITE_QUALIFIED", "TOOLKIT_ACCEPTED",
+              "QUALIFICATION_AUTHORIZED", "CUSTOMER_OPERATION_GO"},
+    "pool": {"RESOURCE_ACCEPTED", "RECOVERY_REHEARSED",
+             "CUSTOMER_OPERATION_GO"},
+    "toolkit": {"TOOLKIT_ACCEPTED", "QUALIFICATION_AUTHORIZED",
+                "CUSTOMER_OPERATION_GO"},
+    "oracle": {"ORACLE_QUALIFIED", "QUALIFICATION_AUTHORIZED",
+               "CUSTOMER_OPERATION_GO"},
+    "resource": {"RESOURCE_ACCEPTED", "CUSTOMER_OPERATION_GO"},
+    "recovery": {"RECOVERY_REHEARSED", "CUSTOMER_OPERATION_GO"},
+}
+
+
+def _root(path: Path) -> Path:
+    resolved = path.resolve(strict=True)
+    info = path.stat()
+    if (path.is_symlink() or resolved != path.absolute() or not path.is_dir() or
+            info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700):
+        raise CustomerDeltaError("invalid_customer_delta_root")
+    return resolved
+
+
+def _load(root: Path, relative: str, expected: str) -> dict[str, Any]:
+    try:
+        value = strict_load_path(Path(relative), root)
+    except (ContractError, OSError) as exc:
+        raise CustomerDeltaError(f"invalid_{expected}") from exc
+    if value.get("contract_type") != expected:
+        raise CustomerDeltaError(f"invalid_{expected}")
+    return value
+
+
+def _artifact(root: Path, value: dict[str, Any], expected: str) -> dict[str, Any]:
+    try:
+        verify_artifact(root, value)
+        return _load(root, value["path"], expected)
+    except (ContractError, CustomerDeltaError, KeyError, TypeError) as exc:
+        raise CustomerDeltaError(f"invalid_{expected}_artifact") from exc
+
+
+def _time(value: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (AttributeError, ValueError) as exc:
+        raise CustomerDeltaError("invalid_customer_delta_time") from exc
+    if parsed.tzinfo is None:
+        raise CustomerDeltaError("invalid_customer_delta_time")
+    return parsed.astimezone(timezone.utc)
+
+
+def _state(result: str) -> dict[str, str]:
+    return {"lifecycle": "CLOSED", "technical_result": result,
+            "evidence_completeness": "NONE" if result == "NOT_RUN" else "INVALID",
+            "exit_state": "NOT_EXITED", "value_outcome": "NOT_EVALUATED",
+            "project_decision": "PAUSE"}
+
+
+def _expected_affected(dossier: dict[str, Any]) -> set[str]:
+    result: set[str] = set()
+    for change in dossier["changes"]:
+        result.update(CHANGE_GATES[change["dimension"]])
+    return result
+
+
+def validate_customer_delta(bundle: Path,
+                            now: datetime | None = None) -> dict[str, Any]:
+    """Validate a preparation dossier; this tranche can only return NOT_RUN."""
+    root = _root(bundle)
+    closeout = _load(root, "customer-delta-closeout.json", "customer_delta_closeout")
+    checked = now or datetime.now(timezone.utc)
+    if checked.tzinfo is None:
+        raise CustomerDeltaError("customer_delta_clock_is_not_utc_aware")
+    recorded = _time(closeout["checked_at"])
+    if recorded > checked.astimezone(timezone.utc):
+        raise CustomerDeltaError("customer_delta_closeout_from_future")
+    matrix = {item["gate_id"]: item for item in closeout["gate_reruns"]}
+    if set(matrix) != CUSTOMER_DELTA_GATES:
+        raise CustomerDeltaError("customer_gate_matrix_incomplete")
+
+    authority_names = ("dossier", "sponsor_mandate", "internal_closeout_receipt",
+                       "customer_operation_go")
+    present = {name for name in authority_names if closeout[name] is not None}
+    if not present:
+        expected_reasons = {"INTERNAL_CLOSEOUT_NOT_GRANTED", "NO_CUSTOMER",
+                            "NO_MANDATE", "NO_SPONSOR_DECISION",
+                            "CUSTOMER_EXECUTION_UNAVAILABLE"}
+        if (closeout["internal_scope_sha256"] is not None or
+                set(closeout["not_run_reasons"]) != expected_reasons or
+                any(item["status"] != "NOT_RUN" for item in matrix.values()) or
+                closeout["failures"] or closeout["final_environment_state"] != "NOT_TOUCHED" or
+                closeout["share_release"] is not None or
+                closeout["publication_release"] is not None):
+            raise CustomerDeltaError("customer_not_run_false_claim")
+        dossier_sha = None
+        checks = ["NO_CUSTOMER_MATERIAL", "ALL_CUSTOMER_GATES_NOT_RUN",
+                  "ENVIRONMENT_NOT_TOUCHED", "NO_RELEASE_AUTHORITY"]
+    else:
+        if present != set(authority_names):
+            raise CustomerDeltaError("customer_authority_graph_incomplete")
+        dossier = _artifact(root, closeout["dossier"], "customer_delta_dossier")
+        dossier_sha = canonical_sha256(dossier)
+        for name in ("workload_authority", "data_authority", "evidence_policy",
+                     "recovery_plan", "support_plan", "incident_plan"):
+            try:
+                verify_artifact(root, dossier[name])
+            except ContractError as exc:
+                raise CustomerDeltaError("customer_dossier_support_artifact_invalid") from exc
+        if (closeout["internal_scope_sha256"] != dossier["internal_scope_sha256"] or
+                set(dossier["affected_gates"]) != _expected_affected(dossier)):
+            raise CustomerDeltaError("customer_delta_scope_or_gate_claim_invalid")
+        internal = _artifact(root, closeout["internal_closeout_receipt"], "gate_receipt")
+        mandate = _artifact(root, closeout["sponsor_mandate"], "gate_receipt")
+        customer_go = _artifact(root, closeout["customer_operation_go"],
+                                "approval_receipt")
+        if (internal["gate_id"] != "INTERNAL_CLOSEOUT" or
+                internal["scope_sha256"] != dossier["internal_scope_sha256"] or
+                mandate["gate_id"] != "CUSTOMER_PILOT_MANDATE" or
+                mandate["scope_sha256"] != dossier["customer_scope_sha256"] or
+                mandate["evidence_sha256"] != closeout["dossier"]["sha256"] or
+                mandate.get("subject_id") != dossier["customer_reference"] or
+                customer_go["receipt_kind"] != "CUSTOMER_OPERATION_GO" or
+                customer_go["scope_sha256"] != dossier["customer_scope_sha256"] or
+                customer_go["preflight_sha256"] != dossier["site_sha256"] or
+                customer_go["recovery_validation_sha256"] !=
+                dossier["recovery_plan"]["sha256"] or
+                len({internal["nonce"], mandate["nonce"], customer_go["nonce"]}) != 3 or
+                len({internal["contract_id"], mandate["contract_id"],
+                     customer_go["contract_id"]}) != 3):
+            raise CustomerDeltaError("customer_authority_graph_invalid")
+        mandate_time = _time(mandate["approved_at"])
+        go_start, go_finish = _time(customer_go["valid_from"]), _time(customer_go["valid_through"])
+        charter_start, charter_finish = (_time(dossier["valid_from"]),
+                                         _time(dossier["valid_through"]))
+        if (mandate_time < _time(internal["approved_at"]) or
+                go_start < mandate_time or go_finish <= go_start or
+                go_finish - go_start > timedelta(days=14) or
+                not charter_start <= go_start < go_finish <= charter_finish or
+                not go_start <= recorded < go_finish or
+                set(customer_go["approvals"]) != set(dossier["role_approvals"].values())):
+            raise CustomerDeltaError("customer_operation_window_or_roles_invalid")
+        affected = set(dossier["affected_gates"])
+        for gate, item in matrix.items():
+            expected_status = "PASS" if gate in affected else "NOT_RUN"
+            if item["status"] != expected_status:
+                raise CustomerDeltaError("customer_gate_rerun_status_invalid")
+            if expected_status == "PASS":
+                evidence = item["evidence"]
+                receipt = _artifact(root, item["receipt"],
+                                    "approval_receipt" if gate == "CUSTOMER_OPERATION_GO"
+                                    else "gate_receipt")
+                verify_artifact(root, evidence)
+                if gate == "CUSTOMER_OPERATION_GO":
+                    if receipt != customer_go:
+                        raise CustomerDeltaError("customer_go_rerun_differs_from_go")
+                elif (receipt["gate_id"] != gate or
+                      receipt["scope_sha256"] != dossier["customer_scope_sha256"] or
+                      receipt["evidence_sha256"] != evidence["sha256"] or
+                      _time(receipt["approved_at"]) < mandate_time):
+                    raise CustomerDeltaError("customer_gate_rerun_invalid")
+        if (closeout["not_run_reasons"] != ["CUSTOMER_EXECUTION_UNAVAILABLE"] or
+                closeout["final_environment_state"] != "NOT_TOUCHED" or
+                closeout["share_release"] is not None or
+                closeout["publication_release"] is not None):
+            raise CustomerDeltaError("prepared_customer_delta_false_execution_claim")
+        checks = ["INTERNAL_CLOSEOUT_BOUND", "CUSTOMER_MANDATE_BOUND",
+                  "DELTA_GATE_MATRIX_COMPLETE", "CUSTOMER_GO_BOUNDED",
+                  "CUSTOMER_EXECUTION_UNAVAILABLE"]
+
+    validation = {"schema_version": 1, "contract_type": "customer_delta_validation",
+        "contract_id": "customer-delta-validation", "closeout_sha256": canonical_sha256(closeout),
+        "dossier_sha256": dossier_sha, "checked_at": closeout["checked_at"],
+        "result": "NOT_RUN", "decision": "REFUSED", "checks": checks,
+        "limitations": sorted(CUSTOMER_DELTA_LIMITATIONS), "state": _state("NOT_RUN")}
+    validate_contract(validation)
+    return validation
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--bundle", required=True, type=Path)
+    parser.add_argument("--output", required=True, type=Path)
+    args = parser.parse_args(argv)
+    try:
+        result = validate_customer_delta(args.bundle)
+        descriptor = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                             os.O_NOFOLLOW, 0o600)
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(canonical_bytes(result)); stream.flush(); os.fsync(stream.fileno())
+        print(json.dumps({"result": result["result"], "decision": result["decision"]},
+                         sort_keys=True, separators=(",", ":")))
+        return 0
+    except (CustomerDeltaError, ContractError, OSError) as exc:
+        print(json.dumps({"result": "REFUSED", "reason": str(exc)}, sort_keys=True,
+                         separators=(",", ":")), file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
