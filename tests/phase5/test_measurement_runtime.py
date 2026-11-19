@@ -22,7 +22,8 @@ from tools.phase5.contract_rules import (ContractError, canonical_bytes,
 from tools.phase5.control_runtime import ResourcePolicy, ResourceSample, StopController
 from tools.phase5.measurement_runtime import (AuditedMeasurementSession,
     MeasurementError, MeasurementRunner,
-    load_measurement_plan, resource_feed_sha256, validate_level_authorization)
+    load_measurement_plan, resource_feed_sha256, resource_policy_sha256,
+    validate_level_authorization)
 from tools.phase5.pilot_runtime import SequenceJournal
 import tools.phase5.measurement_runtime as measurement_runtime
 from tools.phase5.recovery_rehearsal import validate_rehearsal_contracts
@@ -33,6 +34,20 @@ RELEASE_STACK = canonical_sha256({"server_build_sha256": "3" * 64,
     "pg_qi_sha256": "4" * 64, "pg_duckdb_sha256": "5" * 64})
 BASELINE_STACK = canonical_sha256({"server_build_sha256": "8" * 64,
     "pg_qi_sha256": "9" * 64, "pg_duckdb_sha256": "a" * 64})
+
+
+def policy_value(scope_sha256: str) -> dict:
+    return {"schema_version": 1, "document_type": "resource_policy",
+        "policy_id": "measurement-policy", "scope_sha256": scope_sha256, "feed_version": 1,
+        "source_id": "local-proc-feed", "interval_ms": 50, "max_age_ms": 60000,
+        "stop_overshoot_ms": 50,
+        "limits": {"rss_bytes": 2**40, "cpu_milliseconds": 2**40,
+                   "evidence_bytes": 2**30, "inflight_requests": 2},
+        "units": {"rss_bytes": "bytes", "cpu_milliseconds": "milliseconds",
+                  "evidence_bytes": "bytes", "inflight_requests": "count"}}
+
+
+RESOURCE_POLICY_DIGEST = resource_policy_sha256(ResourcePolicy.parse(policy_value(ZERO)))
 
 
 def write_document(path: Path, value: dict) -> None:
@@ -92,12 +107,13 @@ def plan(value_mode: str = "descriptive", levels: int = 2,
         "contract_id": "measurement-plan-1",
         "closure_inputs": {name: character * 64 for name, character in (
             ("workload_definition_sha256", "1"), ("qualification_sha256", "1"),
-            ("baseline_manifest_sha256", "3"), ("resource_policy_sha256", "4"),
+            ("baseline_manifest_sha256", "3"),
             ("release_sha256", "5"), ("target_sha256", "6"),
             ("dataset_sha256", "7"), ("toolkit_sha256", "8"),
             ("recovery_plan_sha256", "a"),
             ("release_configuration_sha256", "6"),
             ("baseline_configuration_sha256", "b"))} | {
+                "resource_policy_sha256": RESOURCE_POLICY_DIGEST,
                 "release_artifact_sha256": RELEASE_STACK,
                 "baseline_artifact_sha256": BASELINE_STACK},
         "required_scenarios": scenarios, "seed": 8241,
@@ -136,14 +152,7 @@ def measurement_scope(value: dict) -> tuple[dict, str]:
 
 
 def resource_policy(scope_sha256: str) -> ResourcePolicy:
-    return ResourcePolicy.parse({"schema_version": 1, "document_type": "resource_policy",
-        "policy_id": "measurement-policy", "scope_sha256": scope_sha256, "feed_version": 1,
-        "source_id": "local-proc-feed", "interval_ms": 50, "max_age_ms": 60000,
-        "stop_overshoot_ms": 50,
-        "limits": {"rss_bytes": 2**40, "cpu_milliseconds": 2**40,
-                   "evidence_bytes": 2**30, "inflight_requests": 2},
-        "units": {"rss_bytes": "bytes", "cpu_milliseconds": "milliseconds",
-                  "evidence_bytes": "bytes", "inflight_requests": "count"}})
+    return ResourcePolicy.parse(policy_value(scope_sha256))
 
 
 def controller(root: Path, policy: ResourcePolicy) -> tuple[SequenceJournal, StopController]:
@@ -499,6 +508,47 @@ class PlanTests(unittest.TestCase):
                 MeasurementRunner(changed, canonical_sha256(changed), scope, scope_digest,
                     policy, original["closure_inputs"]["resource_policy_sha256"],
                     stop, output, "mutated-plan-run")
+            journal.close()
+
+    def test_runtime_policy_must_match_frozen_digest_and_controller(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); root.chmod(0o700)
+            value = plan(levels=1); scope, scope_digest = measurement_scope(value)
+            approved = resource_policy(scope_digest)
+            with self.assertRaises(TypeError):
+                approved.limits["inflight_requests"] = 99
+            direct = ResourcePolicy(approved.policy_id, approved.scope_sha256,
+                approved.feed_version, approved.source_id, approved.interval_ms,
+                approved.max_age_ms, approved.stop_overshoot_ms,
+                dict(approved.limits), dict(approved.units))
+            with self.assertRaises(TypeError):
+                direct.limits["inflight_requests"] = 99
+            journal, stop = controller(root, approved)
+            output = root / "output"; output.mkdir(mode=0o700)
+            changed_value = policy_value(scope_digest)
+            changed_value["limits"]["inflight_requests"] = 1
+            changed = ResourcePolicy.parse(changed_value)
+            with self.assertRaisesRegex(MeasurementError, "policy_digest_mismatch"):
+                MeasurementRunner(value, canonical_sha256(value), scope, scope_digest,
+                    changed, value["closure_inputs"]["resource_policy_sha256"],
+                    stop, output, "changed-policy-run")
+            with self.assertRaisesRegex(MeasurementError, "controller_policy_mismatch"):
+                MeasurementRunner(value, canonical_sha256(value), scope, scope_digest,
+                    approved, value["closure_inputs"]["resource_policy_sha256"],
+                    StopController(journal, changed), output, "changed-controller-run")
+            with self.assertRaisesRegex(MeasurementError, "controller_policy_mismatch"):
+                MeasurementRunner(value, canonical_sha256(value), scope, scope_digest,
+                    approved, value["closure_inputs"]["resource_policy_sha256"],
+                    StopController(journal, resource_policy(scope_digest)), output,
+                    "equal-but-distinct-controller-run")
+            baseline_digest = resource_policy_sha256(approved)
+            for field, replacement in (("policy_id", "other-policy"),
+                    ("feed_version", 2), ("source_id", "other-feed"),
+                    ("interval_ms", 51), ("max_age_ms", 60001),
+                    ("stop_overshoot_ms", 51)):
+                changed_fields = policy_value(scope_digest); changed_fields[field] = replacement
+                self.assertNotEqual(resource_policy_sha256(ResourcePolicy.parse(changed_fields)),
+                                    baseline_digest, field)
             journal.close()
 
 

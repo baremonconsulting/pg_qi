@@ -12,6 +12,11 @@ Before the first window, the bundle must bind all of the following:
 - the exact frozen measurement plan and current `OPERATION_GO`;
 - a passing P5-7A canary validation and a separate human
   `CANARY_ACCEPTED` gate receipt bound to that validation digest;
+- the original P5-7A `canary-outcome.json` and the exact externally stored
+  consumed-attempt marker and its paired outcome-digest record in the GO-bound
+  canary ledger; closeout reopens all three,
+  verifies the ledger identity and requires the outcome validation to equal the
+  accepted validation byte-for-byte at the document level;
 - one ordered window for every approved concurrency level, starting at level
   one without gaps;
 - the exact per-level authorization and a unique private evidence directory;

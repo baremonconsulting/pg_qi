@@ -13,10 +13,12 @@ import signal
 import stat
 import threading
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
+from types import MappingProxyType
 
 try:
     from .pilot_runtime import SequenceJournal
@@ -126,8 +128,26 @@ class ResourcePolicy:
     interval_ms: int
     max_age_ms: int
     stop_overshoot_ms: int
-    limits: dict[str, int]
-    units: dict[str, str]
+    limits: Mapping[str, int]
+    units: Mapping[str, str]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "limits", MappingProxyType(dict(self.limits)))
+        object.__setattr__(self, "units", MappingProxyType(dict(self.units)))
+
+    def frozen_definition(self) -> dict[str, Any]:
+        """Return the scope-independent policy definition frozen by the plan.
+
+        ``scope_sha256`` is deliberately excluded: the scope already binds the
+        policy digest, so including the scope digest here would create a hash
+        cycle.  The runtime checks that binding separately.
+        """
+        return {"schema_version": 1, "document_type": "resource_policy",
+            "policy_id": self.policy_id, "feed_version": self.feed_version,
+            "source_id": self.source_id, "interval_ms": self.interval_ms,
+            "max_age_ms": self.max_age_ms,
+            "stop_overshoot_ms": self.stop_overshoot_ms,
+            "limits": dict(self.limits), "units": dict(self.units)}
 
     @classmethod
     def parse(cls, value: dict[str, Any]) -> "ResourcePolicy":
@@ -154,7 +174,8 @@ class ResourcePolicy:
         if units != METRIC_UNITS:
             raise ControlError("invalid_resource_units")
         return cls(policy_id, value["scope_sha256"], feed_version, source_id,
-                   interval_ms, max_age_ms, overshoot, parsed_limits, dict(units))
+                   interval_ms, max_age_ms, overshoot,
+                   MappingProxyType(parsed_limits), MappingProxyType(dict(units)))
 
 
 @dataclass(frozen=True)
@@ -356,6 +377,10 @@ class StopController:
     def stopped(self) -> bool:
         with self._lock:
             return self._stopped
+
+    @property
+    def policy(self) -> ResourcePolicy:
+        return self._policy
 
     @property
     def reason(self) -> str | None:

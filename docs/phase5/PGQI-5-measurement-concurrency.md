@@ -17,6 +17,11 @@ invalidates an earlier operation approval.
 The plan itself deliberately has no `scope_sha256`, avoiding a circular hash.
 At validation time, its direct workload, qualification, resource-policy,
 release, target and toolkit identities must match the frozen scope inputs.
+The resource-policy digest is recomputed from every enforced policy field
+(identity, feed definition, timing, limits and units). The redundant
+`scope_sha256` link is excluded from that digest to avoid a scope/policy hash
+cycle, then checked separately against the active scope. The stop controller
+must hold the same parsed policy object.
 
 ## Execution order
 

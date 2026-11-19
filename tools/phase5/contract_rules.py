@@ -304,6 +304,8 @@ def _validate_approval_receipt(value: dict[str, Any], catalog: dict[str, Any]) -
     start = _timestamp(value["valid_from"], "valid_from")
     end = _timestamp(value["valid_through"], "valid_through")
     _identifier_array(value["approvals"], "approvals", True); _string(value["nonce"], "nonce")
+    if "canary_ledger_sha256" in value:
+        _digest(value["canary_ledger_sha256"], "canary_ledger_sha256")
     if start >= end:
         raise ContractError("approval validity window is empty or reversed")
     bindings = ("dossier_sha256", "mandate_sha256")

@@ -20,7 +20,8 @@ try:
         aggregate_pass, canonical_bytes, canonical_sha256, export_receipt_matches,
         resolve_bundle_path,
         strict_load_path, validate_contract, verify_artifact)
-    from .canary_runtime import CanaryError, validate_canary_bundle
+    from .canary_runtime import (CanaryError, validate_canary_bundle,
+        validate_consumed_attempt)
     from .evidence_tool import EvidenceError, validate_private, validate_shared
     from .measurement_runtime import MeasurementError, validate_level_authorization
 except ImportError:
@@ -28,7 +29,7 @@ except ImportError:
         aggregate_pass, canonical_bytes, canonical_sha256, export_receipt_matches,
         resolve_bundle_path,
         strict_load_path, validate_contract, verify_artifact)
-    from canary_runtime import CanaryError, validate_canary_bundle
+    from canary_runtime import CanaryError, validate_canary_bundle, validate_consumed_attempt
     from evidence_tool import EvidenceError, validate_private, validate_shared
     from measurement_runtime import MeasurementError, validate_level_authorization
 
@@ -373,6 +374,11 @@ def validate_internal_pilot(root: Path,
     if ({key: value for key, value in canary_result.items() if key != "checked_at"} !=
             {key: value for key, value in canary_validation.items() if key != "checked_at"}):
         raise CloseoutError("accepted_canary_differs_from_recomputed_canary")
+    try:
+        validate_consumed_attempt(
+            resolve_bundle_path(root, Path(plan["canary_bundle_path"])), canary_validation)
+    except (CanaryError, ContractError, OSError) as exc:
+        raise CloseoutError("pilot_canary_attempt_not_consumed") from exc
     levels = measurement_plan["concurrency_levels"]
     approved = plan["approved_windows"]
     if (len(approved) != len(levels) or

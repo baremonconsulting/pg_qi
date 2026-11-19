@@ -38,6 +38,12 @@ UTC = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.(?:\d{3}|\d{6}))?Z$"
 CONTROL_SQL = (b"SHOW duckdb.force_execution\n",
                b"SELECT unsupported_control()\n", b"SELECT $1::integer\n")
 CONTROL_SQL_SHA256 = [hashlib.sha256(item).hexdigest() for item in CONTROL_SQL]
+AUTHORIZATION_FIELDS = {
+    "schema_version", "document_type", "scope_sha256", "plan_sha256",
+    "requested_level", "approval_reference", "operation_go",
+    "operation_preflight", "operation_rehearsal_mandate", "operation_recovery_r1",
+    "operation_recovery_r2", "operation_operator_walkthrough",
+    "operation_recovery_incident", "operation_recovery_validation", "previous_level"}
 
 
 def _time(value: Any, name: str) -> datetime:
@@ -97,7 +103,33 @@ def _raw(root: Path, artifact: dict[str, Any], fields: set[str], kind: str) -> d
                            parse_constant=lambda _item: (_ for _ in ()).throw(
                                CanaryError("invalid_canary_number")))
     except (OSError, UnicodeError, json.JSONDecodeError, ContractError,
-            KeyError, TypeError) as exc:
+            KeyError, TypeError, ValueError, RecursionError) as exc:
+        raise CanaryError(f"invalid_{kind}") from exc
+    if not isinstance(value, dict) or set(value) != fields or value.get("document_type") != kind:
+        raise CanaryError(f"invalid_{kind}")
+    return value
+
+
+def _plain_document(root: Path, relative: str, fields: set[str], kind: str) -> dict[str, Any]:
+    try:
+        path = resolve_bundle_path(root, Path(relative))
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            info = os.fstat(descriptor)
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or
+                    info.st_nlink != 1 or stat.S_IMODE(info.st_mode) & 0o077 or
+                    info.st_size > 1024 * 1024):
+                raise CanaryError(f"invalid_{kind}")
+            payload = os.read(descriptor, info.st_size + 1)
+            if len(payload) != info.st_size:
+                raise CanaryError(f"invalid_{kind}")
+        finally:
+            os.close(descriptor)
+        value = json.loads(payload.decode("utf-8"), object_pairs_hook=lambda pairs: _pairs(pairs),
+                           parse_constant=lambda _item: (_ for _ in ()).throw(
+                               CanaryError("invalid_canary_number")))
+    except (OSError, UnicodeError, json.JSONDecodeError, ContractError,
+            KeyError, TypeError, ValueError, RecursionError) as exc:
         raise CanaryError(f"invalid_{kind}") from exc
     if not isinstance(value, dict) or set(value) != fields or value.get("document_type") != kind:
         raise CanaryError(f"invalid_{kind}")
@@ -126,6 +158,20 @@ def _artifact_identity(root: Path, artifact: dict[str, Any]) -> tuple[int, int]:
         return info.st_dev, info.st_ino
     finally:
         os.close(descriptor)
+
+
+def _ledger_authority_sha256(plan: dict[str, Any]) -> str:
+    return canonical_sha256(plan["attempt_ledger"])
+
+
+def _approved_operation_go(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
+    authorization = _raw(root, plan["level_authorization"], AUTHORIZATION_FIELDS,
+                         "measurement_level_authorization")
+    operation_go = _artifact_contract(root, authorization["operation_go"], "approval_receipt")
+    if (canonical_sha256(operation_go) != plan["operation_go_sha256"] or
+            operation_go.get("canary_ledger_sha256") != _ledger_authority_sha256(plan)):
+        raise CanaryError("canary_ledger_not_bound_by_operation_go")
+    return operation_go
 
 
 def validate_canary_bundle(root: Path, now: datetime | None = None) -> dict[str, Any]:
@@ -175,13 +221,8 @@ def validate_canary_bundle(root: Path, now: datetime | None = None) -> dict[str,
     corpus = {item["query_id"]: item for item in qualification["execution_corpus"]}
     baselines = {item["query_id"]: item for item in
                  qualification["baseline_authority"]["cases"]}
-    authorization = _raw(root, plan["level_authorization"], {
-        "schema_version", "document_type", "scope_sha256", "plan_sha256",
-        "requested_level", "approval_reference", "operation_go",
-        "operation_preflight", "operation_rehearsal_mandate", "operation_recovery_r1",
-        "operation_recovery_r2", "operation_operator_walkthrough",
-        "operation_recovery_incident", "operation_recovery_validation", "previous_level"},
-        "measurement_level_authorization")
+    authorization = _raw(root, plan["level_authorization"], AUTHORIZATION_FIELDS,
+                         "measurement_level_authorization")
     started = _time(run["started_at"], "canary_started")
     try:
         level = validate_level_authorization(authorization, measurement_plan,
@@ -194,6 +235,7 @@ def validate_canary_bundle(root: Path, now: datetime | None = None) -> dict[str,
     recovery_r2 = _artifact_contract(root, authorization["operation_recovery_r2"], "recovery_r2")
     if (level["level"] != 1 or level["sessions"] != 1 or
             canonical_sha256(operation_go) != plan["operation_go_sha256"] or
+            operation_go.get("canary_ledger_sha256") != _ledger_authority_sha256(plan) or
             run["operation_go_sha256"] != plan["operation_go_sha256"]):
         raise CanaryError("canary_operation_go_or_level_mismatch")
 
@@ -436,14 +478,84 @@ def _consume_attempt(ledger: Path, plan: dict[str, Any]) -> Path:
         verify_artifact(resolved, expected["identity"])
     except ContractError as exc:
         raise CanaryError("canary_attempt_ledger_identity_mismatch") from exc
-    identity = hashlib.sha256(canonical_bytes({"scope_sha256": plan["scope_sha256"],
-        "canary_id": plan["canary_id"],
-        "operation_go_sha256": plan["operation_go_sha256"]})).hexdigest()
+    identity = _attempt_identity(plan)
     marker = resolved / f"{identity}.json"
     _write_outcome(marker, {"schema_version": 1, "document_type": "canary_attempt",
         "scope_sha256": plan["scope_sha256"], "canary_id": plan["canary_id"],
         "operation_go_sha256": plan["operation_go_sha256"], "state": "CONSUMED"})
     return marker
+
+
+def _attempt_identity(plan: dict[str, Any]) -> str:
+    """One attempt per scope and OPERATION_GO, independent of canary labels."""
+    return hashlib.sha256(canonical_bytes({"scope_sha256": plan["scope_sha256"],
+        "operation_go_sha256": plan["operation_go_sha256"]})).hexdigest()
+
+
+def _record_attempt_outcome(marker: Path, outcome: dict[str, Any]) -> Path:
+    record = marker.with_name(f"{marker.stem}.outcome.json")
+    _write_outcome(record, {"schema_version": 1, "document_type": "canary_attempt_outcome",
+        "attempt_marker_sha256": canonical_sha256(_plain_document(marker.parent, marker.name,
+            {"schema_version", "document_type", "scope_sha256", "canary_id",
+             "operation_go_sha256", "state"}, "canary_attempt")),
+        "outcome_sha256": canonical_sha256(outcome), "decision": outcome["decision"],
+        "result": outcome["result"]})
+    return record
+
+
+def validate_consumed_attempt(bundle: Path,
+                              expected_validation: dict[str, Any]) -> dict[str, Any]:
+    """Verify the durable attempt and PASS outcome consumed by pilot closeout."""
+    root = _root(bundle)
+    plan = _load_contract(root, "canary-plan.json", "canary_plan")
+    if canonical_sha256(plan) != expected_validation.get("plan_sha256"):
+        raise CanaryError("canary_outcome_plan_mismatch")
+    _approved_operation_go(root, plan)
+    ledger = _root(Path(plan["attempt_ledger"]["path"]))
+    expected_ledger = plan["attempt_ledger"]
+    info = ledger.stat()
+    if (info.st_dev != expected_ledger["device"] or info.st_ino != expected_ledger["inode"]):
+        raise CanaryError("canary_attempt_ledger_identity_mismatch")
+    try:
+        verify_artifact(ledger, expected_ledger["identity"])
+    except ContractError as exc:
+        raise CanaryError("canary_attempt_ledger_identity_mismatch") from exc
+    marker = _plain_document(ledger, f"{_attempt_identity(plan)}.json",
+        {"schema_version", "document_type", "scope_sha256", "canary_id",
+         "operation_go_sha256", "state"}, "canary_attempt")
+    expected_marker = {"schema_version": 1, "document_type": "canary_attempt",
+        "scope_sha256": plan["scope_sha256"], "canary_id": plan["canary_id"],
+        "operation_go_sha256": plan["operation_go_sha256"], "state": "CONSUMED"}
+    if marker != expected_marker:
+        raise CanaryError("canary_attempt_marker_mismatch")
+    outcome = _plain_document(root, "canary-outcome.json",
+        {"schema_version", "document_type", "decision", "result", "reason", "validation"},
+        "canary_outcome")
+    if (not isinstance(outcome, dict) or set(outcome) != {"schema_version", "document_type",
+            "decision", "result", "reason", "validation"} or
+            outcome["schema_version"] != 1 or outcome["document_type"] != "canary_outcome" or
+            outcome["decision"] != "ELIGIBLE_FOR_HUMAN_GRANT" or outcome["result"] != "PASS" or
+            outcome["reason"] is not None or not isinstance(outcome["validation"], dict)):
+        raise CanaryError("canary_outcome_did_not_pass")
+    try:
+        validate_contract(outcome["validation"])
+        validate_contract(expected_validation)
+    except ContractError as exc:
+        raise CanaryError("canary_outcome_validation_invalid") from exc
+    if outcome["validation"] != expected_validation:
+        raise CanaryError("canary_outcome_validation_mismatch")
+    outcome_record = _plain_document(ledger, f"{_attempt_identity(plan)}.outcome.json",
+        {"schema_version", "document_type", "attempt_marker_sha256", "outcome_sha256",
+         "decision", "result"}, "canary_attempt_outcome")
+    expected_outcome_record = {"schema_version": 1,
+        "document_type": "canary_attempt_outcome",
+        "attempt_marker_sha256": canonical_sha256(marker),
+        "outcome_sha256": canonical_sha256(outcome),
+        "decision": outcome["decision"], "result": outcome["result"]}
+    if outcome_record != expected_outcome_record:
+        raise CanaryError("canary_attempt_outcome_record_mismatch")
+    return {"marker_sha256": canonical_sha256(marker),
+            "outcome_sha256": canonical_sha256(outcome)}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -452,6 +564,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ledger", required=True, type=Path)
     arguments = parser.parse_args(argv)
     outcome = arguments.bundle / "canary-outcome.json"
+    marker: Path | None = None
     if any(path.name == "canary-outcome.json" for path in arguments.bundle.rglob("canary-outcome.json")):
         print(json.dumps({"decision": "REFUSED", "reason": "canary_attempt_already_recorded",
                           "result": "FAIL"}, sort_keys=True, separators=(",", ":")),
@@ -467,19 +580,25 @@ def main(argv: list[str] | None = None) -> int:
         else:
             raise CanaryError("canary_ledger_must_be_outside_bundle")
         plan = _load_contract(bundle_root, "canary-plan.json", "canary_plan")
-        _consume_attempt(ledger_root, plan)
+        _approved_operation_go(bundle_root, plan)
+        marker = _consume_attempt(ledger_root, plan)
         result = validate_canary_bundle(arguments.bundle)
-        _write_outcome(outcome, {"schema_version": 1, "document_type": "canary_outcome",
+        outcome_document = {"schema_version": 1, "document_type": "canary_outcome",
             "decision": result["decision"], "result": result["result"],
-            "reason": None, "validation": result})
+            "reason": None, "validation": result}
+        _write_outcome(outcome, outcome_document)
+        _record_attempt_outcome(marker, outcome_document)
         print(json.dumps({"decision": result["decision"], "result": result["result"]},
                          sort_keys=True, separators=(",", ":")))
         return 0
     except Exception as exc:
+        failure = {"schema_version": 1, "document_type": "canary_outcome",
+            "decision": "REFUSED", "result": "FAIL", "reason": str(exc),
+            "validation": None}
         try:
-            _write_outcome(outcome, {"schema_version": 1, "document_type": "canary_outcome",
-                "decision": "REFUSED", "result": "FAIL", "reason": str(exc),
-                "validation": None})
+            _write_outcome(outcome, failure)
+            if marker is not None:
+                _record_attempt_outcome(marker, failure)
         except (CanaryError, OSError):
             pass
         print(json.dumps({"decision": "REFUSED", "reason": str(exc), "result": "FAIL"},

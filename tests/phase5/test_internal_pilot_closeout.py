@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT))
 
 from tools.phase5.contract_rules import (INTERNAL_PILOT_LIMITATIONS, canonical_bytes,
     canonical_sha256, validate_contract)
+from tools.phase5.canary_runtime import CanaryError
 from tools.phase5.internal_pilot_closeout import (CloseoutError, consume_attempt,
     validate_internal_pilot)
 from tests.phase5.test_measurement_runtime import plan as measurement_plan
@@ -313,8 +314,29 @@ class InternalPilotCloseoutTests(unittest.TestCase):
                    "tools.phase5.internal_pilot_closeout.validate_level_authorization",
                    return_value={"level": 1, "sessions": 1}), patch(
                    "tools.phase5.internal_pilot_closeout.validate_canary_bundle",
-                   return_value=canary_result):
+                   return_value=canary_result), patch(
+                   "tools.phase5.internal_pilot_closeout.validate_consumed_attempt",
+                   return_value={"marker_sha256": "8" * 64, "outcome_sha256": "9" * 64}):
             return validate_internal_pilot(root, checked)
+
+    def test_closeout_refuses_missing_consumed_canary_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = bundle_root(name); checked = build(root)
+            receipt = json.loads((root / "private-level-1-validation.json").read_text())
+            terminal = json.loads((root / "private-level-1/terminal.json").read_text())
+            canary = json.loads((root / "canary-validation.json").read_text())
+            with patch("tools.phase5.internal_pilot_closeout.validate_private",
+                       return_value={"result": receipt["result"], "terminal": terminal,
+                           "scope": {"scope_inputs": {"measurement_plan":
+                               artifact(root, "measurement-plan.json")}}}), patch(
+                       "tools.phase5.internal_pilot_closeout.validate_level_authorization",
+                       return_value={"level": 1, "sessions": 1}), patch(
+                       "tools.phase5.internal_pilot_closeout.validate_canary_bundle",
+                       return_value={**canary, "checked_at": "2026-11-18T00:15:00.000Z"}), patch(
+                       "tools.phase5.internal_pilot_closeout.validate_consumed_attempt",
+                       side_effect=CanaryError("canary_attempt_marker_mismatch")):
+                with self.assertRaisesRegex(CloseoutError, "attempt_not_consumed"):
+                    validate_internal_pilot(root, checked)
 
     def test_complete_pilot_is_only_eligible_for_human_closeout(self) -> None:
         with tempfile.TemporaryDirectory() as name:

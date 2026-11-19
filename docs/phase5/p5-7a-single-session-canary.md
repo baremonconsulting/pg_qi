@@ -29,11 +29,18 @@ human decision.
 
    The ledger must be the operator-approved, owned `0700` evidence ledger whose
    absolute path, device/inode identity and `ledger-id.json` artifact are frozen
-   in `canary-plan.json`. Before validation, the command exclusively
-   consumes the `(scope, canary_id, OPERATION_GO)` identity there. Moving or
+   in `canary-plan.json`. The canonical digest of that complete ledger binding
+   must also be frozen as `canary_ledger_sha256` in the `OPERATION_GO`; changing
+   the plan to a fresh ledger under the same GO is refused before consumption.
+   Before validation, the command exclusively
+   consumes the `(scope, OPERATION_GO)` identity there. `canary_id` remains in
+   the durable record for attribution but cannot create another attempt under
+   the same GO. Moving or
    copying the bundle therefore cannot authorize a retry. The command also
    exclusively creates `canary-outcome.json` in the bundle on both
-   PASS and refusal. An existing outcome blocks a second attempt under the same
+   PASS and refusal, then exclusively records its digest beside the consumed
+   marker in the external ledger. Closeout requires that immutable ledger
+   record to match the exact outcome. An existing outcome blocks a second attempt under the same
    bundle and identity; never delete or replace it. A successful result is only
    `ELIGIBLE_FOR_HUMAN_GRANT`. The human reviewer
    must independently inspect the private evidence before granting

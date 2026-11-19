@@ -994,6 +994,26 @@ class ExportTests(unittest.TestCase):
                 with self.assertRaises(rules.ContractError):
                     tool.validate_shared(shared, receipt)
 
+    def test_shared_terminal_cannot_smuggle_unbound_public_or_private_fields(self) -> None:
+        for value in ({"sql": "SELECT sensitive FROM internal_table"}, "internal-host.example"):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as name:
+                shared, receipt = self._export(Path(name))
+                terminal = json.loads((shared / "terminal.json").read_text())
+                terminal["stop_reason"] = value
+                write_json(shared / "terminal.json", terminal)
+                with self.assertRaisesRegex(rules.ContractError, "deterministic export"):
+                    tool.validate_shared(shared, receipt)
+
+    def test_shared_documents_require_canonical_bytes(self) -> None:
+        for filename in ("manifest.json", "results.json", "site-summary.json",
+                         "index.json", "terminal.json"):
+            with self.subTest(filename=filename), tempfile.TemporaryDirectory() as name:
+                shared, receipt = self._export(Path(name))
+                document = json.loads((shared / filename).read_text())
+                (shared / filename).write_text(json.dumps(document, indent=2) + "\n")
+                with self.assertRaisesRegex(rules.ContractError, "canonical byte"):
+                    tool.validate_shared(shared, receipt)
+
     def test_failed_export_removes_partial_destination(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             base = Path(name); private = base / "private"; private.mkdir(); build_private(private)

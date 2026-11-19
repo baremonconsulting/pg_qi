@@ -1354,10 +1354,17 @@ def validate_shared(root: Path, private_receipt_path: Path) -> dict[str, Any]:
         raise EvidenceError("shared values are not bound by private receipt")
     index = strict_load_bytes(captured["index.json"])
     terminal = strict_load_bytes(captured["terminal.json"])
+    parsed_documents = {"manifest.json": manifest, "results.json": results,
+        "site-summary.json": cells, "index.json": index, "terminal.json": terminal}
+    if any(captured[name] != canonical_bytes(document)
+           for name, document in parsed_documents.items()):
+        raise EvidenceError("shared documents are not canonical byte encodings")
     if index["contract_type"] != "index" or terminal["contract_type"] != "terminal":
         raise EvidenceError("shared seal contract types are incorrect")
     if f"derived-terminal-state:{canonical_sha256(terminal['state'])}" not in receipt["checks"]:
         raise EvidenceError("shared terminal state is not bound by private receipt")
+    for document in (index, terminal):
+        _assert_public_value(document, ())
     if index["scope_sha256"] != manifest["source_scope_sha256"]:
         raise EvidenceError("shared index scope mismatch")
     if {item["path"] for item in index["payloads"]} != {"manifest.json", "results.json", "site-summary.json"}:
@@ -1367,6 +1374,21 @@ def validate_shared(root: Path, private_receipt_path: Path) -> dict[str, Any]:
     if (terminal["scope_sha256"] != manifest["source_scope_sha256"] or
             terminal["index_sha256"] != canonical_sha256(index)):
         raise EvidenceError("shared terminal linkage mismatch")
+    expected_payloads = []
+    for name in sorted(("manifest.json", "results.json", "site-summary.json")):
+        payload = canonical_bytes(parsed_documents[name])
+        expected_payloads.append({"path": name, "sha256": hashlib.sha256(payload).hexdigest(),
+                                  "bytes": len(payload)})
+    expected_index = {"schema_version": 1, "contract_type": "index",
+        "contract_id": "shared-index", "scope_sha256": manifest["source_scope_sha256"],
+        "payloads": expected_payloads, "payload_flush_fsync_complete": True,
+        "index_sequence": 1}
+    expected_terminal = {"schema_version": 1, "contract_type": "terminal",
+        "contract_id": "shared-terminal", "scope_sha256": manifest["source_scope_sha256"],
+        "index_sha256": canonical_sha256(expected_index), "state": terminal["state"],
+        "aggregate_pass": aggregate_pass(terminal["state"])}
+    if index != expected_index or terminal != expected_terminal:
+        raise EvidenceError("shared seal differs from deterministic export")
     result = receipt["result"]
     if (_state_result(terminal["state"]) != result or
             terminal["aggregate_pass"] != (result == "PASS")):

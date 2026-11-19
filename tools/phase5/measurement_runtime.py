@@ -521,7 +521,12 @@ def resource_feed_sha256(policy: ResourcePolicy) -> str:
     """Identity of the approved live feed definition, excluding mutable samples."""
     return hashlib.sha256(canonical_bytes({"feed_version": policy.feed_version,
         "source_id": policy.source_id, "interval_ms": policy.interval_ms,
-        "max_age_ms": policy.max_age_ms, "units": policy.units})).hexdigest()
+        "max_age_ms": policy.max_age_ms, "units": dict(policy.units)})).hexdigest()
+
+
+def resource_policy_sha256(policy: ResourcePolicy) -> str:
+    """Digest of every enforced policy field, without the cyclic scope link."""
+    return canonical_sha256(policy.frozen_definition())
 
 
 class MeasurementRunner:
@@ -529,7 +534,7 @@ class MeasurementRunner:
 
     def __init__(self, plan: dict[str, Any], plan_sha256: str,
                  scope: dict[str, Any], scope_sha256: str,
-                 resource_policy: ResourcePolicy, resource_policy_sha256: str,
+                 resource_policy: ResourcePolicy, approved_resource_policy_sha256: str,
                  controller: StopController, output_root: Path,
                  run_id: str, maximum_evidence_bytes: int = 64 * 1024 * 1024,
                  clock: Callable[[], datetime] | None = None) -> None:
@@ -563,8 +568,12 @@ class MeasurementRunner:
         _digest(scope_sha256, "scope_sha256"); _identifier(run_id, "run_id")
         if resource_policy.scope_sha256 != scope_sha256:
             raise MeasurementError("resource_policy_scope_mismatch")
-        if plan["closure_inputs"]["resource_policy_sha256"] != resource_policy_sha256:
+        if (plan["closure_inputs"]["resource_policy_sha256"] !=
+                approved_resource_policy_sha256 or
+                approved_resource_policy_sha256 != resource_policy_sha256(resource_policy)):
             raise MeasurementError("resource_policy_digest_mismatch")
+        if controller.policy is not resource_policy:
+            raise MeasurementError("resource_controller_policy_mismatch")
         self.plan = plan; self.plan_sha256 = plan_sha256; self.scope_sha256 = scope_sha256
         self.policy = resource_policy; self.controller = controller
         self.output_root = output_root; self.run_id = run_id

@@ -18,7 +18,8 @@ from test_contracts import snapshot_tuple
 from test_evidence_tool import build_private, reseal as reseal_private
 from test_measurement_runtime import (
     artifact, level_one_authorization, measurement_scope, plan, state, write_document)
-from tools.phase5.canary_runtime import CanaryError, build_canary_record, main, validate_canary_bundle
+from tools.phase5.canary_runtime import (CanaryError, _consume_attempt, build_canary_record,
+    main, validate_canary_bundle, validate_consumed_attempt)
 from tools.phase5.contract_rules import CANARY_CONTROLS, canonical_sha256, validate_contract
 from tools.phase5.recovery_rehearsal import validate_rehearsal_contracts
 
@@ -47,6 +48,21 @@ def reseal_all(root: Path, plan_value: dict, run: dict) -> None:
     retirement["plan_sha256"] = canonical_sha256(plan_value)
     retirement["run_sha256"] = canonical_sha256(run)
     write_document(root / "canary-retirement.json", retirement)
+
+
+def bind_canary_ledger(root: Path, plan_value: dict, run: dict,
+                       binding: dict) -> None:
+    plan_value["attempt_ledger"] = binding
+    operation_go = __import__("json").loads((root / "operation-go.json").read_text())
+    operation_go["canary_ledger_sha256"] = canonical_sha256(binding)
+    write_document(root / "operation-go.json", operation_go)
+    authorization = __import__("json").loads((root / "level-authorization.json").read_text())
+    authorization["operation_go"] = artifact(root, "operation-go.json")
+    write_document(root / "level-authorization.json", authorization)
+    plan_value["level_authorization"] = artifact(root, "level-authorization.json")
+    plan_value["operation_go_sha256"] = canonical_sha256(operation_go)
+    run["operation_go_sha256"] = canonical_sha256(operation_go)
+    reseal_all(root, plan_value, run)
 
 
 def align_authorization(root: Path, measurement: dict, scope_sha: str, authorization: dict) -> dict:
@@ -154,6 +170,12 @@ def build_canary(root: Path) -> tuple[datetime, dict, dict, dict]:
         "negative_controls": list(CANARY_CONTROLS), "expected_snapshot": expected,
         "negative_control_sql": [artifact(root, f"control-{index}.sql") for index in range(1, 4)],
         "maximum_result_bytes": 4096, "session_count": 1, "pool_profile": "DIRECT"}
+    operation_go["canary_ledger_sha256"] = canonical_sha256(plan_doc["attempt_ledger"])
+    write_document(root / "operation-go.json", operation_go)
+    authorization["operation_go"] = artifact(root, "operation-go.json")
+    write_document(root / "level-authorization.json", authorization)
+    plan_doc["level_authorization"] = artifact(root, "level-authorization.json")
+    plan_doc["operation_go_sha256"] = canonical_sha256(operation_go)
     validate_contract(plan_doc); write_document(root / "canary-plan.json", plan_doc)
 
     base = datetime.now(timezone.utc) - timedelta(seconds=10)
@@ -372,17 +394,18 @@ class CanaryRuntimeTests(unittest.TestCase):
             (ledger / "ledger-id.json").write_bytes(b"pgqi-canary-ledger-v1\n")
             (ledger / "ledger-id.json").chmod(0o600)
             info = ledger.stat()
-            plan_value["attempt_ledger"] = {"path": str(ledger.resolve()),
+            binding = {"path": str(ledger.resolve()),
                 "device": info.st_dev, "inode": info.st_ino,
                 "identity": artifact(ledger, "ledger-id.json")}
-            reseal_all(root, plan_value, run)
+            bind_canary_ledger(root, plan_value, run, binding)
             self.assertEqual(main(["--bundle", str(root), "--ledger", str(ledger)]), 0)
             outcome = __import__("json").loads((root / "canary-outcome.json").read_text())
             self.assertEqual(outcome["decision"], "ELIGIBLE_FOR_HUMAN_GRANT")
+            self.assertIn("marker_sha256", validate_consumed_attempt(root, outcome["validation"]))
             self.assertEqual(main(["--bundle", str(root), "--ledger", str(ledger)]), 1)
             (root / "canary-outcome.json").unlink()
             self.assertEqual(main(["--bundle", str(root), "--ledger", str(ledger)]), 1)
-            self.assertEqual(len(list(ledger.glob("*.json"))), 2)
+            self.assertEqual(len(list(ledger.glob("*.json"))), 3)
             (root / "canary-outcome.json").unlink()
             replacement = root.parent / f"{root.name}-replacement-ledger"
             replacement.mkdir(mode=0o700)
@@ -398,11 +421,80 @@ class CanaryRuntimeTests(unittest.TestCase):
             ledger = root / "ledger"; ledger.mkdir(mode=0o700)
             (ledger / "ledger-id.json").write_bytes(b"pgqi-canary-ledger-v1\n")
             (ledger / "ledger-id.json").chmod(0o600)
-            info = ledger.stat(); plan_value["attempt_ledger"] = {"path": str(ledger.resolve()),
+            info = ledger.stat(); binding = {"path": str(ledger.resolve()),
                 "device": info.st_dev, "inode": info.st_ino,
                 "identity": artifact(ledger, "ledger-id.json")}
-            reseal_all(root, plan_value, run)
+            bind_canary_ledger(root, plan_value, run, binding)
             self.assertEqual(main(["--bundle", str(root), "--ledger", str(ledger)]), 1)
+
+    def test_new_canary_id_cannot_reuse_same_operation_go(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            base = Path(name)
+            ledger = base / "ledger"; ledger.mkdir(mode=0o700)
+            (ledger / "ledger-id.json").write_bytes(b"pgqi-canary-ledger-v1\n")
+            (ledger / "ledger-id.json").chmod(0o600)
+            info = ledger.stat()
+            binding = {"path": str(ledger.resolve()), "device": info.st_dev,
+                "inode": info.st_ino, "identity": artifact(ledger, "ledger-id.json")}
+            first_plan = {"scope_sha256": "1" * 64, "canary_id": "canary-1",
+                "operation_go_sha256": "2" * 64, "attempt_ledger": binding}
+            second_plan = {**first_plan, "canary_id": "canary-2"}
+            _consume_attempt(ledger, first_plan)
+            with self.assertRaises(FileExistsError):
+                _consume_attempt(ledger, second_plan)
+
+    def test_fresh_ledger_cannot_bypass_same_operation_go(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name) / "bundle"; root.mkdir(mode=0o700)
+            _, plan_value, run, _ = build_canary(root)
+            approved = Path(name) / "approved"; approved.mkdir(mode=0o700)
+            (approved / "ledger-id.json").write_bytes(b"approved\n")
+            (approved / "ledger-id.json").chmod(0o600)
+            info = approved.stat()
+            bind_canary_ledger(root, plan_value, run, {"path": str(approved.resolve()),
+                "device": info.st_dev, "inode": info.st_ino,
+                "identity": artifact(approved, "ledger-id.json")})
+            replacement = Path(name) / "replacement"; replacement.mkdir(mode=0o700)
+            (replacement / "ledger-id.json").write_bytes(b"replacement\n")
+            (replacement / "ledger-id.json").chmod(0o600)
+            info = replacement.stat()
+            plan_value["attempt_ledger"] = {"path": str(replacement.resolve()),
+                "device": info.st_dev, "inode": info.st_ino,
+                "identity": artifact(replacement, "ledger-id.json")}
+            reseal_all(root, plan_value, run)
+            self.assertEqual(main(["--bundle", str(root), "--ledger", str(replacement)]), 1)
+            self.assertEqual([path.name for path in replacement.iterdir()], ["ledger-id.json"])
+
+    def test_consumed_outcome_must_exactly_match_accepted_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name) / "bundle"; root.mkdir(mode=0o700)
+            _, plan_value, run, _ = build_canary(root)
+            ledger = Path(name) / "ledger"; ledger.mkdir(mode=0o700)
+            (ledger / "ledger-id.json").write_bytes(b"approved\n")
+            (ledger / "ledger-id.json").chmod(0o600)
+            info = ledger.stat()
+            bind_canary_ledger(root, plan_value, run, {"path": str(ledger.resolve()),
+                "device": info.st_dev, "inode": info.st_ino,
+                "identity": artifact(ledger, "ledger-id.json")})
+            self.assertEqual(main(["--bundle", str(root), "--ledger", str(ledger)]), 0)
+            outcome = __import__("json").loads((root / "canary-outcome.json").read_text())
+            changed = deepcopy(outcome["validation"]); changed["checked_at"] = "2999-01-01T00:00:00.000Z"
+            with self.assertRaisesRegex(CanaryError, "validation_mismatch"):
+                validate_consumed_attempt(root, changed)
+            outcome_records = list(ledger.glob("*.outcome.json"))
+            self.assertEqual(len(outcome_records), 1)
+            record_payload = outcome_records[0].read_bytes()
+            outcome_records[0].unlink()
+            with self.assertRaisesRegex(CanaryError, "canary_attempt_outcome"):
+                validate_consumed_attempt(root, outcome["validation"])
+            outcome_records[0].write_bytes(record_payload); outcome_records[0].chmod(0o600)
+            marker = next(path for path in ledger.glob("*.json")
+                          if path.name != "ledger-id.json" and not path.name.endswith(".outcome.json"))
+            marker_value = __import__("json").loads(marker.read_text())
+            marker_value["canary_id"] = "substituted-canary"
+            write_document(marker, marker_value)
+            with self.assertRaisesRegex(CanaryError, "marker_mismatch"):
+                validate_consumed_attempt(root, outcome["validation"])
 
 
 if __name__ == "__main__":
