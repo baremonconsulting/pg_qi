@@ -64,6 +64,16 @@ SHOW pg_qi.shadow_p0_facts_state;
 SHOW pg_qi.shadow_p0_facts_reason;
 SHOW pg_qi.shadow_p0_capability;
 
+CREATE ROLE shadow_column_reader;
+CREATE TABLE shadow_dropped(a integer, b integer);
+ALTER TABLE shadow_dropped DROP COLUMN a;
+GRANT SELECT (b) ON shadow_dropped TO shadow_column_reader;
+SET ROLE shadow_column_reader;
+SELECT count(*) FROM shadow_dropped;
+RESET ROLE;
+DROP TABLE shadow_dropped;
+DROP ROLE shadow_column_reader;
+
 SELECT count(*) FROM shadow_plain WHERE id > 0;
 SHOW pg_qi.shadow_p0_facts_state;
 SHOW pg_qi.shadow_p0_facts_reason;

@@ -23,6 +23,7 @@
 #include "pg_qi/qi_detector.h"
 #include "pg_qi/qi_eligibility.h"
 #include "pg_qi/qi_shadow_p0.h"
+#include "pg_qi/qi_semantic.h"
 #include "pg_qi/qi_snapshot.h"
 #if PG_QI_TESTING
 #include "pg_qi/qi_diag.h"
@@ -109,6 +110,8 @@ PG_FUNCTION_INFO_V1(qi_test_active_control_guard);
 PG_FUNCTION_INFO_V1(qi_test_classifier_contract);
 PG_FUNCTION_INFO_V1(qi_test_decision_v2_contract);
 PG_FUNCTION_INFO_V1(qi_test_shadow_p0_observer_contract);
+PG_FUNCTION_INFO_V1(qi_test_semantic_contract);
+PG_FUNCTION_INFO_V1(qi_test_semantic_probe);
 PG_FUNCTION_INFO_V1(qi_test_v2_snapshot_contract);
 #endif
 
@@ -281,6 +284,11 @@ done:
         .max_depth_seen = 0,
         .facts_emitted = 0
     };
+    QiSemanticFacts semantic_facts = {
+        .status = QI_SEMANTIC_NOT_EVALUATED,
+        .profile = QI_SEMANTIC_PROFILE_NONE,
+        .blockers = 0
+    };
     volatile bool frame_active = false;
 
     pg_qi_shadow_planner_depth++;
@@ -335,6 +343,8 @@ done:
             if (pg_qi_routing_mode == QI_ROUTING_SHADOW_P0)
             {
                 shadow_p0_facts = qi_shadow_p0_observe_query(parse);
+                semantic_facts = qi_semantic_observe_query(
+                    parse, &shadow_p0_facts);
                 shadow_p0_facts_observed = true;
             }
 
@@ -405,7 +415,7 @@ done:
                 &v2_candidate, v2_token, mode_at_decision,
                 enabled_at_decision, context, policy_intent,
                 decision_force_origin, observed_engine, verification,
-                observation,
+                observation, semantic_facts,
                 shadow_p0_facts_observed ? shadow_p0_facts.state :
                     QI_SHADOW_P0_FACTS_UNKNOWN,
                 shadow_p0_facts_observed ? shadow_p0_facts.reason :
