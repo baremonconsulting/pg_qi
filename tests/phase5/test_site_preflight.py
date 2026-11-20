@@ -28,11 +28,11 @@ ZERO = "0" * 64
 COMMIT = "a" * 40
 
 
-def dossier(endpoint_kind: str = "tls_tcp") -> dict:
+def dossier(endpoint_kind: str = "tls_tcp", duckdb_linkage: str = "static_in_pg_duckdb") -> dict:
     build = {"production": True, "pg_qi_testing": False, "postgresql_major": 19,
              "postgresql_source_sha256": "b" * 64,
              "pg_duckdb_source_commit": "c" * 40, "duckdb_source_commit": "d" * 40,
-             "duckdb_linkage": "static_in_pg_duckdb",
+             "duckdb_linkage": duckdb_linkage,
              "server_build_sha256": "9" * 64, "pg_qi_sha256": "1" * 64,
              "pg_duckdb_sha256": "2" * 64, "duckdb_sha256": "3" * 64,
              "configuration_sha256": "4" * 64, "toolchain_sha256": "5" * 64}
@@ -57,18 +57,22 @@ def dossier(endpoint_kind: str = "tls_tcp") -> dict:
              "configuration_sha256": "4" * 64,
              "shared_preload_libraries": ["pg_duckdb", "pg_qi"],
              "hook_inventory": ["pg_duckdb", "pg_qi"]}
+    if duckdb_linkage == "dynamic_separate_library":
+        start["duckdb_mapped_path"] = "/opt/postgresql/lib/libduckdb.so"
     start["start_id"] = preflight._start_id(start["cluster_id"], start["postmaster_start_time"])
     start_digest = hashlib.sha256(preflight.canonical_bytes(start)).hexdigest()
     start["attestation_sha256"] = start_digest
+    installed = {"postgres_path": "/opt/postgresql/bin/postgres", "postgres_sha256": "9" * 64,
+                 "pg_qi_path": "/opt/postgresql/lib/pg_qi.so", "pg_qi_sha256": "1" * 64,
+                 "pg_duckdb_path": "/opt/postgresql/lib/pg_duckdb.so", "pg_duckdb_sha256": "2" * 64,
+                 "duckdb_sha256": "3" * 64, "configuration_sha256": "4" * 64}
+    if duckdb_linkage == "dynamic_separate_library":
+        installed["duckdb_path"] = "/opt/postgresql/lib/libduckdb.so"
     return {"schema_version": 1, "document_type": "site_qualification",
             "qualification_id": "qualification-1", "scope_sha256": ZERO,
             "source": {"commit": COMMIT, "dirty": False, "tree_sha256": "8" * 64},
             "build": build,
-            "installed": {"postgres_path": "/opt/postgresql/bin/postgres", "postgres_sha256": "9" * 64,
-                          "pg_qi_path": "/opt/postgresql/lib/pg_qi.so", "pg_qi_sha256": "1" * 64,
-                          "pg_duckdb_path": "/opt/postgresql/lib/pg_duckdb.so", "pg_duckdb_sha256": "2" * 64,
-                          "duckdb_sha256": "3" * 64,
-                          "configuration_sha256": "4" * 64},
+            "installed": installed,
             "start": start,
             "endpoint": endpoint,
             "expected_online": {"server_version_num": "190000", "database_name": "pilot",
@@ -119,6 +123,40 @@ class SpyConnector:
 
 
 class OfflinePolicyTests(unittest.TestCase):
+    def test_static_and_dynamic_duckdb_linkage_profiles_are_explicit(self) -> None:
+        self.assertEqual(intent(dossier())["dossier"]["build"]["duckdb_linkage"],
+                         "static_in_pg_duckdb")
+        dynamic = dossier(duckdb_linkage="dynamic_separate_library")
+        compiled = intent(dynamic)
+        self.assertEqual(compiled["dossier"]["installed"]["duckdb_path"],
+                         "/opt/postgresql/lib/libduckdb.so")
+
+        for mutation in (
+                lambda value: value["installed"].pop("duckdb_path"),
+                lambda value: value["installed"].update(duckdb_path=value["installed"]["pg_duckdb_path"]),
+                lambda value: value["installed"].update(duckdb_path=value["installed"]["pg_qi_path"]),
+                lambda value: value["start"].pop("duckdb_mapped_path"),
+                lambda value: value["start"].update(duckdb_mapped_path="/opt/postgresql/lib/other.so")):
+            value = dossier(duckdb_linkage="dynamic_separate_library")
+            mutation(value)
+            if "duckdb_mapped_path" in value["start"]:
+                reseal_start(value)
+            with self.assertRaises(preflight.QualificationError):
+                intent(value)
+
+        value = dossier(); value["installed"]["duckdb_path"] = "/opt/postgresql/lib/libduckdb.so"
+        with self.assertRaises(preflight.QualificationError):
+            intent(value)
+
+        value = dossier(); value["start"]["duckdb_mapped_path"] = "/opt/postgresql/lib/libduckdb.so"
+        reseal_start(value)
+        with self.assertRaises(preflight.QualificationError):
+            intent(value)
+
+        value = dossier(); value["build"]["duckdb_linkage"] = "ambient_dynamic"
+        with self.assertRaises(preflight.QualificationError):
+            intent(value)
+
     def test_golden_tls_and_socket_profiles_compile_without_secret(self) -> None:
         for kind in ("tls_tcp", "private_socket"):
             with self.subTest(kind=kind):

@@ -22,6 +22,7 @@ COMMIT = re.compile(r"^[0-9a-f]{40}$")
 IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 DNS_NAME = re.compile(r"^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$" )
 UTC = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$")
+DUCKDB_LINKAGE_MODES = frozenset({"static_in_pg_duckdb", "dynamic_separate_library"})
 
 PHASE4C_CASES = (
     "eligible_literal", "policy_off", "extension_disabled", "parameter_custom",
@@ -229,7 +230,7 @@ def validate_dossier(value: Any, trusted_scope_sha256: str, trusted_dossier_sha2
     _digest(build["postgresql_source_sha256"], "build.postgresql_source_sha256")
     _text(build["pg_duckdb_source_commit"], "build.pg_duckdb_source_commit", COMMIT)
     _text(build["duckdb_source_commit"], "build.duckdb_source_commit", COMMIT)
-    if build["duckdb_linkage"] != "static_in_pg_duckdb":
+    if build["duckdb_linkage"] not in DUCKDB_LINKAGE_MODES:
         raise QualificationError("unsupported DuckDB linkage mode")
     for field in set(build) - {"production", "pg_qi_testing", "postgresql_major",
                                "pg_duckdb_source_commit", "duckdb_source_commit", "duckdb_linkage"}:
@@ -237,11 +238,21 @@ def validate_dossier(value: Any, trusted_scope_sha256: str, trusted_dossier_sha2
             _digest(build[field], f"build.{field}")
     build_sha256 = hashlib.sha256(canonical_bytes(build)).hexdigest()
 
-    installed = _exact(dossier["installed"], {"postgres_path", "postgres_sha256", "pg_qi_path",
-                                               "pg_qi_sha256", "pg_duckdb_path", "pg_duckdb_sha256",
-                                               "duckdb_sha256", "configuration_sha256"}, "installed")
-    for field in ("postgres_path", "pg_qi_path", "pg_duckdb_path"):
+    installed_fields = {"postgres_path", "postgres_sha256", "pg_qi_path", "pg_qi_sha256",
+                        "pg_duckdb_path", "pg_duckdb_sha256", "duckdb_sha256",
+                        "configuration_sha256"}
+    if build["duckdb_linkage"] == "dynamic_separate_library":
+        installed_fields.add("duckdb_path")
+    installed = _exact(dossier["installed"], installed_fields, "installed")
+    installed_paths = ["postgres_path", "pg_qi_path", "pg_duckdb_path"]
+    if build["duckdb_linkage"] == "dynamic_separate_library":
+        installed_paths.append("duckdb_path")
+    for field in installed_paths:
         _absolute_file(installed[field], f"installed.{field}")
+    if build["duckdb_linkage"] == "dynamic_separate_library":
+        candidate_paths = {installed[field] for field in installed_paths}
+        if len(candidate_paths) != len(installed_paths):
+            raise QualificationError("dynamic DuckDB dependency is not a separate path")
     for field in ("postgres_sha256", "pg_qi_sha256", "pg_duckdb_sha256", "duckdb_sha256",
                   "configuration_sha256"):
         _digest(installed[field], f"installed.{field}")
@@ -252,12 +263,14 @@ def validate_dossier(value: Any, trusted_scope_sha256: str, trusted_dossier_sha2
             installed["configuration_sha256"] != build["configuration_sha256"]):
         raise QualificationError("installed identity differs from build")
 
-    start = _exact(dossier["start"], {"attestation_sha256", "install_event_id", "start_id",
-                                      "install_sequence", "start_sequence", "cluster_id", "boot_id",
-                                      "postmaster_start_time", "postgres_sha256", "pg_qi_mapped_sha256",
-                                      "pg_duckdb_mapped_sha256", "duckdb_dependency_sha256",
-                                      "configuration_sha256",
-                                      "shared_preload_libraries", "hook_inventory"}, "start attestation")
+    start_fields = {"attestation_sha256", "install_event_id", "start_id", "install_sequence",
+                    "start_sequence", "cluster_id", "boot_id", "postmaster_start_time",
+                    "postgres_sha256", "pg_qi_mapped_sha256", "pg_duckdb_mapped_sha256",
+                    "duckdb_dependency_sha256", "configuration_sha256",
+                    "shared_preload_libraries", "hook_inventory"}
+    if build["duckdb_linkage"] == "dynamic_separate_library":
+        start_fields.add("duckdb_mapped_path")
+    start = _exact(dossier["start"], start_fields, "start attestation")
     claimed_attestation = _digest(start["attestation_sha256"], "attestation_sha256")
     attested_fields = dict(start); del attested_fields["attestation_sha256"]
     computed_attestation = hashlib.sha256(canonical_bytes(attested_fields)).hexdigest()
@@ -273,6 +286,10 @@ def validate_dossier(value: Any, trusted_scope_sha256: str, trusted_dossier_sha2
     for field in ("postgres_sha256", "pg_qi_mapped_sha256", "pg_duckdb_mapped_sha256",
                   "duckdb_dependency_sha256", "configuration_sha256"):
         _digest(start[field], f"start.{field}")
+    if build["duckdb_linkage"] == "dynamic_separate_library":
+        _absolute_file(start["duckdb_mapped_path"], "start.duckdb_mapped_path")
+        if start["duckdb_mapped_path"] != installed["duckdb_path"]:
+            raise QualificationError("mapped DuckDB path differs from installed identity")
     if (start["postgres_sha256"] != installed["postgres_sha256"] or
             start["pg_qi_mapped_sha256"] != installed["pg_qi_sha256"] or
             start["pg_duckdb_mapped_sha256"] != installed["pg_duckdb_sha256"] or
