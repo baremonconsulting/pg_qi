@@ -18,6 +18,7 @@
 #include "pg_qi/qi_classify.h"
 #include "pg_qi/qi_context.h"
 #include "pg_qi/qi_decision.h"
+#include "pg_qi/qi_decision_v2.h"
 #include "pg_qi/qi_delegation.h"
 #include "pg_qi/qi_detector.h"
 #include "pg_qi/qi_eligibility.h"
@@ -103,6 +104,7 @@ PG_FUNCTION_INFO_V1(qi_spike_state);
 PG_FUNCTION_INFO_V1(qi_spike_observer);
 PG_FUNCTION_INFO_V1(qi_test_active_control_guard);
 PG_FUNCTION_INFO_V1(qi_test_classifier_contract);
+PG_FUNCTION_INFO_V1(qi_test_decision_v2_contract);
 #endif
 
 QI_PLANNER_PROTO(pg_qi_planner)

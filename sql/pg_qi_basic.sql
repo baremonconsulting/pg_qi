@@ -28,6 +28,7 @@ SET duckdb.force_execution = off;
 SELECT * FROM qi.test_detector_contract();
 SELECT * FROM qi.test_frame_contract();
 SELECT * FROM qi.test_classifier_contract();
+SELECT * FROM qi.test_decision_v2_contract();
 SELECT depth, cleanup_broken, accounting_valid FROM qi.test_frame_state();
 SHOW pg_qi.spike_stack_depth;
 SHOW pg_qi.spike_cleanup_broken;
