@@ -19,6 +19,7 @@
 #define QI_SNAPSHOT_RENDER_BYTES 1024
 #define QI_PLAN_FEATURE_RENDER_BYTES 1024
 #define QI_STATS_CONFIDENCE_RENDER_BYTES 768
+#define QI_PROFILE_EVIDENCE_RENDER_BYTES 512
 
 typedef struct QiV2SnapshotEvent
 {
@@ -47,6 +48,9 @@ static char qi_plan_feature_render_buffer[QI_PLAN_FEATURE_RENDER_BYTES];
 static char *qi_stats_confidence_placeholder = NULL;
 static char qi_stats_confidence_render_buffer[
     QI_STATS_CONFIDENCE_RENDER_BYTES];
+static char *qi_profile_evidence_placeholder = NULL;
+static char qi_profile_evidence_render_buffer[
+    QI_PROFILE_EVIDENCE_RENDER_BYTES];
 
 static void
 qi_snapshot_initialize(void)
@@ -495,6 +499,59 @@ qi_stats_confidence_show(void)
     return qi_stats_confidence_render_buffer;
 }
 
+static const char *
+qi_profile_evidence_show(void)
+{
+    QiV2SnapshotEvent *event;
+    QiV2SnapshotCandidate *candidate;
+    QiProfileEvidence *evidence;
+    char incarnation[QI_SNAPSHOT_INCARNATION_BYTES * 2 + 1] = "";
+    int written;
+
+    qi_snapshot_initialize();
+    if (!qi_snapshot_authorized())
+        return "v=1;s=denied";
+    if (qi_snapshot_store.exhausted)
+        return "v=1;s=exhausted";
+    if (!qi_snapshot_store.available)
+        return "v=1;s=unavailable";
+    qi_snapshot_incarnation_hex(incarnation, sizeof(incarnation));
+    if (!qi_snapshot_store.has_event)
+    {
+        snprintf(qi_profile_evidence_render_buffer,
+                 sizeof(qi_profile_evidence_render_buffer),
+                 "v=1;s=none;cid=%s;g=" UINT64_FORMAT ";e=0",
+                 incarnation, qi_snapshot_store.generation);
+        return qi_profile_evidence_render_buffer;
+    }
+
+    event = &qi_snapshot_store.slots[qi_snapshot_store.active_slot];
+    candidate = &event->candidate;
+    if (candidate->token.effective_user != GetUserId() ||
+        candidate->token.session_user != GetSessionUserId())
+        return "v=1;s=withheld";
+    evidence = &candidate->profile_evidence;
+    written = snprintf(qi_profile_evidence_render_buffer,
+        sizeof(qi_profile_evidence_render_buffer),
+        "v=1;s=complete;cid=%s;g=" UINT64_FORMAT ";e=" UINT64_FORMAT
+        ";state=%s;reason=%s;present=%s;limits_verified=%s"
+        ";envelope=%s;generation=" UINT64_FORMAT
+        ";install_sequence=" UINT64_FORMAT ";fingerprint=%08x"
+        ";expires_at=" UINT64_FORMAT,
+        incarnation, candidate->token.generation, event->event_sequence,
+        evidence->profile_present ? "present" : "unknown",
+        qi_profile_reason_name(evidence->reason),
+        evidence->profile_present ? "true" : "false",
+        evidence->limits_verified ? "true" : "false",
+        evidence->envelope_hypothetical ? "hypothetical" : "invalid",
+        evidence->generation, evidence->install_sequence,
+        evidence->fingerprint, evidence->expires_at_unix);
+    if (written < 0 ||
+        (Size) written >= sizeof(qi_profile_evidence_render_buffer))
+        return "v=1;s=invalid";
+    return qi_profile_evidence_render_buffer;
+}
+
 void
 qi_snapshot_init_guc(void)
 {
@@ -516,6 +573,12 @@ qi_snapshot_init_guc(void)
                                PGC_INTERNAL,
                                GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE,
                                NULL, NULL, qi_stats_confidence_show);
+    DefineCustomStringVariable("pg_qi.profile_evidence",
+                               "Reports private immutable profile evidence.",
+                               NULL, &qi_profile_evidence_placeholder, "",
+                               PGC_INTERNAL,
+                               GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE,
+                               NULL, NULL, qi_profile_evidence_show);
 }
 
 QiV2SnapshotToken
@@ -546,7 +609,8 @@ qi_snapshot_prepare(QiV2SnapshotCandidate *candidate,
                     QiShadowP0FactsState p0_state,
                     QiShadowP0FactsReason p0_reason,
                     QiNativePlanFeatures plan_features,
-                    QiStatsConfidence stats_confidence)
+                    QiStatsConfidence stats_confidence,
+                    QiProfileEvidence profile_evidence)
 {
     QiV2Decision decision;
 
@@ -582,6 +646,7 @@ qi_snapshot_prepare(QiV2SnapshotCandidate *candidate,
     candidate->semantic = semantic;
     candidate->plan_features = plan_features;
     candidate->stats_confidence = stats_confidence;
+    candidate->profile_evidence = profile_evidence;
     candidate->valid = true;
     return true;
 }
@@ -665,7 +730,8 @@ qi_test_v2_snapshot_contract(PG_FUNCTION_ARGS)
                            QI_SEMANTIC_BLOCKER_SNAPSHOT_UNPROVEN},
         QI_SHADOW_P0_FACTS_BOUNDED, QI_SHADOW_P0_FACTS_OK,
         qi_plan_features_unknown(QI_PLAN_FEATURE_NOT_OBSERVED),
-        qi_stats_confidence_unknown(QI_STATS_NOT_OBSERVED)) &&
+        qi_stats_confidence_unknown(QI_STATS_NOT_OBSERVED),
+        qi_profile_not_observed()) &&
         qi_snapshot_commit(&candidate);
     sequence_one = qi_snapshot_store.has_event &&
         qi_snapshot_store.event_sequence == 1;

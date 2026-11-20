@@ -13,6 +13,9 @@ env:
   PG19_SHA: dffcca2e3c81178c64d4c1f44543a3507d0b7508
   PG_DUCKDB_SHA: 8756099e267c47f0b86c24de4cf995327f1f4279
   DUCKDB_SHA: d54cbbe3df17e8e5ce68312f483b4155836112aa
+  PG_QI_BUILD_ID: ${{ github.sha }}
+  PG_QI_POSTGRES_BUILD_ID: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+  PG_QI_SITE_BUILD_ID: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   PG_DUCKDB_BUILD_MODE: source
 
 jobs:
@@ -141,7 +144,7 @@ jobs:
           pglog="${RUNNER_TEMP}/production-shadow-pg$major.log"
           mkdir -p "$pghost"
           "$pgbin/initdb" -D "$pgdata" --no-locale --encoding=UTF8 --no-sync
-          { echo "unix_socket_directories = '$pghost'"; echo "listen_addresses = ''"; echo "shared_preload_libraries = 'pg_duckdb,pg_qi_outer_test,pg_qi'"; } >>"$pgdata/postgresql.conf"
+          { echo "unix_socket_directories = '$pghost'"; echo "listen_addresses = ''"; echo "shared_preload_libraries = 'pg_duckdb,pg_qi_outer_test,pg_qi'"; echo "pg_qi.site_build_id = '$PG_QI_SITE_BUILD_ID'"; } >>"$pgdata/postgresql.conf"
           "$pgbin/pg_ctl" -D "$pgdata" -l "$pglog" -w start
           trap '"$pgbin/pg_ctl" -D "$pgdata" -m fast -w stop || true' EXIT
           PGHOST="$pghost" PGUSER="$USER" make PG_CONFIG="$pgbin/pg_config" PG_QI_TESTING=0 installcheck
@@ -149,6 +152,8 @@ jobs:
           PGHOST="$pghost" PGUSER="$USER" bash tests/phase7/verify_snapshot.sh "$major"
           PGHOST="$pghost" PGUSER="$USER" bash tests/phase7/verify_plan_features.sh "$major"
           PGHOST="$pghost" PGUSER="$USER" bash tests/phase7/verify_stats_confidence.sh "$major"
+          PGHOST="$pghost" PGUSER="$USER" PG_QI_BUILD_ID="$PG_QI_BUILD_ID" PG_QI_POSTGRES_BUILD_ID="$PG_QI_POSTGRES_BUILD_ID" PG_QI_SITE_BUILD_ID="$PG_QI_SITE_BUILD_ID" bash tests/phase7/verify_profile.sh "$major"
+          bash tests/phase7/verify_profile_parser.sh
           python3 -m unittest tests/phase7/test_decision_snapshot.py
           "$pgbin/pg_ctl" -D "$pgdata" -m fast -w stop
           trap - EXIT

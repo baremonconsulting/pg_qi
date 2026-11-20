@@ -23,6 +23,7 @@
 #include "pg_qi/qi_detector.h"
 #include "pg_qi/qi_eligibility.h"
 #include "pg_qi/qi_plan_features.h"
+#include "pg_qi/qi_profile.h"
 #include "pg_qi/qi_shadow_p0.h"
 #include "pg_qi/qi_semantic.h"
 #include "pg_qi/qi_snapshot.h"
@@ -35,6 +36,7 @@
 #include "storage/ipc.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
+#include "utils/timestamp.h"
 
 PG_MODULE_MAGIC;
 
@@ -113,6 +115,8 @@ PG_FUNCTION_INFO_V1(qi_test_classifier_contract);
 PG_FUNCTION_INFO_V1(qi_test_decision_v2_contract);
 PG_FUNCTION_INFO_V1(qi_test_plan_features_contract);
 PG_FUNCTION_INFO_V1(qi_test_stats_confidence_contract);
+PG_FUNCTION_INFO_V1(qi_test_profile_contract);
+PG_FUNCTION_INFO_V1(qi_test_profile_parse);
 PG_FUNCTION_INFO_V1(qi_test_shadow_p0_observer_contract);
 PG_FUNCTION_INFO_V1(qi_test_semantic_contract);
 PG_FUNCTION_INFO_V1(qi_test_semantic_probe);
@@ -297,6 +301,7 @@ done:
         qi_plan_features_unknown(QI_PLAN_FEATURE_NOT_OBSERVED);
     QiStatsConfidence stats_confidence =
         qi_stats_confidence_unknown(QI_STATS_NOT_OBSERVED);
+    QiProfileEvidence profile_evidence = qi_profile_not_observed();
     volatile bool frame_active = false;
 
     pg_qi_shadow_planner_depth++;
@@ -417,6 +422,7 @@ done:
             plan_features = qi_plan_features_observe(
                 (PlannedStmt *) planned_stmt, &shadow_p0_facts);
             stats_confidence = qi_stats_confidence_observe(&plan_features);
+            profile_evidence = qi_profile_observe(GetCurrentTimestamp());
         }
 
         if (request_applied)
@@ -435,7 +441,7 @@ done:
                     QI_SHADOW_P0_FACTS_UNKNOWN,
                 shadow_p0_facts_observed ? shadow_p0_facts.reason :
                     QI_SHADOW_P0_FACTS_NO_QUERY,
-                plan_features, stats_confidence);
+                plan_features, stats_confidence, profile_evidence);
 
         if (frame_active)
         {
@@ -510,6 +516,7 @@ _PG_init(void)
 
     qi_shadow_init_gucs();
     qi_shadow_p0_init_gucs();
+    qi_profile_init_gucs();
     qi_snapshot_init_guc();
 
 #if PG_QI_TESTING

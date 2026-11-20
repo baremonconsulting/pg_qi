@@ -10,5 +10,9 @@ testing=${PG_QI_TESTING:-1}
 mkdir -p "$artifact_dir"
 make PG_CONFIG="$pg_config" PG_QI_TESTING="$testing" clean >"$artifact_dir/clean.log" 2>&1
 make PG_CONFIG="$pg_config" PG_QI_TESTING="$testing" -j2 >"$artifact_dir/build.log" 2>&1
-sudo --preserve-env=PG_CONFIG make PG_CONFIG="$pg_config" PG_QI_TESTING="$testing" install \
+sudo --preserve-env=PG_CONFIG make PG_CONFIG="$pg_config" \
+    PG_QI_TESTING="$testing" \
+    PG_QI_BUILD_ID="${PG_QI_BUILD_ID:-0000000000000000000000000000000000000000}" \
+    PG_QI_POSTGRES_BUILD_ID="${PG_QI_POSTGRES_BUILD_ID:-0000000000000000000000000000000000000000000000000000000000000000}" \
+    install \
     >"$artifact_dir/install.log" 2>&1
