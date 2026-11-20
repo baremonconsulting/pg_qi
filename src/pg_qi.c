@@ -26,6 +26,7 @@
 #include "pg_qi/qi_shadow_p0.h"
 #include "pg_qi/qi_semantic.h"
 #include "pg_qi/qi_snapshot.h"
+#include "pg_qi/qi_stats_confidence.h"
 #if PG_QI_TESTING
 #include "pg_qi/qi_diag.h"
 #include "pg_qi/qi_reenter.h"
@@ -111,6 +112,7 @@ PG_FUNCTION_INFO_V1(qi_test_active_control_guard);
 PG_FUNCTION_INFO_V1(qi_test_classifier_contract);
 PG_FUNCTION_INFO_V1(qi_test_decision_v2_contract);
 PG_FUNCTION_INFO_V1(qi_test_plan_features_contract);
+PG_FUNCTION_INFO_V1(qi_test_stats_confidence_contract);
 PG_FUNCTION_INFO_V1(qi_test_shadow_p0_observer_contract);
 PG_FUNCTION_INFO_V1(qi_test_semantic_contract);
 PG_FUNCTION_INFO_V1(qi_test_semantic_probe);
@@ -293,6 +295,8 @@ done:
     };
     QiNativePlanFeatures plan_features =
         qi_plan_features_unknown(QI_PLAN_FEATURE_NOT_OBSERVED);
+    QiStatsConfidence stats_confidence =
+        qi_stats_confidence_unknown(QI_STATS_NOT_OBSERVED);
     volatile bool frame_active = false;
 
     pg_qi_shadow_planner_depth++;
@@ -409,8 +413,11 @@ done:
         }
 
         if (shadow_p0_facts_observed)
+        {
             plan_features = qi_plan_features_observe(
                 (PlannedStmt *) planned_stmt, &shadow_p0_facts);
+            stats_confidence = qi_stats_confidence_observe(&plan_features);
+        }
 
         if (request_applied)
             reason = verification == QI_VERIFICATION_VERIFIED &&
@@ -428,7 +435,7 @@ done:
                     QI_SHADOW_P0_FACTS_UNKNOWN,
                 shadow_p0_facts_observed ? shadow_p0_facts.reason :
                     QI_SHADOW_P0_FACTS_NO_QUERY,
-                plan_features);
+                plan_features, stats_confidence);
 
         if (frame_active)
         {

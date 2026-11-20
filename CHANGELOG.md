@@ -10,6 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - A private, bounded, backend-local V2 decision snapshot with atomic
   publication, role-safe `SHOW` read-back, strict readers, and lifecycle tests.
+- Private `SHOW pg_qi.stats_confidence` evidence with fail-closed freshness
+  reasons and PostgreSQL 16–19 lifecycle coverage.
 - A stricter direct-client proof that prevents deferred trigger and referential
   integrity planning during transaction completion from entering V1 or V2.
 - Reservation of the `pg_qi` GUC prefix so misspelled or unknown parameters

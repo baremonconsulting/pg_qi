@@ -148,6 +148,7 @@ jobs:
           PGHOST="$pghost" PGUSER="$USER" bash tests/outer_hook/verify.sh "$major"
           PGHOST="$pghost" PGUSER="$USER" bash tests/phase7/verify_snapshot.sh "$major"
           PGHOST="$pghost" PGUSER="$USER" bash tests/phase7/verify_plan_features.sh "$major"
+          PGHOST="$pghost" PGUSER="$USER" bash tests/phase7/verify_stats_confidence.sh "$major"
           python3 -m unittest tests/phase7/test_decision_snapshot.py
           "$pgbin/pg_ctl" -D "$pgdata" -m fast -w stop
           trap - EXIT

@@ -37,3 +37,5 @@ CREATE FUNCTION test_v2_snapshot_contract() RETURNS boolean
 AS 'MODULE_PATHNAME', 'qi_test_v2_snapshot_contract' LANGUAGE C VOLATILE STRICT PARALLEL UNSAFE;
 CREATE FUNCTION test_plan_features_contract() RETURNS boolean
 AS 'MODULE_PATHNAME', 'qi_test_plan_features_contract' LANGUAGE C VOLATILE STRICT PARALLEL UNSAFE;
+CREATE FUNCTION test_stats_confidence_contract() RETURNS boolean
+AS 'MODULE_PATHNAME', 'qi_test_stats_confidence_contract' LANGUAGE C VOLATILE STRICT PARALLEL UNSAFE;
