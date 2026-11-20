@@ -34,6 +34,33 @@ SHOW pg_qi.shadow_verification;
 SHOW pg_qi.shadow_request_applied;
 SHOW duckdb.force_execution;
 
+SET pg_qi.routing_mode = shadow_p0;
+SELECT id FROM shadow_plain WHERE id = 1;
+SHOW pg_qi.shadow_policy_intent;
+SHOW pg_qi.shadow_reason;
+SHOW pg_qi.shadow_force_origin;
+SHOW pg_qi.shadow_observed_engine;
+SHOW pg_qi.shadow_verification;
+SHOW pg_qi.shadow_request_applied;
+SHOW pg_qi.shadow_p0_facts_state;
+SHOW pg_qi.shadow_p0_facts_reason;
+SHOW duckdb.force_execution;
+
+SELECT a01.id
+FROM shadow_plain a01, shadow_plain a02, shadow_plain a03,
+     shadow_plain a04, shadow_plain a05, shadow_plain a06,
+     shadow_plain a07, shadow_plain a08, shadow_plain a09,
+     shadow_plain a10, shadow_plain a11, shadow_plain a12,
+     shadow_plain a13, shadow_plain a14, shadow_plain a15,
+     shadow_plain a16, shadow_plain a17
+WHERE false;
+SHOW pg_qi.shadow_reason;
+SHOW pg_qi.shadow_request_applied;
+SHOW pg_qi.shadow_p0_facts_state;
+SHOW pg_qi.shadow_p0_facts_reason;
+SHOW duckdb.force_execution;
+SET pg_qi.routing_mode = allowlist;
+
 SELECT id FROM shadow_plain WHERE id = 1 AND (1 / 0) = 0;
 SHOW duckdb.force_execution;
 SELECT id FROM shadow_plain WHERE id = 2;

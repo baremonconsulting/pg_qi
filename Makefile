@@ -4,7 +4,8 @@ EXTENSION = pg_qi
 MODULE_big = pg_qi
 OBJS = src/pg_qi.o src/qi_classify.o src/qi_context.o src/qi_decision.o \
        src/qi_decision_v2.o \
-       src/qi_delegation.o src/qi_detector.o src/qi_eligibility.o
+       src/qi_delegation.o src/qi_detector.o src/qi_eligibility.o \
+       src/qi_shadow_p0.o
 
 DATA = sql/pg_qi--0.0.1.sql
 

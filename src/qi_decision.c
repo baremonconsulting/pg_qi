@@ -38,6 +38,7 @@ static const struct config_enum_entry qi_shadow_reason_options[] = {
     {"policy_missing", QI_SHADOW_POLICY_MISSING, false},
     {"context_unproved", QI_SHADOW_CONTEXT_UNPROVED_REASON, false},
     {"state_poisoned", QI_SHADOW_STATE_POISONED, false},
+    {"decision_only", QI_SHADOW_DECISION_ONLY, false},
     {"delegation_requested", QI_SHADOW_DELEGATION_REQUESTED, false},
     {"delegation_declined", QI_SHADOW_DELEGATION_DECLINED, false},
     {"delegation_verified", QI_SHADOW_DELEGATION_VERIFIED, false},

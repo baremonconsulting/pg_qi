@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- An inert `shadow_p0` routing mode with exhaustive fail-closed dispatch,
+  bounded pre-planning facts and production non-interference regression tests.
 - PGQI-4C production-only pilot evidence harness, same-session diagnostics,
   isolated rollback drill and operator cookbook.
 - Production request benchmark for the manual workflow; WP11 remains

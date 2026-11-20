@@ -122,6 +122,14 @@ allow-list for the current configuration scope:
 SET pg_qi.routing_mode = 'allowlist';
 ```
 
+The internal `shadow_p0` mode observes bounded decision facts but remains
+strictly non-intervening: it neither creates a delegation request nor changes
+`duckdb.force_execution`.
+
+```sql
+SET pg_qi.routing_mode = 'shadow_p0';
+```
+
 Do not enable this mode for production workloads in the pre-alpha release.
 
 The completed backend-local snapshot is available through read-only
