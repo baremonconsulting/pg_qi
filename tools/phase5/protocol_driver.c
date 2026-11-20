@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include <libpq-fe.h>
+#include <openssl/sha.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -166,11 +167,23 @@ static int write_u32(FILE *f, uint32_t v) {
     return fwrite(b, 1, 4, f) == 4;
 }
 
+static int write_u64(FILE *f, uint64_t v) {
+    unsigned char b[8] = {(unsigned char)(v >> 56), (unsigned char)(v >> 48),
+                          (unsigned char)(v >> 40), (unsigned char)(v >> 32),
+                          (unsigned char)(v >> 24), (unsigned char)(v >> 16),
+                          (unsigned char)(v >> 8), (unsigned char)v};
+    return fwrite(b, 1, sizeof(b), f) == sizeof(b);
+}
+
 static unsigned char *result_metadata(PGresult *r, size_t maximum_columns,
-                                      size_t *length, const char **reason) {
-    static const unsigned char magic[] = "PGQSP001";
+                                      int spool_version, size_t *length,
+                                      const char **reason) {
+    static const unsigned char magic_v1[] = "PGQSP001";
+    static const unsigned char magic_v2[] = "PGQSP002";
+    const unsigned char *magic = spool_version == 2 ? magic_v2 : magic_v1;
+    size_t magic_length = sizeof(magic_v1) - 1;
     int fields = PQnfields(r), column;
-    size_t total = sizeof(magic) - 1 + 4;
+    size_t total = magic_length + 4;
     unsigned char *payload, *cursor;
     if (fields < 0 || (size_t)fields > maximum_columns) {
         *reason = "max_columns"; return NULL;
@@ -179,15 +192,16 @@ static unsigned char *result_metadata(PGresult *r, size_t maximum_columns,
         const char *name = PQfname(r, column);
         size_t name_length;
         if (!name || !(name_length = strlen(name)) || name_length > 1024 ||
-                name_length > UINT32_MAX || total > SIZE_MAX - 8 - name_length) {
+                name_length > UINT32_MAX ||
+                total > SIZE_MAX - (spool_version == 2 ? 16 : 8) - name_length) {
             *reason = "result_metadata"; return NULL;
         }
-        total += 8 + name_length;
+        total += (spool_version == 2 ? 16 : 8) + name_length;
     }
     payload = malloc(total);
     if (!payload) { *reason = "result_metadata"; return NULL; }
     cursor = payload;
-    memcpy(cursor, magic, sizeof(magic) - 1); cursor += sizeof(magic) - 1;
+    memcpy(cursor, magic, magic_length); cursor += magic_length;
 #define PUT_U32(P, V) do { uint32_t put_value = (uint32_t)(V); \
     *(P)++ = (unsigned char)(put_value >> 24); \
     *(P)++ = (unsigned char)(put_value >> 16); \
@@ -200,10 +214,45 @@ static unsigned char *result_metadata(PGresult *r, size_t maximum_columns,
         PUT_U32(cursor, name_length);
         memcpy(cursor, name, name_length); cursor += name_length;
         PUT_U32(cursor, PQftype(r, column));
+        if (spool_version == 2) {
+            PUT_U32(cursor, (uint32_t)(int32_t)PQfmod(r, column));
+            PUT_U32(cursor, (uint32_t)PQfformat(r, column));
+        }
     }
 #undef PUT_U32
     *length = total;
     return payload;
+}
+
+static int write_v2_trailer(FILE *spool, const unsigned char *metadata,
+                            size_t metadata_length, const Limits *l,
+                            unsigned int completions, int server_error,
+                            const char sqlstate[6], const char **reason) {
+    static const uint32_t marker = UINT32_MAX - 1U;
+    unsigned char digest[SHA256_DIGEST_LENGTH];
+    unsigned char state[8] = {0};
+    const uint64_t trailer_bytes = 4U + 4U + sizeof(state) + 8U + 4U +
+                                   SHA256_DIGEST_LENGTH;
+    if (!metadata || (server_error && (!sqlstate || strlen(sqlstate) != 5))) {
+        *reason = "v2_terminal_evidence"; return 0;
+    }
+    if (trailer_bytes > l->max_spool ||
+            l->spool_bytes > l->max_spool - trailer_bytes) {
+        *reason = "max_spool_bytes"; return 0;
+    }
+    if (!SHA256(metadata, metadata_length, digest)) {
+        *reason = "descriptor_digest"; return 0;
+    }
+    if (server_error) memcpy(state, sqlstate, 5);
+    if (!write_u32(spool, marker) ||
+        !write_u32(spool, server_error ? 1U : 0U) ||
+        fwrite(state, 1, sizeof(state), spool) != sizeof(state) ||
+        !write_u64(spool, l->rows) ||
+        !write_u32(spool, completions) ||
+        fwrite(digest, 1, sizeof(digest), spool) != sizeof(digest)) {
+        *reason = "spool_write"; return 0;
+    }
+    return 1;
 }
 
 static int spool_row(FILE *spool, PGresult *r, Limits *l, const char **reason) {
@@ -261,10 +310,10 @@ static int send_subject(PGconn *c, const char *sql, const char *protocol,
 }
 
 static int stream(PGconn *c, FILE *spool, Limits *l, int64_t deadline,
-                  const char **reason, char sqlstate[6]) {
+                  int spool_version, const char **reason, char sqlstate[6]) {
     PGresult *r = NULL; unsigned int completions = 0;
     unsigned char *metadata = NULL; size_t metadata_length = 0;
-    int success = 0;
+    int success = 0, draining_error = 0, controlled_error = 0;
     if (!PQsetSingleRowMode(c)) { *reason = "single_row_mode"; goto done; }
     for (;;) {
         if (now_ms() >= deadline) { *reason = "query_deadline"; goto done; }
@@ -276,10 +325,11 @@ static int stream(PGconn *c, FILE *spool, Limits *l, int64_t deadline,
         r = PQgetResult(c);
         if (!r) break;
         if (++l->messages > l->max_messages) { *reason = "max_messages"; goto done; }
+        if (draining_error) { PQclear(r); r = NULL; continue; }
         if (PQresultStatus(r) == PGRES_SINGLE_TUPLE ||
             PQresultStatus(r) == PGRES_TUPLES_OK) {
             size_t current_length = 0;
-            unsigned char *current = result_metadata(r, l->max_columns,
+            unsigned char *current = result_metadata(r, l->max_columns, spool_version,
                                                      &current_length, reason);
             if (!current) goto done;
             if (!metadata) {
@@ -311,13 +361,38 @@ static int stream(PGconn *c, FILE *spool, Limits *l, int64_t deadline,
                 sqlstate[5] = 0;
             }
             *reason = l->rows ? "server_error_after_partial_stream" : "server_error";
-            goto done;
+            if (spool_version == 2 && !metadata) {
+                metadata = result_metadata(r, l->max_columns, spool_version,
+                                           &metadata_length, reason);
+                if (!metadata || metadata_length > l->max_spool ||
+                        l->spool_bytes > l->max_spool - metadata_length ||
+                        fwrite(metadata, 1, metadata_length, spool) != metadata_length) {
+                    if (metadata && !strcmp(*reason, "server_error"))
+                        *reason = "spool_write";
+                    goto done;
+                }
+                l->spool_bytes += metadata_length;
+            }
+            controlled_error = 1; draining_error = 1;
         } else {
             *reason = "unexpected_result_status"; goto done;
         }
         PQclear(r); r = NULL;
     }
+    if (controlled_error) {
+        if (spool_version == 2 &&
+                write_v2_trailer(spool, metadata, metadata_length, l, completions,
+                                 1, sqlstate, reason))
+            l->spool_bytes += 60U;
+        goto done;
+    }
     if (completions != 1 || !metadata) { *reason = "missing_result_completion"; goto done; }
+    if (spool_version == 2) {
+        if (!write_v2_trailer(spool, metadata, metadata_length, l, completions,
+                              0, sqlstate, reason))
+            goto done;
+        l->spool_bytes += 60U;
+    }
     success = 1;
 done:
     if (r) PQclear(r);
@@ -507,13 +582,15 @@ static void usage(const char *p) {
             "--protocol extended|simple --deadline-ms N --cancel-deadline-ms N --max-rows N "
             "--max-bytes N --max-columns N --max-field-bytes N "
             "--max-spool-bytes N --max-messages N --snapshot PATH "
-            "--session-mode disabled|off|lab_allowlist|native_baseline [--prepared NAME]\n", p);
+            "--session-mode disabled|off|lab_allowlist|native_baseline "
+            "[--prepared NAME] [--spool-version 1|2]\n", p);
 }
 
 int main(int argc, char **argv) {
     const char *conninfo = NULL, *sql_path = NULL, *spool_path = NULL;
     const char *protocol = NULL, *prepared = NULL, *snapshot = NULL;
     const char *session_mode = NULL;
+    int spool_version = 1;
     const char *reason = "invalid_arguments";
     char sqlstate[6] = ""; uint64_t deadline_ms = 0, cancel_deadline_ms = 0, v; int i, ok = 0;
     Limits l = {0}; char *sql = NULL, *before = NULL; FILE *spool = NULL;
@@ -529,6 +606,9 @@ int main(int argc, char **argv) {
         else if (!strcmp(option, "--prepared")) prepared = value;
         else if (!strcmp(option, "--snapshot")) snapshot = value;
         else if (!strcmp(option, "--session-mode")) session_mode = value;
+        else if (!strcmp(option, "--spool-version") &&
+                 (!strcmp(value, "1") || !strcmp(value, "2")))
+            spool_version = value[0] - '0';
         else if (!strcmp(option, "--deadline-ms") &&
                  parse_u64(value, 3600000, &v)) deadline_ms = v;
         else if (!strcmp(option, "--cancel-deadline-ms") &&
@@ -576,7 +656,7 @@ int main(int argc, char **argv) {
         if (!strcmp(send_reason, "query_deadline")) cancel_owned_query(c, &l, cancel_deadline_ms);
         terminal("FAILED", send_reason, &l, NULL); goto done;
     }
-    if (!stream(c, spool, &l, query_deadline, &reason, sqlstate)) {
+    if (!stream(c, spool, &l, query_deadline, spool_version, &reason, sqlstate)) {
         interval_finish(&l, !strcmp(reason, "query_deadline") ? 3 : 2);
         if (!strncmp(reason, "max_", 4) || !strcmp(reason, "query_deadline"))
             cancel_owned_query(c, &l, cancel_deadline_ms);

@@ -96,6 +96,14 @@ static PostgreSQL instance with no `pg_qi`, `pg_duckdb` or delegating provider.
 See `docs/phase5/PGQI-5-corpus-oracle.md` for the exact evidence contract and
 limitations.
 
+PQ-31 adds an explicit `--spool-version 2` driver option. PGQSP002 records
+actual libpq OID, signed typmod and format, supports bounded text, varchar,
+bpchar and bool values, and ends in a mandatory authenticated completion or
+SQLSTATE trailer. The default remains PGQSP001 byte-for-byte; existing pilot
+consumers do not opt into v2. The phase-7 differential layer reuses this same
+comparator and does not implement a second value oracle. See
+`docs/phase7/PQ7-4-differential-oracle.md`.
+
 ## Release and site-preflight policy
 
 `site_preflight.py` validates an exact source/build/install/start dossier,

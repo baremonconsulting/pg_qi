@@ -33,6 +33,9 @@ The repository currently contains:
   `duckdb.force_execution`;
 - plan-tree detection for `DuckDBScan`;
 - a production-built, backend-local shadow decision record;
+- a test-only three-arm differential oracle that proves PostgreSQL versus
+  pg_duckdb execution, MVCC snapshot parity, typed result equivalence and
+  metadata equivalence without activating production routing;
 - a conservative shadow candidate classifier separate from the WP14
   prototype;
 - conservative client-context proof and final planner-boundary verification;
@@ -136,6 +139,11 @@ administrator-created `NOLOGIN` role named `pgqi_diagnostic`; ordinary roles
 receive no diagnostic payload. See
 [`docs/phase7/PQ7-3-private-atomic-snapshot.md`](docs/phase7/PQ7-3-private-atomic-snapshot.md)
 for lifecycle, pooling, privacy, and correlation rules.
+
+The PQ-31 differential oracle is a CI and controlled-lab qualification tool,
+not a production router or telemetry interface. Its witness library is built
+only from `tests/phase7/witness` and is checked absent from `pg_qi.so`. See
+[`docs/phase7/PQ7-4-differential-oracle.md`](docs/phase7/PQ7-4-differential-oracle.md).
 
 Do not enable this mode for production workloads in the pre-alpha release.
 
