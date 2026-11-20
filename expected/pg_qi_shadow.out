@@ -104,6 +104,16 @@ SHOW pg_qi.shadow_p0_facts_reason;
 ok
 SHOW pg_qi.shadow_p0_capability;
 max_int4
+CREATE ROLE shadow_column_reader;
+CREATE TABLE shadow_dropped(a integer, b integer);
+ALTER TABLE shadow_dropped DROP COLUMN a;
+GRANT SELECT (b) ON shadow_dropped TO shadow_column_reader;
+SET ROLE shadow_column_reader;
+SELECT count(*) FROM shadow_dropped;
+0
+RESET ROLE;
+DROP TABLE shadow_dropped;
+DROP ROLE shadow_column_reader;
 SELECT count(*) FROM shadow_plain WHERE id > 0;
 2
 SHOW pg_qi.shadow_p0_facts_state;
@@ -445,13 +455,13 @@ SELECT id FROM shadow_plain WHERE id = 1;
 SHOW pg_qi.shadow_reason;
 policy_missing
 SHOW pg_qi.shadow_decision_id;
-116
+125
 SELECT 1 / 0;
 ERROR:  division by zero
 SHOW pg_qi.shadow_reason;
 policy_missing
 SHOW pg_qi.shadow_decision_id;
-116
+125
 SELECT id FROM shadow_plain WHERE id = 2;
 2
 SHOW pg_qi.shadow_context;

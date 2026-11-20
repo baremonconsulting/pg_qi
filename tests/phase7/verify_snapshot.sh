@@ -144,6 +144,24 @@ SHOW pg_qi.decision_v2;
 RESET SESSION AUTHORIZATION;
 \echo AFTER_SESSION_RESET
 SHOW pg_qi.decision_v2;
+SET pg_qi.routing_mode = shadow_p0;
+\o /dev/null
+SELECT count(*) FROM snapshot_plain;
+\o
+\echo SEMANTIC_COUNT
+SHOW pg_qi.decision_v2;
+\o /dev/null
+SELECT count(*) FROM snapshot_plain TABLESAMPLE SYSTEM (100) REPEATABLE (42);
+\o
+\echo Q28_NOT_EVALUATED
+SHOW pg_qi.decision_v2;
+\echo Q30_NATIVE_TYPE_SCALE
+SELECT pg_typeof(v), v::text FROM (
+    SELECT round(count(*) FILTER (WHERE id > 0)::numeric / 3, 2) AS v
+    FROM snapshot_plain
+) AS q;
+\echo Q30_NOT_EVALUATED
+SHOW pg_qi.decision_v2;
 DISCARD ALL;
 \echo AFTER_DISCARD
 SHOW pg_qi.decision_v2;
@@ -162,6 +180,7 @@ SQL
 
 test "$(grep -Ec '^ERROR:  division by zero$' "$errors")" -eq 1
 test "$(grep -Ec '^ERROR:  pg_qi outer fixture planner cancellation$' "$errors")" -eq 1
+grep -q '^numeric|0.33$' "$output"
 
 python3 - "$repo" "$output" <<'PY'
 import sys
@@ -179,7 +198,8 @@ tags = {"INITIAL", "FIRST", "FIRST_AGAIN", "AFTER_ERROR", "AFTER_CANCEL",
         "AFTER_DEFERRED_FK_COMMIT", "DENIED", "AFTER_ROLE_RESET",
         "DENIED_CURRENT_SETTING", "SETTINGS_COUNT", "DIAGNOSTIC_ROLE",
         "LOGIN_DIAGNOSTIC_DENIED", "REVOKED", "SESSION_DENIED",
-        "AFTER_SESSION_RESET", "AFTER_DISCARD"}
+        "AFTER_SESSION_RESET", "SEMANTIC_COUNT", "Q28_NOT_EVALUATED",
+        "Q30_NOT_EVALUATED", "AFTER_DISCARD"}
 values = {}
 for index, line in enumerate(lines):
     if line in tags:
@@ -213,6 +233,17 @@ assert parsed["LOGIN_DIAGNOSTIC_DENIED"]["s"] == "denied"
 assert parsed["REVOKED"]["s"] == "denied"
 assert parsed["SESSION_DENIED"]["s"] == "denied"
 assert parsed["AFTER_SESSION_RESET"]["s"] == "none"
+assert parsed["SEMANTIC_COUNT"]["s"] == "complete"
+assert parsed["SEMANTIC_COUNT"]["safe"] == "unknown"
+assert parsed["SEMANTIC_COUNT"]["barrier"] == "closed"
+assert parsed["SEMANTIC_COUNT"]["reason"] == "500"
+assert parsed["SEMANTIC_COUNT"]["p0"] == "bounded"
+assert parsed["SEMANTIC_COUNT"]["recommendation"] == "insufficient_evidence"
+assert parsed["SEMANTIC_COUNT"]["mode"] == "shadow_p0"
+assert parsed["Q28_NOT_EVALUATED"]["safe"] == "not_evaluated"
+assert parsed["Q28_NOT_EVALUATED"]["reason"] == "0"
+assert parsed["Q30_NOT_EVALUATED"]["safe"] == "not_evaluated"
+assert parsed["Q30_NOT_EVALUATED"]["reason"] == "0"
 assert parsed["AFTER_DISCARD"]["s"] == "none"
 assert int(parsed["AFTER_DISCARD"]["g"]) > int(parsed["INITIAL"]["g"])
 PY

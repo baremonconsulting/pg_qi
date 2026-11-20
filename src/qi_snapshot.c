@@ -334,6 +334,7 @@ qi_snapshot_prepare(QiV2SnapshotCandidate *candidate,
                     QiShadowEngine observed_engine,
                     QiVerification verification,
                     QiShadowObservation observation,
+                    QiSemanticFacts semantic,
                     QiShadowP0FactsState p0_state,
                     QiShadowP0FactsReason p0_reason)
 {
@@ -346,7 +347,7 @@ qi_snapshot_prepare(QiV2SnapshotCandidate *candidate,
         return false;
 
     decision = qi_v2_evaluate(QI_GATE_NOT_EVALUATED,
-                              QI_GATE_NOT_EVALUATED,
+                              qi_semantic_gate_state(&semantic),
                               QI_GATE_NOT_EVALUATED,
                               QI_V2_ACTIVATION_CLOSED,
                               QI_DECISION_V2_RULE_VERSION,
@@ -368,6 +369,7 @@ qi_snapshot_prepare(QiV2SnapshotCandidate *candidate,
     candidate->observation = observation;
     candidate->p0_state = p0_state;
     candidate->p0_reason = p0_reason;
+    candidate->semantic = semantic;
     candidate->valid = true;
     return true;
 }
@@ -444,6 +446,11 @@ qi_test_v2_snapshot_contract(PG_FUNCTION_ARGS)
         QI_FORCE_OFF, QI_SHADOW_ENGINE_UNKNOWN,
         QI_VERIFICATION_UNVERIFIED,
         QI_SHADOW_OBSERVATION_NO_AUTHORITATIVE_MATCH,
+        (QiSemanticFacts) {QI_SEMANTIC_UNKNOWN,
+                           QI_SEMANTIC_PROFILE_COUNT_STAR,
+                           QI_SEMANTIC_BLOCKER_INACTIVE |
+                           QI_SEMANTIC_BLOCKER_BUILD_IDENTITY_UNVERIFIED |
+                           QI_SEMANTIC_BLOCKER_SNAPSHOT_UNPROVEN},
         QI_SHADOW_P0_FACTS_BOUNDED, QI_SHADOW_P0_FACTS_OK) &&
         qi_snapshot_commit(&candidate);
     sequence_one = qi_snapshot_store.has_event &&
