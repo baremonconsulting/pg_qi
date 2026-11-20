@@ -9,6 +9,8 @@
 #include "executor/executor.h"
 #include "miscadmin.h"
 #include "pg_qi/qi_context.h"
+#include "pg_qi/qi_snapshot.h"
+#include "tcop/tcopprot.h"
 #include "tcop/utility.h"
 
 static ExecutorStart_hook_type previous_executor_start_hook = NULL;
@@ -125,6 +127,8 @@ qi_process_utility(PlannedStmt *pstmt, const char *query_string,
         qi_utility_call_depth--;
     }
     PG_END_TRY();
+
+    qi_snapshot_handle_utility(pstmt->utilityStmt);
 }
 
 void
@@ -159,10 +163,13 @@ qi_context_fini_hooks(void)
 }
 
 bool
-qi_context_proven_for_routing(bool planner_hook_outermost, int planner_depth)
+qi_context_proven_for_routing(bool planner_hook_outermost, int planner_depth,
+                              const char *query_string)
 {
     return MyBackendType == B_BACKEND &&
         !IsParallelWorker() &&
+        query_string != NULL &&
+        query_string == debug_query_string &&
         planner_depth == 1 &&
         qi_executor_call_depth == 0 &&
         qi_utility_call_depth == 0 &&

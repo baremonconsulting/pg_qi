@@ -18,9 +18,12 @@
 #include "pg_qi/qi_classify.h"
 #include "pg_qi/qi_context.h"
 #include "pg_qi/qi_decision.h"
+#include "pg_qi/qi_decision_v2.h"
 #include "pg_qi/qi_delegation.h"
 #include "pg_qi/qi_detector.h"
 #include "pg_qi/qi_eligibility.h"
+#include "pg_qi/qi_shadow_p0.h"
+#include "pg_qi/qi_snapshot.h"
 #if PG_QI_TESTING
 #include "pg_qi/qi_diag.h"
 #include "pg_qi/qi_reenter.h"
@@ -36,7 +39,7 @@ PG_MODULE_MAGIC;
 
 static bool pg_qi_enabled = true;
 static bool pg_qi_preloaded = false;
-static int pg_qi_routing_mode = 0;
+static int pg_qi_routing_mode = QI_ROUTING_OFF;
 #if PG_QI_TESTING
 static bool pg_qi_last_plan_has_duckdb_scan = false;
 static bool pg_qi_previous_hook_present = false;
@@ -50,8 +53,9 @@ static int pg_qi_shadow_planner_depth = 0;
 #endif
 
 static const struct config_enum_entry pg_qi_routing_mode_options[] = {
-    {"off", 0, false},
-    {"allowlist", 1, false},
+    {"off", QI_ROUTING_OFF, false},
+    {"allowlist", QI_ROUTING_ALLOWLIST, false},
+    {"shadow_p0", QI_ROUTING_SHADOW_P0, false},
     {NULL, 0, false}
 };
 
@@ -103,6 +107,9 @@ PG_FUNCTION_INFO_V1(qi_spike_state);
 PG_FUNCTION_INFO_V1(qi_spike_observer);
 PG_FUNCTION_INFO_V1(qi_test_active_control_guard);
 PG_FUNCTION_INFO_V1(qi_test_classifier_contract);
+PG_FUNCTION_INFO_V1(qi_test_decision_v2_contract);
+PG_FUNCTION_INFO_V1(qi_test_shadow_p0_observer_contract);
+PG_FUNCTION_INFO_V1(qi_test_v2_snapshot_contract);
 #endif
 
 QI_PLANNER_PROTO(pg_qi_planner)
@@ -256,17 +263,31 @@ done:
         QI_SHADOW_OBSERVATION_NO_AUTHORITATIVE_MATCH;
     bool context_proven;
     bool request_applied = false;
+    bool shadow_p0_facts_observed = false;
+    QiRoutingMode mode_at_decision = (QiRoutingMode) pg_qi_routing_mode;
+    bool enabled_at_decision = pg_qi_enabled;
+    QiV2SnapshotToken v2_token;
+    QiV2SnapshotCandidate v2_candidate;
+    bool v2_candidate_ready = false;
+    QiShadowP0Facts shadow_p0_facts = {
+        .state = QI_SHADOW_P0_FACTS_UNKNOWN,
+        .reason = QI_SHADOW_P0_FACTS_NO_QUERY,
+        .rtable_entries = 0,
+        .relation_entries = 0
+    };
     volatile bool frame_active = false;
 
     pg_qi_shadow_planner_depth++;
     context_proven = qi_context_proven_for_routing(
-        planner_hook == pg_qi_planner, pg_qi_shadow_planner_depth);
+        planner_hook == pg_qi_planner, pg_qi_shadow_planner_depth,
+        query_string);
     if (pg_qi_shadow_planner_depth > 1)
         context = QI_SHADOW_CONTEXT_NESTED;
     else if (context_proven)
         context = QI_SHADOW_CONTEXT_PROVEN_CLIENT;
     else
         context = QI_SHADOW_CONTEXT_UNPROVED_OUTERMOST;
+    v2_token = qi_snapshot_begin();
 
     PG_TRY();
     {
@@ -300,27 +321,55 @@ done:
             reason = QI_SHADOW_CONTEXT_UNPROVED_REASON;
         else
         {
+            /*
+             * Shadow observation is independent of the historical V1
+             * allow-list.  This ordering makes limits and catalog misses
+             * observable even when V1 correctly rejects the query.
+             */
+            if (pg_qi_routing_mode == QI_ROUTING_SHADOW_P0)
+            {
+                shadow_p0_facts = qi_shadow_p0_observe_query(parse);
+                shadow_p0_facts_observed = true;
+            }
+
             eligibility = qi_eligibility_query(parse);
             classifier_status = eligibility.candidate
                 ? QI_SHADOW_CLASSIFIER_CANDIDATE
                 : QI_SHADOW_CLASSIFIER_REJECTED;
             if (!eligibility.candidate)
                 reason = QI_SHADOW_CLASSIFIER_REJECTED_REASON;
-            else if (pg_qi_routing_mode == 0)
-                reason = QI_SHADOW_POLICY_MISSING;
             else
             {
-                policy_intent = QI_POLICY_REQUEST_DELEGATION;
-                reason = QI_SHADOW_DELEGATION_REQUESTED;
-                decision_force_origin = QI_FORCE_QI_STACK;
-                save_nestlevel = NewGUCNestLevel();
-                frame = qi_frame_push(save_nestlevel, force_origin, true,
-                                      false, 0);
-                frame_id = frame->frame_id;
-                frame_active = true;
-                if (frame->guc_changed)
-                    qi_set_force_execution(true);
-                request_applied = true;
+                switch ((QiRoutingMode) pg_qi_routing_mode)
+                {
+                    case QI_ROUTING_OFF:
+                        reason = QI_SHADOW_POLICY_MISSING;
+                        break;
+                    case QI_ROUTING_ALLOWLIST:
+                        policy_intent = QI_POLICY_REQUEST_DELEGATION;
+                        reason = QI_SHADOW_DELEGATION_REQUESTED;
+                        decision_force_origin = QI_FORCE_QI_STACK;
+                        save_nestlevel = NewGUCNestLevel();
+                        frame = qi_frame_push(save_nestlevel, force_origin,
+                                              true, false, 0);
+                        frame_id = frame->frame_id;
+                        frame_active = true;
+                        if (frame->guc_changed)
+                            qi_set_force_execution(true);
+                        request_applied = true;
+                        break;
+                    case QI_ROUTING_SHADOW_P0:
+                        /*
+                         * Decision-only skeleton.  PQ7-5 extends these bounded
+                         * relation facts into the positive capability walker.
+                         */
+                        reason = QI_SHADOW_DECISION_ONLY;
+                        break;
+                    default:
+                        /* Fail closed if a future value reaches this switch. */
+                        reason = QI_SHADOW_POLICY_MISSING;
+                        break;
+                }
             }
         }
 
@@ -345,6 +394,17 @@ done:
                 ? QI_SHADOW_DELEGATION_VERIFIED
                 : QI_SHADOW_DELEGATION_DECLINED;
 
+        if (context_proven && pg_qi_shadow_planner_depth == 1)
+            v2_candidate_ready = qi_snapshot_prepare(
+                &v2_candidate, v2_token, mode_at_decision,
+                enabled_at_decision, context, policy_intent,
+                decision_force_origin, observed_engine, verification,
+                observation,
+                shadow_p0_facts_observed ? shadow_p0_facts.state :
+                    QI_SHADOW_P0_FACTS_UNKNOWN,
+                shadow_p0_facts_observed ? shadow_p0_facts.reason :
+                    QI_SHADOW_P0_FACTS_NO_QUERY);
+
         if (frame_active)
         {
             AtEOXact_GUC(true, save_nestlevel);
@@ -357,10 +417,21 @@ done:
 
         /* Nested observations never replace the completed outer snapshot. */
         if (pg_qi_shadow_planner_depth == 1)
+        {
+            if (shadow_p0_facts_observed)
+                qi_shadow_p0_publish_facts(shadow_p0_facts);
+            else
+                qi_shadow_p0_reset_facts();
             qi_shadow_publish(context, policy_intent, decision_force_origin,
                               classifier_status, eligibility, reason,
                               observed_engine, verification, observation,
                               request_applied);
+            if (v2_candidate_ready &&
+                qi_context_proven_for_routing(
+                    planner_hook == pg_qi_planner,
+                    pg_qi_shadow_planner_depth, query_string))
+                (void) qi_snapshot_commit(&v2_candidate);
+        }
     }
     PG_CATCH();
     {
@@ -394,10 +465,10 @@ _PG_init(void)
                              NULL);
 
     DefineCustomEnumVariable("pg_qi.routing_mode",
-                             "Controls production allow-list routing.",
-                             "The default off mode remains observational.",
+                             "Selects disabled, allow-list, or decision-only shadow policy.",
+                             "Only allowlist may request delegation; shadow_p0 is inert.",
                              &pg_qi_routing_mode,
-                             0,
+                             QI_ROUTING_OFF,
                              pg_qi_routing_mode_options,
                              PGC_SUSET,
                              0,
@@ -406,6 +477,8 @@ _PG_init(void)
                              NULL);
 
     qi_shadow_init_gucs();
+    qi_shadow_p0_init_gucs();
+    qi_snapshot_init_guc();
 
 #if PG_QI_TESTING
     DefineCustomBoolVariable("pg_qi.spike_last_plan_has_duckdb_scan",
@@ -440,6 +513,8 @@ _PG_init(void)
     qi_reenter_init_gucs();
     qi_diag_init_gucs();
 #endif
+
+    MarkGUCPrefixReserved("pg_qi");
 
     /*
      * SQL-callable functions remain available when the library is loaded by

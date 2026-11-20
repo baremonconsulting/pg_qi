@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 import struct
@@ -34,6 +35,32 @@ def write_spool(path: Path, columns: list[tuple[str, int]], rows: list[tuple[obj
             else:
                 encoded = str(value).encode()
                 data += struct.pack(">I", len(encoded)) + encoded
+    path.write_bytes(data)
+    os.chmod(path, 0o600)
+
+
+def write_spool_v2(path: Path, columns: list[tuple[str, int, int, int]],
+                   rows: list[tuple[object, ...]], *, status: int = 0,
+                   sqlstate: str = "", completions: int | None = None) -> None:
+    data = bytearray(ORACLE.MAGIC_V2) + struct.pack(">I", len(columns))
+    for name, oid, typmod, result_format in columns:
+        encoded = name.encode()
+        data += (struct.pack(">I", len(encoded)) + encoded + struct.pack(">I", oid) +
+                 struct.pack(">iI", typmod, result_format))
+    descriptor_digest = hashlib.sha256(data).digest()
+    for row in rows:
+        data += struct.pack(">I", len(row))
+        for value in row:
+            if value is None:
+                data += struct.pack(">I", 0xFFFFFFFF)
+            else:
+                encoded = value if isinstance(value, bytes) else str(value).encode()
+                data += struct.pack(">I", len(encoded)) + encoded
+    state = (sqlstate.encode() if status else b"\x00" * 5) + b"\x00" * 3
+    if completions is None:
+        completions = 0 if status else 1
+    data += (struct.pack(">II", ORACLE.TRAILER_MARKER, status) + state +
+             struct.pack(">QI", len(rows), completions) + descriptor_digest)
     path.write_bytes(data)
     os.chmod(path, 0o600)
 
@@ -272,6 +299,71 @@ class OracleTests(unittest.TestCase):
             left.chmod(0o600); right.chmod(0o600)
             with self.assertRaisesRegex(ORACLE.OracleError, "unsupported spool version"):
                 ORACLE.compare_spools(left, right, scratch)
+
+    def test_v2_supported_values_metadata_and_multiset(self) -> None:
+        columns = [("id", 23, -1, 0), ("label", 25, -1, 0),
+                   ("flag", 16, -1, 0), ("code", 1043, 12, 0),
+                   ("fixed", 1042, 8, 0)]
+        rows = [(1, "alpha", "t", "A", "xy  "),
+                (2, "", "f", None, "z   "),
+                (2, "", "f", None, "z   ")]
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); scratch = root / "scratch"; scratch.mkdir(mode=0o700)
+            left = root / "left"; right = root / "right"
+            write_spool_v2(left, columns, rows)
+            write_spool_v2(right, columns, list(reversed(rows)))
+            report = ORACLE.compare_spools(left, right, scratch)
+            self.assertEqual(report["result"], "PASS")
+            self.assertEqual(report["reason"], "complete_multiset_equal")
+
+    def test_v2_metadata_null_duplicate_value_and_order_mutations(self) -> None:
+        columns = [("id", 23, -1, 0), ("value", 25, -1, 0)]
+        rows = [(1, None), (2, "x"), (2, "x")]
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); scratch = root / "scratch"; scratch.mkdir(mode=0o700)
+            baseline_path = root / "baseline"
+            write_spool_v2(baseline_path, columns, rows)
+            variants = [
+                ([("id", 20, -1, 0), ("value", 25, -1, 0)], rows, "descriptor_mismatch"),
+                ([("id", 23, 7, 0), ("value", 25, -1, 0)], rows, "descriptor_mismatch"),
+                (list(reversed(columns)), [(None, 1), ("x", 2), ("x", 2)],
+                 "descriptor_mismatch"),
+                (columns, [(1, ""), (2, "x"), (2, "x")], "multiset_mismatch"),
+                (columns, [(1, None), (2, "x")], "multiset_mismatch"),
+                (columns, [(1, None), (2, "y"), (2, "x")], "multiset_mismatch")]
+            for index, (variant_columns, variant_rows, reason) in enumerate(variants):
+                with self.subTest(index=index):
+                    observed = root / f"observed-{index}"
+                    write_spool_v2(observed, variant_columns, variant_rows)
+                    self.assertEqual(ORACLE.compare_spools(
+                        baseline_path, observed, scratch)["reason"], reason)
+            reordered = root / "reordered"
+            write_spool_v2(reordered, columns, list(reversed(rows)))
+            self.assertEqual(ORACLE.compare_spools(
+                baseline_path, reordered, scratch)["result"], "PASS")
+            self.assertEqual(ORACLE.compare_spools(
+                baseline_path, reordered, scratch, ordered=True)["reason"],
+                "ordered_mismatch")
+
+    def test_v2_terminal_integrity_and_error_state(self) -> None:
+        columns = [("value", 23, -1, 0)]
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); scratch = root / "scratch"; scratch.mkdir(mode=0o700)
+            good = root / "good"; write_spool_v2(good, columns, [(1,)])
+            for index, payload in enumerate((good.read_bytes()[:-60],
+                                             good.read_bytes()[:-1],
+                                             good.read_bytes() + b"x")):
+                bad = root / f"bad-{index}"; bad.write_bytes(payload); bad.chmod(0o600)
+                with self.subTest(index=index), self.assertRaises(ORACLE.OracleError):
+                    ORACLE.compare_spools(good, bad, scratch)
+            error = root / "error"
+            write_spool_v2(error, [], [], status=1, sqlstate="22012")
+            with ORACLE.TypedSpool(error, 4096, 8, 64, 10) as spool:
+                self.assertEqual(list(spool.rows()), [])
+                self.assertEqual(spool.terminal_status, "error")
+                self.assertEqual(spool.sqlstate, "22012")
+            with self.assertRaisesRegex(ORACLE.OracleError, "non-success"):
+                ORACLE.compare_spools(error, error, scratch)
 
 
 if __name__ == "__main__":

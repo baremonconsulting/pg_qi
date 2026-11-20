@@ -357,7 +357,7 @@ int main(int argc, char **argv) {
         }
         else {
             execution_state = "INCOMPLETE";
-            if (!stream(conn, spool, &limits, request_deadline, &reason, sqlstate)) {
+            if (!stream(conn, spool, &limits, request_deadline, 1, &reason, sqlstate)) {
                 interval_finish(&limits, !strcmp(reason, "query_deadline") ? 3 : 2);
                 if (!strncmp(reason, "max_", 4) || !strcmp(reason, "query_deadline"))
                     cancel_owned_query(conn, &limits, cancel_deadline_ms);

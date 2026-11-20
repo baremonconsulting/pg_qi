@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+# Historical WP14 prototype only. New differential evidence must use the
+# typed PQ-31 phase-7 oracle; this script is retained for reproducibility.
+
 set -euo pipefail
 
 pgbin=${PG_BIN:?PG_BIN is required}

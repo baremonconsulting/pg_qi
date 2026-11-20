@@ -17,10 +17,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO, Iterator
 
-MAGIC = b"PGQSP001"
+MAGIC_V1 = b"PGQSP001"
+MAGIC_V2 = b"PGQSP002"
+MAGIC = MAGIC_V1
+TRAILER_MARKER = 0xFFFFFFFE
 SUPPORTED_TYPES = {20: ("int8", -(2**63), 2**63 - 1),
                    21: ("int2", -(2**15), 2**15 - 1),
-                   23: ("int4", -(2**31), 2**31 - 1)}
+                   23: ("int4", -(2**31), 2**31 - 1),
+                   16: ("bool", None, None),
+                   25: ("text", None, None),
+                   1042: ("bpchar", None, None),
+                   1043: ("varchar", None, None)}
+V1_SUPPORTED_TYPES = {20, 21, 23}
 IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 DIGEST = re.compile(r"^[0-9a-f]{64}$")
 INTEGER = re.compile(rb"(?:0|-[1-9][0-9]*|[1-9][0-9]*)")
@@ -30,6 +38,10 @@ I64 = struct.Struct(">q")
 
 class OracleError(ValueError):
     """Fail-closed corpus or result evidence error."""
+
+
+class UnsupportedEvidence(OracleError):
+    """Well-formed evidence uses a result type outside the oracle contract."""
 
 
 def _duplicate(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -308,18 +320,27 @@ def _read_exact(stream: BinaryIO, count: int, what: str) -> bytes:
 class Column:
     name: str
     oid: int
+    typmod: int = -1
+    format: int = 0
 
 
 class TypedSpool:
     def __init__(self, path: Path, max_spool_bytes: int, max_columns: int,
-                 max_field_bytes: int, max_rows: int) -> None:
+                 max_field_bytes: int, max_rows: int, *,
+                 allow_unsupported_types: bool = False) -> None:
         self.path = path
         self.max_spool_bytes = max_spool_bytes
         self.max_columns = max_columns
         self.max_field_bytes = max_field_bytes
         self.max_rows = max_rows
+        self.allow_unsupported_types = allow_unsupported_types
+        self.has_unsupported_types = False
         self.stream: BinaryIO | None = None
         self.columns: tuple[Column, ...] = ()
+        self.version = 0
+        self.terminal_status: str | None = None
+        self.sqlstate = ""
+        self.command_completions = 0
         self.sha256 = ""
         self.identity: tuple[int, int, int, int] | None = None
 
@@ -339,8 +360,10 @@ class TypedSpool:
                     raise OracleError("spool changed during hashing")
                 digest.update(chunk); offset += len(chunk)
             self.sha256 = digest.hexdigest()
-            if _read_exact(stream, len(MAGIC), "spool magic") != MAGIC:
+            magic = _read_exact(stream, len(MAGIC_V1), "spool magic")
+            if magic not in {MAGIC_V1, MAGIC_V2}:
                 raise OracleError("unsupported spool version")
+            self.version = 2 if magic == MAGIC_V2 else 1
             count = U32.unpack(_read_exact(stream, 4, "column count"))[0]
             if count > self.max_columns:
                 raise OracleError("column bound exceeded")
@@ -355,12 +378,24 @@ class TypedSpool:
                 except UnicodeDecodeError as exc:
                     raise OracleError("invalid column name UTF-8") from exc
                 oid = U32.unpack(_read_exact(stream, 4, "column type"))[0]
-                if oid not in SUPPORTED_TYPES:
-                    raise OracleError("unsupported result type")
+                if oid not in SUPPORTED_TYPES or \
+                        (self.version == 1 and oid not in V1_SUPPORTED_TYPES):
+                    if not self.allow_unsupported_types:
+                        raise UnsupportedEvidence("unsupported result type")
+                    self.has_unsupported_types = True
+                typmod = -1
+                result_format = 0
+                if self.version == 2:
+                    typmod = struct.unpack(">i", _read_exact(stream, 4, "column typmod"))[0]
+                    result_format = U32.unpack(_read_exact(stream, 4, "column format"))[0]
+                    if result_format != 0:
+                        raise OracleError("unsupported result format")
                 if name in names:
                     raise OracleError("duplicate column name")
-                names.add(name); columns.append(Column(name, oid))
+                names.add(name); columns.append(Column(name, oid, typmod, result_format))
             self.columns = tuple(columns)
+            self.descriptor_digest = hashlib.sha256(
+                os.pread(descriptor, stream.tell(), 0)).digest()
             self.identity = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
             self.stream = stream
             return self
@@ -379,6 +414,8 @@ class TypedSpool:
         while True:
             encoded = self.stream.read(4)
             if not encoded:
+                if self.version == 2:
+                    raise OracleError("missing v2 trailer")
                 current = os.fstat(self.stream.fileno())
                 if self.identity != (current.st_dev, current.st_ino,
                                      current.st_size, current.st_mtime_ns):
@@ -387,6 +424,39 @@ class TypedSpool:
             if len(encoded) != 4:
                 raise OracleError("truncated row field count")
             fields = U32.unpack(encoded)[0]
+            if self.version == 2 and fields == TRAILER_MARKER:
+                status = U32.unpack(_read_exact(self.stream, 4, "terminal status"))[0]
+                state = _read_exact(self.stream, 8, "terminal SQLSTATE")
+                terminal_rows = struct.unpack(">Q", _read_exact(
+                    self.stream, 8, "terminal row count"))[0]
+                completions = U32.unpack(_read_exact(
+                    self.stream, 4, "terminal completion count"))[0]
+                digest = _read_exact(self.stream, 32, "terminal descriptor digest")
+                if status not in {0, 1} or state[5:] != b"\x00\x00\x00" or \
+                        terminal_rows != count or digest != self.descriptor_digest:
+                    raise OracleError("invalid v2 trailer")
+                if status == 0:
+                    if state[:5] != b"\x00" * 5 or completions != 1:
+                        raise OracleError("invalid success trailer")
+                    self.terminal_status = "complete"
+                    self.sqlstate = ""
+                else:
+                    try:
+                        sqlstate = state[:5].decode("ascii", "strict")
+                    except UnicodeDecodeError as exc:
+                        raise OracleError("invalid terminal SQLSTATE") from exc
+                    if not re.fullmatch(r"[0-9A-Z]{5}", sqlstate) or completions != 0:
+                        raise OracleError("invalid error trailer")
+                    self.terminal_status = "error"
+                    self.sqlstate = sqlstate
+                self.command_completions = completions
+                if self.stream.read(1):
+                    raise OracleError("trailing spool bytes")
+                current = os.fstat(self.stream.fileno())
+                if self.identity != (current.st_dev, current.st_ino,
+                                     current.st_size, current.st_mtime_ns):
+                    raise OracleError("spool changed during comparison")
+                return
             if fields != len(self.columns):
                 raise OracleError("row width differs from descriptor")
             canonical = bytearray()
@@ -398,13 +468,26 @@ class TypedSpool:
                 if size > self.max_field_bytes:
                     raise OracleError("field bound exceeded")
                 payload = _read_exact(self.stream, size, "field payload")
-                if not INTEGER.fullmatch(payload):
-                    raise OracleError("non-canonical integer payload")
-                value = int(payload)
-                _, minimum, maximum = SUPPORTED_TYPES[column.oid]
-                if value < minimum or value > maximum:
-                    raise OracleError("integer value out of range")
-                canonical += b"\x01" + I64.pack(value)
+                if column.oid not in SUPPORTED_TYPES:
+                    canonical += b"\x01" + U32.pack(len(payload)) + payload
+                    continue
+                type_name, minimum, maximum = SUPPORTED_TYPES[column.oid]
+                if minimum is not None and maximum is not None:
+                    if not INTEGER.fullmatch(payload):
+                        raise OracleError("non-canonical integer payload")
+                    value = int(payload)
+                    if value < minimum or value > maximum:
+                        raise OracleError("integer value out of range")
+                    canonical += b"\x01" + I64.pack(value)
+                else:
+                    if type_name == "bool" and payload not in {b"t", b"f"}:
+                        raise OracleError("non-canonical boolean payload")
+                    if type_name != "bool":
+                        try:
+                            payload.decode("utf-8", "strict")
+                        except UnicodeDecodeError as exc:
+                            raise OracleError("invalid text UTF-8") from exc
+                    canonical += b"\x01" + U32.pack(len(payload)) + payload
             count += 1
             if count > self.max_rows:
                 raise OracleError("row bound exceeded")
@@ -482,7 +565,7 @@ def compare_spools(baseline: Path, observed: Path, scratch_root: Path, *,
                    max_spool_bytes: int = 64 * 1024 * 1024,
                    max_rows: int = 10_000_000, max_columns: int = 64,
                    max_field_bytes: int = 64, max_rows_in_memory: int = 4096,
-                   max_open_runs: int = 32) -> dict[str, Any]:
+                   max_open_runs: int = 32, ordered: bool = False) -> dict[str, Any]:
     if min(max_spool_bytes, max_rows, max_columns, max_field_bytes,
            max_rows_in_memory, max_open_runs) <= 0 or max_open_runs < 2:
         raise OracleError("comparison limits must be positive and fan-in at least two")
@@ -501,6 +584,9 @@ def compare_spools(baseline: Path, observed: Path, scratch_root: Path, *,
             if left.columns != right.columns:
                 left_rows = sum(1 for _ in left.rows())
                 right_rows = sum(1 for _ in right.rows())
+                if ((left.version == 2 and left.terminal_status != "complete") or
+                        (right.version == 2 and right.terminal_status != "complete")):
+                    raise OracleError("non-success spool cannot be value-compared")
                 return {"result": "FAIL", "reason": "descriptor_mismatch",
                         "baseline_sha256": left.sha256, "observed_sha256": right.sha256,
                         "baseline_rows": left_rows, "observed_rows": right_rows,
@@ -508,14 +594,30 @@ def compare_spools(baseline: Path, observed: Path, scratch_root: Path, *,
                         "columns": [{"name": column.name, "oid": column.oid,
                                      "type": SUPPORTED_TYPES[column.oid][0]}
                                     for column in left.columns]}
-            left_run, left_rows, left_runs = _sort_spool(
-                left, temporary, "baseline", max_rows_in_memory, max_open_runs)
-            right_run, right_rows, right_runs = _sort_spool(
-                right, temporary, "observed", max_rows_in_memory, max_open_runs)
-            mismatch = next(((a, b) for a, b in __import__("itertools").zip_longest(
-                _run_records(left_run), _run_records(right_run)) if a != b), None)
+            if ordered:
+                missing = object(); mismatch = None
+                left_rows = right_rows = 0
+                for left_record, right_record in __import__("itertools").zip_longest(
+                        left.rows(), right.rows(), fillvalue=missing):
+                    if left_record is not missing: left_rows += 1
+                    if right_record is not missing: right_rows += 1
+                    if mismatch is None and left_record != right_record:
+                        mismatch = (left_record, right_record)
+                left_runs = right_runs = 0
+            else:
+                left_run, left_rows, left_runs = _sort_spool(
+                    left, temporary, "baseline", max_rows_in_memory, max_open_runs)
+                right_run, right_rows, right_runs = _sort_spool(
+                    right, temporary, "observed", max_rows_in_memory, max_open_runs)
+                mismatch = next(((a, b) for a, b in __import__("itertools").zip_longest(
+                    _run_records(left_run), _run_records(right_run)) if a != b), None)
+            if ((left.version == 2 and left.terminal_status != "complete") or
+                    (right.version == 2 and right.terminal_status != "complete")):
+                raise OracleError("non-success spool cannot be value-compared")
             result = "PASS" if mismatch is None else "FAIL"
-            reason = "complete_multiset_equal" if result == "PASS" else "multiset_mismatch"
+            reason = (("complete_ordered_equal" if ordered else "complete_multiset_equal")
+                      if result == "PASS" else
+                      ("ordered_mismatch" if ordered else "multiset_mismatch"))
             return {"result": result, "reason": reason,
                     "baseline_sha256": left.sha256, "observed_sha256": right.sha256,
                     "baseline_rows": left_rows, "observed_rows": right_rows,
@@ -571,6 +673,7 @@ def parser() -> argparse.ArgumentParser:
     compare.add_argument("--max-field-bytes", type=_positive, default=64)
     compare.add_argument("--max-rows-in-memory", type=_positive, default=4096)
     compare.add_argument("--max-open-runs", type=_positive, default=32)
+    compare.add_argument("--ordered", action="store_true")
     return result
 
 
@@ -590,7 +693,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_spool_bytes=args.max_spool_bytes, max_rows=args.max_rows,
                 max_columns=args.max_columns, max_field_bytes=args.max_field_bytes,
                 max_rows_in_memory=args.max_rows_in_memory,
-                max_open_runs=args.max_open_runs)}
+                max_open_runs=args.max_open_runs, ordered=args.ordered)}
         write_json_exclusive(args.output, report)
         return 0 if report["result"] == "PASS" else 1
     except (OSError, ValueError) as exc:

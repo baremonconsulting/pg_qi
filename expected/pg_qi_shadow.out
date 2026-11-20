@@ -49,6 +49,46 @@ SHOW pg_qi.shadow_request_applied;
 on
 SHOW duckdb.force_execution;
 off
+SET pg_qi.routing_mode = shadow_p0;
+SELECT id FROM shadow_plain WHERE id = 1;
+1
+SHOW pg_qi.shadow_policy_intent;
+pass_through
+SHOW pg_qi.shadow_reason;
+decision_only
+SHOW pg_qi.shadow_force_origin;
+off
+SHOW pg_qi.shadow_observed_engine;
+unknown
+SHOW pg_qi.shadow_verification;
+unverified
+SHOW pg_qi.shadow_request_applied;
+off
+SHOW pg_qi.shadow_p0_facts_state;
+bounded
+SHOW pg_qi.shadow_p0_facts_reason;
+ok
+SHOW duckdb.force_execution;
+off
+SELECT a01.id
+FROM shadow_plain a01, shadow_plain a02, shadow_plain a03,
+     shadow_plain a04, shadow_plain a05, shadow_plain a06,
+     shadow_plain a07, shadow_plain a08, shadow_plain a09,
+     shadow_plain a10, shadow_plain a11, shadow_plain a12,
+     shadow_plain a13, shadow_plain a14, shadow_plain a15,
+     shadow_plain a16, shadow_plain a17
+WHERE false;
+SHOW pg_qi.shadow_reason;
+classifier_rejected
+SHOW pg_qi.shadow_request_applied;
+off
+SHOW pg_qi.shadow_p0_facts_state;
+unknown
+SHOW pg_qi.shadow_p0_facts_reason;
+limit
+SHOW duckdb.force_execution;
+off
+SET pg_qi.routing_mode = allowlist;
 SELECT id FROM shadow_plain WHERE id = 1 AND (1 / 0) = 0;
 ERROR:  division by zero
 SHOW duckdb.force_execution;
@@ -186,13 +226,13 @@ SELECT id FROM shadow_plain WHERE id = 1;
 SHOW pg_qi.shadow_reason;
 policy_missing
 SHOW pg_qi.shadow_decision_id;
-42
+44
 SELECT 1 / 0;
 ERROR:  division by zero
 SHOW pg_qi.shadow_reason;
 policy_missing
 SHOW pg_qi.shadow_decision_id;
-42
+44
 SELECT id FROM shadow_plain WHERE id = 2;
 2
 SHOW pg_qi.shadow_context;

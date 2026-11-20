@@ -146,8 +146,17 @@ jobs:
           trap '"$pgbin/pg_ctl" -D "$pgdata" -m fast -w stop || true' EXIT
           PGHOST="$pghost" PGUSER="$USER" make PG_CONFIG="$pgbin/pg_config" PG_QI_TESTING=0 installcheck
           PGHOST="$pghost" PGUSER="$USER" bash tests/outer_hook/verify.sh "$major"
+          PGHOST="$pghost" PGUSER="$USER" bash tests/phase7/verify_snapshot.sh "$major"
+          python3 -m unittest tests/phase7/test_decision_snapshot.py
           "$pgbin/pg_ctl" -D "$pgdata" -m fast -w stop
           trap - EXIT
+      - name: Run PQ-31 differential oracle integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          major="${{ matrix.postgresql }}"
+          out="ci-artifacts/production-shadow-pg$major/pq31-differential"
+          bash tests/phase7/run-differential-integration.sh "$major" "$out"
       - name: Run PGQI-4C refusal tests
         run: bash tests/phase4c/refusal-tests.sh
       - name: Run PGQI-4C production smoke and rollback drill

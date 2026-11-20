@@ -25,3 +25,9 @@ CREATE FUNCTION test_active_control_guard() RETURNS boolean
 AS 'MODULE_PATHNAME', 'qi_test_active_control_guard' LANGUAGE C VOLATILE STRICT PARALLEL UNSAFE;
 CREATE FUNCTION test_classifier_contract(OUT unknown_node_rejected boolean, OUT oid_mismatch_rejected boolean, OUT null_query_rejected boolean)
 RETURNS record AS 'MODULE_PATHNAME', 'qi_test_classifier_contract' LANGUAGE C VOLATILE STRICT PARALLEL UNSAFE;
+CREATE FUNCTION test_decision_v2_contract(OUT default_barrier_closed boolean, OUT closed_is_insufficient boolean, OUT all_pass_open_delegates boolean, OUT veto_passes_through boolean, OUT unknown_is_insufficient boolean, OUT unknown_reason_preserved boolean, OUT invalid_combinations_rejected boolean, OUT versions_required boolean, OUT exhaustive_truth_table boolean)
+RETURNS record AS 'MODULE_PATHNAME', 'qi_test_decision_v2_contract' LANGUAGE C VOLATILE STRICT PARALLEL UNSAFE;
+CREATE FUNCTION test_shadow_p0_observer_contract() RETURNS boolean
+AS 'MODULE_PATHNAME', 'qi_test_shadow_p0_observer_contract' LANGUAGE C VOLATILE STRICT PARALLEL UNSAFE;
+CREATE FUNCTION test_v2_snapshot_contract() RETURNS boolean
+AS 'MODULE_PATHNAME', 'qi_test_v2_snapshot_contract' LANGUAGE C VOLATILE STRICT PARALLEL UNSAFE;
