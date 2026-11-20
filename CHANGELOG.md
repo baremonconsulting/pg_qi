@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- A private, bounded, backend-local V2 decision snapshot with atomic
+  publication, role-safe `SHOW` read-back, strict readers, and lifecycle tests.
+- A stricter direct-client proof that prevents deferred trigger and referential
+  integrity planning during transaction completion from entering V1 or V2.
+- Reservation of the `pg_qi` GUC prefix so misspelled or unknown parameters
+  fail instead of becoming placeholder settings.
 - An inert `shadow_p0` routing mode with exhaustive fail-closed dispatch,
   bounded pre-planning facts and production non-interference regression tests.
 - PGQI-4C production-only pilot evidence harness, same-session diagnostics,

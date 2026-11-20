@@ -26,6 +26,7 @@ static bool dynamic_outer = false;
 static bool inner_force_seen = true;
 static bool error_after_owned_force = false;
 static bool error_unconditionally = false;
+static bool cancel_unconditionally = false;
 static int planner_calls = 0;
 static bool force_at_entry = true;
 static bool pointer_identity = false;
@@ -145,6 +146,10 @@ QI_PLANNER_PROTO(pg_qi_outer_test_planner)
 
     if (!reenter_once)
     {
+        if (cancel_unconditionally)
+            ereport(ERROR,
+                    (errcode(ERRCODE_QUERY_CANCELED),
+                     errmsg("pg_qi outer fixture planner cancellation")));
         if (error_unconditionally)
             ereport(ERROR,
                     (errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
@@ -199,6 +204,9 @@ _PG_init(void)
                              PGC_SUSET, 0, NULL, NULL, NULL);
     DefineCustomBoolVariable("pg_qi_outer_test.error_unconditionally",
                              NULL, NULL, &error_unconditionally, false,
+                             PGC_SUSET, 0, NULL, NULL, NULL);
+    DefineCustomBoolVariable("pg_qi_outer_test.cancel_unconditionally",
+                             NULL, NULL, &cancel_unconditionally, false,
                              PGC_SUSET, 0, NULL, NULL, NULL);
     DefineCustomIntVariable("pg_qi_outer_test.planner_calls", NULL, NULL,
                             &planner_calls, 0, 0, INT_MAX, PGC_INTERNAL, 0,

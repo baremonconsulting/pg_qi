@@ -23,6 +23,7 @@
 #include "pg_qi/qi_detector.h"
 #include "pg_qi/qi_eligibility.h"
 #include "pg_qi/qi_shadow_p0.h"
+#include "pg_qi/qi_snapshot.h"
 #if PG_QI_TESTING
 #include "pg_qi/qi_diag.h"
 #include "pg_qi/qi_reenter.h"
@@ -35,13 +36,6 @@
 PG_MODULE_MAGIC;
 
 #define PG_QI_VERSION "0.0.1"
-
-typedef enum QiRoutingMode
-{
-    QI_ROUTING_OFF = 0,
-    QI_ROUTING_ALLOWLIST,
-    QI_ROUTING_SHADOW_P0
-} QiRoutingMode;
 
 static bool pg_qi_enabled = true;
 static bool pg_qi_preloaded = false;
@@ -115,6 +109,7 @@ PG_FUNCTION_INFO_V1(qi_test_active_control_guard);
 PG_FUNCTION_INFO_V1(qi_test_classifier_contract);
 PG_FUNCTION_INFO_V1(qi_test_decision_v2_contract);
 PG_FUNCTION_INFO_V1(qi_test_shadow_p0_observer_contract);
+PG_FUNCTION_INFO_V1(qi_test_v2_snapshot_contract);
 #endif
 
 QI_PLANNER_PROTO(pg_qi_planner)
@@ -269,6 +264,11 @@ done:
     bool context_proven;
     bool request_applied = false;
     bool shadow_p0_facts_observed = false;
+    QiRoutingMode mode_at_decision = (QiRoutingMode) pg_qi_routing_mode;
+    bool enabled_at_decision = pg_qi_enabled;
+    QiV2SnapshotToken v2_token;
+    QiV2SnapshotCandidate v2_candidate;
+    bool v2_candidate_ready = false;
     QiShadowP0Facts shadow_p0_facts = {
         .state = QI_SHADOW_P0_FACTS_UNKNOWN,
         .reason = QI_SHADOW_P0_FACTS_NO_QUERY,
@@ -279,13 +279,15 @@ done:
 
     pg_qi_shadow_planner_depth++;
     context_proven = qi_context_proven_for_routing(
-        planner_hook == pg_qi_planner, pg_qi_shadow_planner_depth);
+        planner_hook == pg_qi_planner, pg_qi_shadow_planner_depth,
+        query_string);
     if (pg_qi_shadow_planner_depth > 1)
         context = QI_SHADOW_CONTEXT_NESTED;
     else if (context_proven)
         context = QI_SHADOW_CONTEXT_PROVEN_CLIENT;
     else
         context = QI_SHADOW_CONTEXT_UNPROVED_OUTERMOST;
+    v2_token = qi_snapshot_begin();
 
     PG_TRY();
     {
@@ -392,6 +394,17 @@ done:
                 ? QI_SHADOW_DELEGATION_VERIFIED
                 : QI_SHADOW_DELEGATION_DECLINED;
 
+        if (context_proven && pg_qi_shadow_planner_depth == 1)
+            v2_candidate_ready = qi_snapshot_prepare(
+                &v2_candidate, v2_token, mode_at_decision,
+                enabled_at_decision, context, policy_intent,
+                decision_force_origin, observed_engine, verification,
+                observation,
+                shadow_p0_facts_observed ? shadow_p0_facts.state :
+                    QI_SHADOW_P0_FACTS_UNKNOWN,
+                shadow_p0_facts_observed ? shadow_p0_facts.reason :
+                    QI_SHADOW_P0_FACTS_NO_QUERY);
+
         if (frame_active)
         {
             AtEOXact_GUC(true, save_nestlevel);
@@ -413,6 +426,11 @@ done:
                               classifier_status, eligibility, reason,
                               observed_engine, verification, observation,
                               request_applied);
+            if (v2_candidate_ready &&
+                qi_context_proven_for_routing(
+                    planner_hook == pg_qi_planner,
+                    pg_qi_shadow_planner_depth, query_string))
+                (void) qi_snapshot_commit(&v2_candidate);
         }
     }
     PG_CATCH();
@@ -460,6 +478,7 @@ _PG_init(void)
 
     qi_shadow_init_gucs();
     qi_shadow_p0_init_gucs();
+    qi_snapshot_init_guc();
 
 #if PG_QI_TESTING
     DefineCustomBoolVariable("pg_qi.spike_last_plan_has_duckdb_scan",
@@ -494,6 +513,8 @@ _PG_init(void)
     qi_reenter_init_gucs();
     qi_diag_init_gucs();
 #endif
+
+    MarkGUCPrefixReserved("pg_qi");
 
     /*
      * SQL-callable functions remain available when the library is loaded by

@@ -49,6 +49,13 @@ SHOW duckdb.force_execution;
 SHOW pg_qi.shadow_p0_facts_state;
 SHOW pg_qi.shadow_p0_facts_reason;
 SET pg_qi_outer_test.error_unconditionally = off;
+SET pg_qi_outer_test.cancel_unconditionally = on;
+\set ON_ERROR_STOP off
+SELECT id FROM outer_test_plain WHERE id = 1;
+\set ON_ERROR_STOP on
+\echo :LAST_ERROR_SQLSTATE
+SHOW duckdb.force_execution;
+SET pg_qi_outer_test.cancel_unconditionally = off;
 SET pg_qi.routing_mode = allowlist;
 SET pg_qi_outer_test.error_after_owned_force = on;
 \set ON_ERROR_STOP off
@@ -82,8 +89,9 @@ SQL
 
 test "$(grep -Ec '^ERROR:  pg_qi outer fixture error after owned force$' "$error_log")" -eq 1
 test "$(grep -Ec '^ERROR:  pg_qi outer fixture downstream error$' "$error_log")" -eq 1
+test "$(grep -Ec '^ERROR:  pg_qi outer fixture planner cancellation$' "$error_log")" -eq 1
 
-expected=$'1\ndelegation_verified\nverified\noff\noff\n\n1\n1\noff\non\npass_through\ndecision_only\noff\noff\n40001\noff\nbounded\nok\nXX000\noff\n1\non\nunknown\nno_query\n\non\non\ncontext_unproved\noff\noff'
+expected=$'1\ndelegation_verified\nverified\noff\noff\n\n1\n1\noff\non\npass_through\ndecision_only\noff\noff\n40001\noff\nbounded\nok\n57014\noff\nXX000\noff\n1\non\nunknown\nno_query\n\non\non\ncontext_unproved\noff\noff'
 if [ "$output" != "$expected" ]; then
     printf 'unexpected outer-hook verification output:\n%s\n' "$output" >&2
     exit 1

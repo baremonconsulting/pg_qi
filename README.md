@@ -130,6 +130,13 @@ strictly non-intervening: it neither creates a delegation request nor changes
 SET pg_qi.routing_mode = 'shadow_p0';
 ```
 
+The private atomic V2 decision envelope is read with `SHOW
+pg_qi.decision_v2`. It is available only to superusers or members of an
+administrator-created `NOLOGIN` role named `pgqi_diagnostic`; ordinary roles
+receive no diagnostic payload. See
+[`docs/phase7/PQ7-3-private-atomic-snapshot.md`](docs/phase7/PQ7-3-private-atomic-snapshot.md)
+for lifecycle, pooling, privacy, and correlation rules.
+
 Do not enable this mode for production workloads in the pre-alpha release.
 
 The completed backend-local snapshot is available through read-only

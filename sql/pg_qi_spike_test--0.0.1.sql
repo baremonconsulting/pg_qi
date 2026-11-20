@@ -29,3 +29,5 @@ CREATE FUNCTION test_decision_v2_contract(OUT default_barrier_closed boolean, OU
 RETURNS record AS 'MODULE_PATHNAME', 'qi_test_decision_v2_contract' LANGUAGE C VOLATILE STRICT PARALLEL UNSAFE;
 CREATE FUNCTION test_shadow_p0_observer_contract() RETURNS boolean
 AS 'MODULE_PATHNAME', 'qi_test_shadow_p0_observer_contract' LANGUAGE C VOLATILE STRICT PARALLEL UNSAFE;
+CREATE FUNCTION test_v2_snapshot_contract() RETURNS boolean
+AS 'MODULE_PATHNAME', 'qi_test_v2_snapshot_contract' LANGUAGE C VOLATILE STRICT PARALLEL UNSAFE;
