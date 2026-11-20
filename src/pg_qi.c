@@ -272,8 +272,14 @@ done:
     QiShadowP0Facts shadow_p0_facts = {
         .state = QI_SHADOW_P0_FACTS_UNKNOWN,
         .reason = QI_SHADOW_P0_FACTS_NO_QUERY,
+        .capability = QI_SHADOW_P0_CAPABILITY_UNKNOWN,
+        .relation_oid = InvalidOid,
+        .argument_attno = InvalidAttrNumber,
         .rtable_entries = 0,
-        .relation_entries = 0
+        .relation_entries = 0,
+        .nodes_seen = 0,
+        .max_depth_seen = 0,
+        .facts_emitted = 0
     };
     volatile bool frame_active = false;
 

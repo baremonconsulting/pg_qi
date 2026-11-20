@@ -65,11 +65,230 @@ unverified
 SHOW pg_qi.shadow_request_applied;
 off
 SHOW pg_qi.shadow_p0_facts_state;
+unknown
+SHOW pg_qi.shadow_p0_facts_reason;
+unsupported_shape
+SHOW pg_qi.shadow_p0_capability;
+unknown
+SHOW duckdb.force_execution;
+off
+SELECT count(*) FROM shadow_plain;
+2
+SHOW pg_qi.shadow_p0_facts_state;
 bounded
 SHOW pg_qi.shadow_p0_facts_reason;
 ok
-SHOW duckdb.force_execution;
-off
+SHOW pg_qi.shadow_p0_capability;
+count_star
+SELECT count(id) FROM shadow_plain;
+2
+SHOW pg_qi.shadow_p0_facts_state;
+bounded
+SHOW pg_qi.shadow_p0_facts_reason;
+ok
+SHOW pg_qi.shadow_p0_capability;
+count_int4
+SELECT min(id) FROM shadow_plain;
+1
+SHOW pg_qi.shadow_p0_facts_state;
+bounded
+SHOW pg_qi.shadow_p0_facts_reason;
+ok
+SHOW pg_qi.shadow_p0_capability;
+min_int4
+SELECT max(id) FROM shadow_plain;
+2
+SHOW pg_qi.shadow_p0_facts_state;
+bounded
+SHOW pg_qi.shadow_p0_facts_reason;
+ok
+SHOW pg_qi.shadow_p0_capability;
+max_int4
+SELECT count(*) FROM shadow_plain WHERE id > 0;
+2
+SHOW pg_qi.shadow_p0_facts_state;
+unknown
+SHOW pg_qi.shadow_p0_facts_reason;
+unsupported_shape
+SHOW pg_qi.shadow_p0_capability;
+unknown
+SELECT count(*), min(id) FROM shadow_plain;
+2|1
+SHOW pg_qi.shadow_p0_facts_state;
+unknown
+SHOW pg_qi.shadow_p0_facts_reason;
+unsupported_shape
+SHOW pg_qi.shadow_p0_capability;
+unknown
+SELECT count(*) > 0 FROM pg_catalog.pg_class;
+t
+SHOW pg_qi.shadow_p0_facts_state;
+unknown
+SHOW pg_qi.shadow_p0_facts_reason;
+unsupported_relation
+SHOW pg_qi.shadow_p0_capability;
+unknown
+CREATE UNLOGGED TABLE shadow_unlogged(id integer);
+SELECT count(*) FROM shadow_unlogged;
+0
+SHOW pg_qi.shadow_p0_facts_state;
+unknown
+SHOW pg_qi.shadow_p0_facts_reason;
+unsupported_relation
+SHOW pg_qi.shadow_p0_capability;
+unknown
+DROP TABLE shadow_unlogged;
+CREATE TEMP TABLE shadow_temporary(id integer);
+SELECT count(*) FROM shadow_temporary;
+0
+SHOW pg_qi.shadow_p0_facts_state;
+unknown
+SHOW pg_qi.shadow_p0_facts_reason;
+unsupported_relation
+SHOW pg_qi.shadow_p0_capability;
+unknown
+DROP TABLE shadow_temporary;
+SELECT count(DISTINCT id) FROM shadow_plain;
+2
+SHOW pg_qi.shadow_p0_facts_reason;
+unsupported_shape
+SHOW pg_qi.shadow_p0_capability;
+unknown
+SELECT count(*) FILTER (WHERE id > 0) FROM shadow_plain;
+2
+SHOW pg_qi.shadow_p0_facts_reason;
+unsupported_shape
+SHOW pg_qi.shadow_p0_capability;
+unknown
+SELECT count(id + 0) FROM shadow_plain;
+2
+SHOW pg_qi.shadow_p0_facts_reason;
+unsupported_node
+SHOW pg_qi.shadow_p0_capability;
+unknown
+SELECT count(id::bigint) FROM shadow_plain;
+2
+SHOW pg_qi.shadow_p0_facts_reason;
+catalog_mismatch
+SHOW pg_qi.shadow_p0_capability;
+unknown
+SELECT count(*) FROM shadow_plain GROUP BY v;
+1
+1
+SHOW pg_qi.shadow_p0_facts_reason;
+unsupported_shape
+SHOW pg_qi.shadow_p0_capability;
+unknown
+WITH source AS (SELECT * FROM shadow_plain)
+SELECT count(*) FROM source;
+2
+SHOW pg_qi.shadow_p0_facts_reason;
+unsupported_node
+SHOW pg_qi.shadow_p0_capability;
+unknown
+SELECT count(*) FROM (SELECT * FROM shadow_plain) AS source;
+2
+SHOW pg_qi.shadow_p0_facts_reason;
+unsupported_node
+SHOW pg_qi.shadow_p0_capability;
+unknown
+SELECT count(*) FROM shadow_plain AS a JOIN shadow_plain AS b USING (id);
+2
+SHOW pg_qi.shadow_p0_facts_reason;
+unsupported_node
+SELECT count(*) FROM shadow_plain
+WHERE EXISTS (SELECT 1 FROM shadow_plain AS nested WHERE nested.id = 1);
+2
+SHOW pg_qi.shadow_p0_facts_reason;
+unsupported_shape
+SELECT count(*) OVER () FROM shadow_plain;
+2
+2
+SHOW pg_qi.shadow_p0_facts_reason;
+unsupported_shape
+SELECT array_agg(id ORDER BY id) FROM shadow_plain;
+{1,2}
+SHOW pg_qi.shadow_p0_facts_reason;
+unsupported_shape
+CREATE AGGREGATE public.count(integer) (
+    SFUNC = pg_catalog.int4pl,
+    STYPE = integer,
+    INITCOND = '0'
+);
+SELECT public.count(id) FROM shadow_plain;
+3
+SHOW pg_qi.shadow_p0_facts_reason;
+catalog_mismatch
+DROP AGGREGATE public.count(integer);
+SELECT DISTINCT count(*) FROM shadow_plain;
+2
+SHOW pg_qi.shadow_p0_facts_reason;
+unsupported_shape
+SELECT count(*) FROM shadow_plain ORDER BY count(*);
+2
+SHOW pg_qi.shadow_p0_facts_reason;
+unsupported_shape
+SELECT count(*) FROM shadow_plain LIMIT 1;
+2
+SHOW pg_qi.shadow_p0_facts_reason;
+unsupported_shape
+SELECT count(*) FROM shadow_plain HAVING true;
+2
+SHOW pg_qi.shadow_p0_facts_reason;
+unsupported_shape
+SELECT count(*) FROM shadow_plain
+UNION ALL
+SELECT count(*) FROM shadow_plain;
+2
+2
+SHOW pg_qi.shadow_p0_facts_reason;
+unsupported_node
+SELECT count(*) FROM shadow_plain TABLESAMPLE SYSTEM (100);
+2
+SHOW pg_qi.shadow_p0_facts_reason;
+unsupported_relation
+CREATE VIEW shadow_view AS SELECT * FROM shadow_plain;
+SELECT count(*) FROM shadow_view;
+2
+SHOW pg_qi.shadow_p0_facts_reason;
+unsupported_node
+DROP VIEW shadow_view;
+CREATE MATERIALIZED VIEW shadow_matview AS SELECT * FROM shadow_plain;
+SELECT count(*) FROM shadow_matview;
+2
+SHOW pg_qi.shadow_p0_facts_reason;
+unsupported_relation
+DROP MATERIALIZED VIEW shadow_matview;
+CREATE TABLE shadow_parent(id integer);
+CREATE TABLE shadow_child() INHERITS (shadow_parent);
+SELECT count(*) FROM ONLY shadow_parent;
+0
+SHOW pg_qi.shadow_p0_facts_reason;
+unsupported_relation
+SELECT count(*) FROM ONLY shadow_child;
+0
+SHOW pg_qi.shadow_p0_facts_reason;
+unsupported_relation
+DROP TABLE shadow_child;
+DROP TABLE shadow_parent;
+CREATE TABLE shadow_partitioned(id integer) PARTITION BY RANGE (id);
+CREATE TABLE shadow_partition PARTITION OF shadow_partitioned
+    FOR VALUES FROM (0) TO (10);
+SELECT count(*) FROM ONLY shadow_partitioned;
+0
+SHOW pg_qi.shadow_p0_facts_reason;
+unsupported_relation
+SELECT count(*) FROM shadow_partition;
+0
+SHOW pg_qi.shadow_p0_facts_reason;
+unsupported_relation
+DROP TABLE shadow_partitioned;
+ALTER TABLE shadow_plain ENABLE ROW LEVEL SECURITY;
+SELECT count(*) FROM shadow_plain;
+2
+SHOW pg_qi.shadow_p0_facts_reason;
+unsupported_shape
+ALTER TABLE shadow_plain DISABLE ROW LEVEL SECURITY;
 SELECT a01.id
 FROM shadow_plain a01, shadow_plain a02, shadow_plain a03,
      shadow_plain a04, shadow_plain a05, shadow_plain a06,
@@ -226,13 +445,13 @@ SELECT id FROM shadow_plain WHERE id = 1;
 SHOW pg_qi.shadow_reason;
 policy_missing
 SHOW pg_qi.shadow_decision_id;
-44
+116
 SELECT 1 / 0;
 ERROR:  division by zero
 SHOW pg_qi.shadow_reason;
 policy_missing
 SHOW pg_qi.shadow_decision_id;
-44
+116
 SELECT id FROM shadow_plain WHERE id = 2;
 2
 SHOW pg_qi.shadow_context;

@@ -268,7 +268,9 @@ def parse_v2(text: str) -> dict[str, str | int]:
         "none", "no_authoritative_match", "duckdb_scan_at_downstream_boundary"})
     _one_of(values["p0"], "p0", {"unknown", "bounded"})
     _one_of(values["p0_reason"], "p0 reason",
-            {"ok", "no_query", "limit", "catalog_miss"})
+            {"ok", "no_query", "limit", "catalog_miss",
+             "unsupported_shape", "unsupported_node",
+             "unsupported_relation", "catalog_mismatch"})
     if values["verification"] == "verified" and not (
             values["engine"] == "duckdb" and
             values["observation"] == "duckdb_scan_at_downstream_boundary"):
