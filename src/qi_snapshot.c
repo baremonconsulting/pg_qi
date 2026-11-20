@@ -17,6 +17,7 @@
 
 #define QI_SNAPSHOT_INCARNATION_BYTES 16
 #define QI_SNAPSHOT_RENDER_BYTES 1024
+#define QI_PLAN_FEATURE_RENDER_BYTES 1024
 
 typedef struct QiV2SnapshotEvent
 {
@@ -40,6 +41,8 @@ typedef struct QiV2SnapshotStore
 static QiV2SnapshotStore qi_snapshot_store;
 static char *qi_snapshot_placeholder = NULL;
 static char qi_snapshot_render_buffer[QI_SNAPSHOT_RENDER_BYTES];
+static char *qi_plan_feature_placeholder = NULL;
+static char qi_plan_feature_render_buffer[QI_PLAN_FEATURE_RENDER_BYTES];
 
 static void
 qi_snapshot_initialize(void)
@@ -299,6 +302,99 @@ qi_snapshot_show(void)
     return qi_snapshot_render_buffer;
 }
 
+static const char *
+qi_plan_features_show(void)
+{
+    QiV2SnapshotEvent *event;
+    QiV2SnapshotCandidate *candidate;
+    QiNativePlanFeatures *features;
+    char incarnation[QI_SNAPSHOT_INCARNATION_BYTES * 2 + 1] = "";
+    char relpages[32];
+    char reltuples[64];
+    int written;
+
+    qi_snapshot_initialize();
+    if (!qi_snapshot_authorized())
+        return "v=1;s=denied";
+    if (qi_snapshot_store.exhausted)
+        return "v=1;s=exhausted";
+    if (!qi_snapshot_store.available)
+        return "v=1;s=unavailable";
+    qi_snapshot_incarnation_hex(incarnation, sizeof(incarnation));
+    if (!qi_snapshot_store.has_event)
+    {
+        snprintf(qi_plan_feature_render_buffer,
+                 sizeof(qi_plan_feature_render_buffer),
+                 "v=1;s=none;cid=%s;g=" UINT64_FORMAT ";e=0",
+                 incarnation, qi_snapshot_store.generation);
+        return qi_plan_feature_render_buffer;
+    }
+
+    event = &qi_snapshot_store.slots[qi_snapshot_store.active_slot];
+    candidate = &event->candidate;
+    if (candidate->token.effective_user != GetUserId() ||
+        candidate->token.session_user != GetSessionUserId())
+        return "v=1;s=withheld";
+    features = &candidate->plan_features;
+    if (features->state != QI_PLAN_FEATURE_BOUNDED)
+    {
+        written = snprintf(qi_plan_feature_render_buffer,
+            sizeof(qi_plan_feature_render_buffer),
+            "v=1;s=complete;cid=%s;g=" UINT64_FORMAT ";e=" UINT64_FORMAT
+            ";state=%s;reason=%s;spine=%s;known=" UINT64_FORMAT
+            ";nodes=%u;depth=%u",
+            incarnation, candidate->token.generation, event->event_sequence,
+            qi_plan_feature_state_name(features->state),
+            qi_plan_feature_reason_name(features->reason),
+            qi_plan_feature_spine_name(features->spine),
+            features->known_fields, features->nodes_seen,
+            features->max_depth_seen);
+        if (written < 0 ||
+            (Size) written >= sizeof(qi_plan_feature_render_buffer))
+            return "v=1;s=invalid";
+        return qi_plan_feature_render_buffer;
+    }
+    if ((features->known_fields & QI_PLAN_KNOWN_RELPAGES) != 0)
+        snprintf(relpages, sizeof(relpages), "%d", features->relpages);
+    else
+        strlcpy(relpages, "unknown", sizeof(relpages));
+    if ((features->known_fields & QI_PLAN_KNOWN_RELTUPLES) != 0)
+        snprintf(reltuples, sizeof(reltuples), "%.17g", features->reltuples);
+    else
+        strlcpy(reltuples, "unknown", sizeof(reltuples));
+    written = snprintf(qi_plan_feature_render_buffer,
+        sizeof(qi_plan_feature_render_buffer),
+        "v=1;s=complete;cid=%s;g=" UINT64_FORMAT ";e=" UINT64_FORMAT
+        ";state=%s;reason=%s;spine=%s;known=" UINT64_FORMAT
+        ";relation=%u;agg_startup=%.17g;agg_total=%.17g;agg_rows=%.17g"
+        ";agg_width=%d;scan_startup=%.17g;scan_total=%.17g"
+        ";scan_rows=%.17g;scan_width=%d"
+        ";catalog_relpages=%s;catalog_reltuples=%s"
+        ";agg_parallel_safe=%s;scan_parallel_safe=%s;parallel_aware=%s"
+        ";parallel_mode_needed=%s;workers=%d;has_limit=%s"
+        ";nodes=%u;depth=%u",
+        incarnation, candidate->token.generation, event->event_sequence,
+        qi_plan_feature_state_name(features->state),
+        qi_plan_feature_reason_name(features->reason),
+        qi_plan_feature_spine_name(features->spine),
+        features->known_fields, features->relation_oid,
+        features->aggregate.startup_cost, features->aggregate.total_cost,
+        features->aggregate.rows, features->aggregate.width,
+        features->scan.startup_cost, features->scan.total_cost,
+        features->scan.rows, features->scan.width,
+        relpages, reltuples,
+        features->aggregate_parallel_safe ? "true" : "false",
+        features->scan_parallel_safe ? "true" : "false",
+        features->parallel_aware ? "true" : "false",
+        features->parallel_mode_needed ? "true" : "false",
+        features->workers_planned,
+        features->has_limit ? "true" : "false",
+        features->nodes_seen, features->max_depth_seen);
+    if (written < 0 || (Size) written >= sizeof(qi_plan_feature_render_buffer))
+        return "v=1;s=invalid";
+    return qi_plan_feature_render_buffer;
+}
+
 void
 qi_snapshot_init_guc(void)
 {
@@ -308,6 +404,12 @@ qi_snapshot_init_guc(void)
                                PGC_INTERNAL,
                                GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE,
                                NULL, NULL, qi_snapshot_show);
+    DefineCustomStringVariable("pg_qi.plan_features",
+                               "Reports private bounded native plan features.",
+                               NULL, &qi_plan_feature_placeholder, "",
+                               PGC_INTERNAL,
+                               GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE,
+                               NULL, NULL, qi_plan_features_show);
 }
 
 QiV2SnapshotToken
@@ -336,7 +438,8 @@ qi_snapshot_prepare(QiV2SnapshotCandidate *candidate,
                     QiShadowObservation observation,
                     QiSemanticFacts semantic,
                     QiShadowP0FactsState p0_state,
-                    QiShadowP0FactsReason p0_reason)
+                    QiShadowP0FactsReason p0_reason,
+                    QiNativePlanFeatures plan_features)
 {
     QiV2Decision decision;
 
@@ -370,6 +473,7 @@ qi_snapshot_prepare(QiV2SnapshotCandidate *candidate,
     candidate->p0_state = p0_state;
     candidate->p0_reason = p0_reason;
     candidate->semantic = semantic;
+    candidate->plan_features = plan_features;
     candidate->valid = true;
     return true;
 }
@@ -451,7 +555,8 @@ qi_test_v2_snapshot_contract(PG_FUNCTION_ARGS)
                            QI_SEMANTIC_BLOCKER_INACTIVE |
                            QI_SEMANTIC_BLOCKER_BUILD_IDENTITY_UNVERIFIED |
                            QI_SEMANTIC_BLOCKER_SNAPSHOT_UNPROVEN},
-        QI_SHADOW_P0_FACTS_BOUNDED, QI_SHADOW_P0_FACTS_OK) &&
+        QI_SHADOW_P0_FACTS_BOUNDED, QI_SHADOW_P0_FACTS_OK,
+        qi_plan_features_unknown(QI_PLAN_FEATURE_NOT_OBSERVED)) &&
         qi_snapshot_commit(&candidate);
     sequence_one = qi_snapshot_store.has_event &&
         qi_snapshot_store.event_sequence == 1;

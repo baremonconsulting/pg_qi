@@ -10,6 +10,7 @@
 
 #include "nodes/nodes.h"
 #include "pg_qi/qi_decision_v2.h"
+#include "pg_qi/qi_plan_features.h"
 #include "pg_qi/qi_semantic.h"
 #include "pg_qi/qi_shadow_p0.h"
 
@@ -43,6 +44,7 @@ typedef struct QiV2SnapshotCandidate
     QiShadowP0FactsState p0_state;
     QiShadowP0FactsReason p0_reason;
     QiSemanticFacts semantic;
+    QiNativePlanFeatures plan_features;
     bool valid;
 } QiV2SnapshotCandidate;
 
@@ -60,7 +62,8 @@ extern bool qi_snapshot_prepare(QiV2SnapshotCandidate *candidate,
                                 QiShadowObservation observation,
                                 QiSemanticFacts semantic,
                                 QiShadowP0FactsState p0_state,
-                                QiShadowP0FactsReason p0_reason);
+                                QiShadowP0FactsReason p0_reason,
+                                QiNativePlanFeatures plan_features);
 extern bool qi_snapshot_commit(const QiV2SnapshotCandidate *candidate);
 extern void qi_snapshot_handle_utility(Node *utility_stmt);
 

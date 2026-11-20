@@ -22,6 +22,7 @@
 #include "pg_qi/qi_delegation.h"
 #include "pg_qi/qi_detector.h"
 #include "pg_qi/qi_eligibility.h"
+#include "pg_qi/qi_plan_features.h"
 #include "pg_qi/qi_shadow_p0.h"
 #include "pg_qi/qi_semantic.h"
 #include "pg_qi/qi_snapshot.h"
@@ -109,6 +110,7 @@ PG_FUNCTION_INFO_V1(qi_spike_observer);
 PG_FUNCTION_INFO_V1(qi_test_active_control_guard);
 PG_FUNCTION_INFO_V1(qi_test_classifier_contract);
 PG_FUNCTION_INFO_V1(qi_test_decision_v2_contract);
+PG_FUNCTION_INFO_V1(qi_test_plan_features_contract);
 PG_FUNCTION_INFO_V1(qi_test_shadow_p0_observer_contract);
 PG_FUNCTION_INFO_V1(qi_test_semantic_contract);
 PG_FUNCTION_INFO_V1(qi_test_semantic_probe);
@@ -289,6 +291,8 @@ done:
         .profile = QI_SEMANTIC_PROFILE_NONE,
         .blockers = 0
     };
+    QiNativePlanFeatures plan_features =
+        qi_plan_features_unknown(QI_PLAN_FEATURE_NOT_OBSERVED);
     volatile bool frame_active = false;
 
     pg_qi_shadow_planner_depth++;
@@ -404,6 +408,10 @@ done:
                 verification = QI_VERIFICATION_VERIFIED;
         }
 
+        if (shadow_p0_facts_observed)
+            plan_features = qi_plan_features_observe(
+                (PlannedStmt *) planned_stmt, &shadow_p0_facts);
+
         if (request_applied)
             reason = verification == QI_VERIFICATION_VERIFIED &&
                 observed_engine == QI_SHADOW_ENGINE_DUCKDB
@@ -419,7 +427,8 @@ done:
                 shadow_p0_facts_observed ? shadow_p0_facts.state :
                     QI_SHADOW_P0_FACTS_UNKNOWN,
                 shadow_p0_facts_observed ? shadow_p0_facts.reason :
-                    QI_SHADOW_P0_FACTS_NO_QUERY);
+                    QI_SHADOW_P0_FACTS_NO_QUERY,
+                plan_features);
 
         if (frame_active)
         {

@@ -35,3 +35,5 @@ CREATE FUNCTION test_semantic_probe(regclass, integer, integer, integer) RETURNS
 AS 'MODULE_PATHNAME', 'qi_test_semantic_probe' LANGUAGE C VOLATILE STRICT PARALLEL UNSAFE;
 CREATE FUNCTION test_v2_snapshot_contract() RETURNS boolean
 AS 'MODULE_PATHNAME', 'qi_test_v2_snapshot_contract' LANGUAGE C VOLATILE STRICT PARALLEL UNSAFE;
+CREATE FUNCTION test_plan_features_contract() RETURNS boolean
+AS 'MODULE_PATHNAME', 'qi_test_plan_features_contract' LANGUAGE C VOLATILE STRICT PARALLEL UNSAFE;

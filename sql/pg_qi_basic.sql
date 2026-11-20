@@ -117,6 +117,7 @@ REVOKE USAGE ON SCHEMA qi FROM semantic_reader;
 DROP ROLE semantic_reader;
 
 CREATE TABLE spike_small(id integer PRIMARY KEY, v integer);
+SELECT qi.test_plan_features_contract();
 INSERT INTO spike_small
 SELECT i, i * 10 FROM generate_series(1, 100) AS g(i);
 SET duckdb.force_execution = on;
