@@ -67,6 +67,17 @@ class SnapshotReaderTest(unittest.TestCase):
         with self.assertRaises(SnapshotError):
             parse_v2(value.replace("eligible=not_evaluated", "eligible=veto"))
 
+    def test_fail_closed_p0_reasons_are_audit_data(self):
+        for reason in ("unsupported_shape", "unsupported_node",
+                       "unsupported_relation", "catalog_mismatch"):
+            value = COMPLETE.replace(
+                "p0=bounded;p0_reason=ok",
+                "p0=unknown;p0_reason=" + reason)
+            with self.subTest(reason=reason):
+                parsed = parse_v2(value)
+                self.assertEqual(parsed["p0"], "unknown")
+                self.assertEqual(parsed["p0_reason"], reason)
+
     def test_v1_is_strict_and_never_a_v2_fallback(self):
         value = {
             "pg_qi.shadow_contract_version": "1",

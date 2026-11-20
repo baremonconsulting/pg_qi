@@ -40,6 +40,17 @@ SHOW pg_qi.shadow_policy_intent;
 SHOW pg_qi.shadow_reason;
 SHOW pg_qi.shadow_request_applied;
 SHOW duckdb.force_execution;
+SHOW pg_qi.shadow_p0_facts_state;
+SHOW pg_qi.shadow_p0_facts_reason;
+SHOW pg_qi.shadow_p0_capability;
+SELECT pg_qi_outer_test_reset_metrics();
+SELECT count(*) FROM outer_test_plain;
+SHOW pg_qi_outer_test.planner_calls;
+SHOW pg_qi_outer_test.force_at_entry;
+SHOW pg_qi_outer_test.pointer_identity;
+SHOW pg_qi.shadow_p0_facts_state;
+SHOW pg_qi.shadow_p0_facts_reason;
+SHOW pg_qi.shadow_p0_capability;
 SET pg_qi_outer_test.error_unconditionally = on;
 \set ON_ERROR_STOP off
 SELECT id FROM outer_test_plain WHERE id = 1;
@@ -48,6 +59,7 @@ SELECT id FROM outer_test_plain WHERE id = 1;
 SHOW duckdb.force_execution;
 SHOW pg_qi.shadow_p0_facts_state;
 SHOW pg_qi.shadow_p0_facts_reason;
+SHOW pg_qi.shadow_p0_capability;
 SET pg_qi_outer_test.error_unconditionally = off;
 SET pg_qi_outer_test.cancel_unconditionally = on;
 \set ON_ERROR_STOP off
@@ -91,7 +103,7 @@ test "$(grep -Ec '^ERROR:  pg_qi outer fixture error after owned force$' "$error
 test "$(grep -Ec '^ERROR:  pg_qi outer fixture downstream error$' "$error_log")" -eq 1
 test "$(grep -Ec '^ERROR:  pg_qi outer fixture planner cancellation$' "$error_log")" -eq 1
 
-expected=$'1\ndelegation_verified\nverified\noff\noff\n\n1\n1\noff\non\npass_through\ndecision_only\noff\noff\n40001\noff\nbounded\nok\n57014\noff\nXX000\noff\n1\non\nunknown\nno_query\n\non\non\ncontext_unproved\noff\noff'
+expected=$'1\ndelegation_verified\nverified\noff\noff\n\n1\n1\noff\non\npass_through\ndecision_only\noff\noff\nunknown\nunsupported_shape\nunknown\n\n2\n1\noff\non\nbounded\nok\ncount_star\n40001\noff\nbounded\nok\ncount_star\n57014\noff\nXX000\noff\n1\non\nunknown\nno_query\n\non\non\ncontext_unproved\noff\noff'
 if [ "$output" != "$expected" ]; then
     printf 'unexpected outer-hook verification output:\n%s\n' "$output" >&2
     exit 1

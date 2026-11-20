@@ -206,6 +206,14 @@ qi_p0_reason_name(QiShadowP0FactsReason reason)
         case QI_SHADOW_P0_FACTS_NO_QUERY: return "no_query";
         case QI_SHADOW_P0_FACTS_LIMIT: return "limit";
         case QI_SHADOW_P0_FACTS_CATALOG_MISS: return "catalog_miss";
+        case QI_SHADOW_P0_FACTS_UNSUPPORTED_SHAPE:
+            return "unsupported_shape";
+        case QI_SHADOW_P0_FACTS_UNSUPPORTED_NODE:
+            return "unsupported_node";
+        case QI_SHADOW_P0_FACTS_UNSUPPORTED_RELATION:
+            return "unsupported_relation";
+        case QI_SHADOW_P0_FACTS_CATALOG_MISMATCH:
+            return "catalog_mismatch";
     }
     return "invalid";
 }
