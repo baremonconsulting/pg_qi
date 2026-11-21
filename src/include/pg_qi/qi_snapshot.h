@@ -27,6 +27,12 @@ typedef enum QiRoutingMode
     QI_ROUTING_SHADOW_P0
 } QiRoutingMode;
 
+typedef enum QiPlanLifecycle
+{
+    QI_PLAN_LIFECYCLE_UNPROVED = 0,
+    QI_PLAN_LIFECYCLE_FRESH_EXECUTION
+} QiPlanLifecycle;
+
 typedef struct QiV2SnapshotToken
 {
     uint64 generation;
@@ -51,6 +57,7 @@ typedef struct QiV2SnapshotCandidate
     QiStatsConfidence stats_confidence;
     QiProfileEvidence profile_evidence;
     QiBenefitResult benefit;
+    QiPlanLifecycle lifecycle;
     bool valid;
 } QiV2SnapshotCandidate;
 

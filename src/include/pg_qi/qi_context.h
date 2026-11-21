@@ -13,5 +13,6 @@ extern void qi_context_fini_hooks(void);
 extern bool qi_context_proven_for_routing(bool planner_hook_outermost,
                                          int planner_depth,
                                          const char *query_string);
+extern bool qi_context_policy_request_allowed(void);
 
 #endif /* PG_QI_QI_CONTEXT_H */

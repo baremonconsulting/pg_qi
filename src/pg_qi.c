@@ -23,6 +23,7 @@
 #include "pg_qi/qi_delegation.h"
 #include "pg_qi/qi_detector.h"
 #include "pg_qi/qi_eligibility.h"
+#include "pg_qi/qi_lifecycle.h"
 #include "pg_qi/qi_plan_features.h"
 #include "pg_qi/qi_profile.h"
 #include "pg_qi/qi_shadow_p0.h"
@@ -119,6 +120,7 @@ PG_FUNCTION_INFO_V1(qi_test_stats_confidence_contract);
 PG_FUNCTION_INFO_V1(qi_test_profile_contract);
 PG_FUNCTION_INFO_V1(qi_test_profile_parse);
 PG_FUNCTION_INFO_V1(qi_test_benefit_contract);
+PG_FUNCTION_INFO_V1(qi_test_lifecycle_contract);
 PG_FUNCTION_INFO_V1(qi_test_shadow_p0_observer_contract);
 PG_FUNCTION_INFO_V1(qi_test_semantic_contract);
 PG_FUNCTION_INFO_V1(qi_test_semantic_probe);
@@ -382,6 +384,11 @@ done:
                         reason = QI_SHADOW_POLICY_MISSING;
                         break;
                     case QI_ROUTING_ALLOWLIST:
+                        if (!qi_context_policy_request_allowed())
+                        {
+                            reason = QI_SHADOW_DECISION_ONLY;
+                            break;
+                        }
                         policy_intent = QI_POLICY_REQUEST_DELEGATION;
                         reason = QI_SHADOW_DELEGATION_REQUESTED;
                         decision_force_origin = QI_FORCE_QI_STACK;
@@ -478,7 +485,8 @@ done:
                 qi_context_proven_for_routing(
                     planner_hook == pg_qi_planner,
                     pg_qi_shadow_planner_depth, query_string))
-                (void) qi_snapshot_commit(&v2_candidate);
+                (void) qi_lifecycle_arm((PlannedStmt *) planned_stmt,
+                                        &v2_candidate);
         }
     }
     PG_CATCH();

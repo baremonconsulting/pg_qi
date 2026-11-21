@@ -10,6 +10,7 @@
 #include "fmgr.h"
 #include "miscadmin.h"
 #include "nodes/parsenodes.h"
+#include "pg_qi/qi_lifecycle.h"
 #include "pg_qi/qi_snapshot.h"
 #include "utils/acl.h"
 #include "utils/guc.h"
@@ -213,6 +214,17 @@ qi_p0_state_name(QiShadowP0FactsState state)
 }
 
 static const char *
+qi_lifecycle_name(QiPlanLifecycle lifecycle)
+{
+    switch (lifecycle)
+    {
+        case QI_PLAN_LIFECYCLE_UNPROVED: return "unproved";
+        case QI_PLAN_LIFECYCLE_FRESH_EXECUTION: return "fresh_execution";
+    }
+    return "invalid";
+}
+
+static const char *
 qi_p0_reason_name(QiShadowP0FactsReason reason)
 {
     switch (reason)
@@ -260,17 +272,17 @@ qi_snapshot_show(void)
 
     qi_snapshot_initialize();
     if (!qi_snapshot_authorized())
-        return "v=2;sv=1;s=denied";
+        return "v=2;sv=2;s=denied";
     if (qi_snapshot_store.exhausted)
-        return "v=2;sv=1;s=exhausted";
+        return "v=2;sv=2;s=exhausted";
     if (!qi_snapshot_store.available)
-        return "v=2;sv=1;s=unavailable";
+        return "v=2;sv=2;s=unavailable";
 
     qi_snapshot_incarnation_hex(incarnation, sizeof(incarnation));
     if (!qi_snapshot_store.has_event)
     {
         snprintf(qi_snapshot_render_buffer, sizeof(qi_snapshot_render_buffer),
-                 "v=2;sv=1;s=none;cid=%s;g=" UINT64_FORMAT ";e=0",
+                 "v=2;sv=2;s=none;cid=%s;g=" UINT64_FORMAT ";e=0",
                  incarnation, qi_snapshot_store.generation);
         return qi_snapshot_render_buffer;
     }
@@ -279,17 +291,17 @@ qi_snapshot_show(void)
     candidate = &event->candidate;
     if (candidate->token.effective_user != GetUserId() ||
         candidate->token.session_user != GetSessionUserId())
-        return "v=2;sv=1;s=withheld";
+        return "v=2;sv=2;s=withheld";
 
     decision = &candidate->decision;
     written = snprintf(qi_snapshot_render_buffer,
         sizeof(qi_snapshot_render_buffer),
-        "v=2;sv=1;s=complete;cid=%s;g=" UINT64_FORMAT
+        "v=2;sv=2;s=complete;cid=%s;g=" UINT64_FORMAT
         ";e=" UINT64_FORMAT ";mode=%s;enabled=%s;context=%s"
         ";eligible=%s;safe=%s;beneficial=%s;barrier=%s"
         ";recommendation=%s;reason=%d;rule=%d;model=%d;certificate=%d"
         ";policy=%s;force=%s;engine=%s;verification=%s;observation=%s"
-        ";p0=%s;p0_reason=%s",
+        ";p0=%s;p0_reason=%s;lifecycle=%s",
         incarnation, candidate->token.generation, event->event_sequence,
         qi_mode_name(candidate->mode_at_decision),
         candidate->enabled_at_decision ? "on" : "off",
@@ -308,9 +320,10 @@ qi_snapshot_show(void)
         qi_verification_name(candidate->verification),
         qi_observation_name(candidate->observation),
         qi_p0_state_name(candidate->p0_state),
-        qi_p0_reason_name(candidate->p0_reason));
+        qi_p0_reason_name(candidate->p0_reason),
+        qi_lifecycle_name(candidate->lifecycle));
     if (written < 0 || (Size) written >= sizeof(qi_snapshot_render_buffer))
-        return "v=2;sv=1;s=invalid";
+        return "v=2;sv=2;s=invalid";
     return qi_snapshot_render_buffer;
 }
 
@@ -709,6 +722,7 @@ qi_snapshot_prepare(QiV2SnapshotCandidate *candidate,
     candidate->stats_confidence = stats_confidence;
     candidate->profile_evidence = profile_evidence;
     candidate->benefit = benefit;
+    candidate->lifecycle = QI_PLAN_LIFECYCLE_UNPROVED;
     candidate->valid = true;
     return true;
 }
@@ -720,6 +734,7 @@ qi_snapshot_commit(const QiV2SnapshotCandidate *candidate)
     QiV2SnapshotEvent event;
 
     if (candidate == NULL || !candidate->valid ||
+        candidate->lifecycle != QI_PLAN_LIFECYCLE_FRESH_EXECUTION ||
         !qi_snapshot_store.available || qi_snapshot_store.exhausted ||
         candidate->token.generation != qi_snapshot_store.generation ||
         candidate->token.effective_user != GetUserId() ||
@@ -749,15 +764,22 @@ qi_snapshot_handle_utility(Node *utility_stmt)
         return;
     if (IsA(utility_stmt, DiscardStmt) &&
         ((DiscardStmt *) utility_stmt)->target == DISCARD_ALL)
+    {
+        qi_lifecycle_reset();
         qi_snapshot_reset_lifetime();
+    }
     else if (IsA(utility_stmt, VariableSetStmt))
     {
         VariableSetStmt *set = (VariableSetStmt *) utility_stmt;
 
-        if (set->name != NULL &&
+        if (set->kind == VAR_RESET_ALL ||
+            (set->name != NULL &&
             (strcmp(set->name, "role") == 0 ||
-             strcmp(set->name, "session_authorization") == 0))
+             strcmp(set->name, "session_authorization") == 0)))
+        {
+            qi_lifecycle_reset();
             qi_snapshot_reset_lifetime();
+        }
     }
 }
 
@@ -769,6 +791,7 @@ qi_test_v2_snapshot_contract(PG_FUNCTION_ARGS)
     QiV2SnapshotToken token;
     QiV2SnapshotCandidate candidate;
     bool first_commit;
+    bool unproved_rejected;
     bool sequence_one;
     bool saturation_rejected;
     bool saturation_latched;
@@ -795,8 +818,10 @@ qi_test_v2_snapshot_contract(PG_FUNCTION_ARGS)
         qi_stats_confidence_unknown(QI_STATS_NOT_OBSERVED),
         qi_profile_not_observed(),
         (QiBenefitResult) {QI_BENEFIT_NOT_EVALUATED,
-                           QI_BENEFIT_NOT_OBSERVED, 0, 0, 0}) &&
-        qi_snapshot_commit(&candidate);
+                           QI_BENEFIT_NOT_OBSERVED, 0, 0, 0});
+    unproved_rejected = !qi_snapshot_commit(&candidate);
+    candidate.lifecycle = QI_PLAN_LIFECYCLE_FRESH_EXECUTION;
+    first_commit = first_commit && qi_snapshot_commit(&candidate);
     sequence_one = qi_snapshot_store.has_event &&
         qi_snapshot_store.event_sequence == 1;
     qi_snapshot_store.event_sequence = PG_UINT64_MAX;
@@ -817,7 +842,8 @@ qi_test_v2_snapshot_contract(PG_FUNCTION_ARGS)
         qi_snapshot_store.generation == PG_UINT64_MAX;
     qi_snapshot_store = saved;
 
-    PG_RETURN_BOOL(first_commit && sequence_one && saturation_rejected &&
+    PG_RETURN_BOOL(unproved_rejected && first_commit && sequence_one &&
+                   saturation_rejected &&
                    saturation_latched && reset_changed_generation &&
                    generation_saturation_latched);
 }

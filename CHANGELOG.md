@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Fail-closed plan-lifecycle correlation for simple and prepared execution,
+  including cached-plan abstention, DDL replan evidence and SQL/libpq tests.
+  SQL `EXECUTE` is now identified as a proven lifecycle context, while its
+  allow-list policy remains decision-only and cannot request delegation.
 - A decision-only conservative benefit model with checked integer bounds,
   profile format v2 and private benefit evidence.
 - A private, bounded, backend-local V2 decision snapshot with atomic

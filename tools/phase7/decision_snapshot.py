@@ -34,12 +34,14 @@ V2_COMPLETE_FIELDS = {
     "eligible", "safe", "beneficial", "barrier", "recommendation",
     "reason", "rule", "model", "certificate", "policy", "force",
     "engine", "verification", "observation", "p0", "p0_reason",
+    "lifecycle",
 }
 V2_COMPLETE_ORDER = (
     "v", "sv", "s", "cid", "g", "e", "mode", "enabled", "context",
     "eligible", "safe", "beneficial", "barrier", "recommendation",
     "reason", "rule", "model", "certificate", "policy", "force",
     "engine", "verification", "observation", "p0", "p0_reason",
+    "lifecycle",
 )
 V2_NONE_ORDER = ("v", "sv", "s", "cid", "g", "e")
 
@@ -230,7 +232,7 @@ def _validate_decision(values: Mapping[str, str]) -> None:
 
 def parse_v2(text: str) -> dict[str, str | int]:
     values = _parse_pairs(text)
-    if values.get("v") != "2" or values.get("sv") != "1":
+    if values.get("v") != "2" or values.get("sv") != "2":
         raise SnapshotError("unsupported V2 contract or envelope version")
     state = values.get("s")
     if state in {"denied", "withheld", "unavailable", "exhausted", "invalid"}:
@@ -271,6 +273,8 @@ def parse_v2(text: str) -> dict[str, str | int]:
             {"ok", "no_query", "limit", "catalog_miss",
              "unsupported_shape", "unsupported_node",
              "unsupported_relation", "catalog_mismatch"})
+    if values["lifecycle"] != "fresh_execution":
+        raise SnapshotError("V2 event lifecycle is not proven")
     if values["verification"] == "verified" and not (
             values["engine"] == "duckdb" and
             values["observation"] == "duckdb_scan_at_downstream_boundary"):

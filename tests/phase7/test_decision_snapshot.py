@@ -12,29 +12,29 @@ from decision_snapshot import SnapshotError, parse_snapshot, parse_v1, parse_v2
 
 
 COMPLETE = (
-    "v=2;sv=1;s=complete;cid=0123456789abcdef0123456789abcdef;g=1;e=1;"
+    "v=2;sv=2;s=complete;cid=0123456789abcdef0123456789abcdef;g=1;e=1;"
     "mode=shadow_p0;enabled=on;context=proven_client;eligible=not_evaluated;"
     "safe=not_evaluated;beneficial=not_evaluated;barrier=closed;"
     "recommendation=insufficient_evidence;reason=0;rule=1;model=1;"
     "certificate=1;policy=pass_through;force=off;engine=unknown;"
     "verification=unverified;observation=no_authoritative_match;"
-    "p0=bounded;p0_reason=ok"
+    "p0=bounded;p0_reason=ok;lifecycle=fresh_execution"
 )
 
 
 class SnapshotReaderTest(unittest.TestCase):
     def test_complete_and_none_v2(self):
         self.assertEqual(parse_v2(COMPLETE)["mode"], "shadow_p0")
-        none = "v=2;sv=1;s=none;cid=0123456789abcdef0123456789abcdef;g=2;e=0"
+        none = "v=2;sv=2;s=none;cid=0123456789abcdef0123456789abcdef;g=2;e=0"
         self.assertEqual(parse_v2(none)["s"], "none")
         with self.assertRaises(SnapshotError):
-            parse_v2(none.replace("v=2;sv=1", "sv=1;v=2"))
+            parse_v2(none.replace("v=2;sv=2", "sv=2;v=2"))
 
     def test_non_evidence_states_are_minimal(self):
         for state in ("denied", "withheld", "unavailable", "exhausted", "invalid"):
-            self.assertEqual(parse_v2(f"v=2;sv=1;s={state}")["s"], state)
+            self.assertEqual(parse_v2(f"v=2;sv=2;s={state}")["s"], state)
             with self.assertRaises(SnapshotError):
-                parse_v2(f"v=2;sv=1;s={state};cid=secret")
+                parse_v2(f"v=2;sv=2;s={state};cid=secret")
 
     def test_v2_mutations_fail_closed(self):
         mutations = [
@@ -49,7 +49,7 @@ class SnapshotReaderTest(unittest.TestCase):
                              "recommendation=would_delegate"),
             COMPLETE.replace("reason=0", "reason=2147483648"),
             COMPLETE.replace("rule=1", "rule=2147483648"),
-            COMPLETE.replace("v=2;sv=1;s=complete", "sv=1;v=2;s=complete"),
+            COMPLETE.replace("v=2;sv=2;s=complete", "sv=2;v=2;s=complete"),
             COMPLETE.replace("verification=unverified", "verification=verified"),
             COMPLETE.replace("p0_reason=ok", "p0_reason=no_query"),
             COMPLETE.replace("policy=pass_through", "policy=request_delegation"),

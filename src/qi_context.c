@@ -6,9 +6,11 @@
 #include "postgres.h"
 
 #include "access/parallel.h"
+#include "commands/prepare.h"
 #include "executor/executor.h"
 #include "miscadmin.h"
 #include "pg_qi/qi_context.h"
+#include "pg_qi/qi_lifecycle.h"
 #include "pg_qi/qi_snapshot.h"
 #include "tcop/tcopprot.h"
 #include "tcop/utility.h"
@@ -20,6 +22,8 @@ static ExecutorEnd_hook_type previous_executor_end_hook = NULL;
 static ProcessUtility_hook_type previous_process_utility_hook = NULL;
 static int qi_executor_call_depth = 0;
 static int qi_utility_call_depth = 0;
+static NodeTag qi_utility_node_tag = T_Invalid;
+static const char *qi_execute_query_string = NULL;
 
 #if PG_VERSION_NUM >= 180000
 #define QI_EXECUTOR_RUN_PROTO(name) \
@@ -38,6 +42,16 @@ static int qi_utility_call_depth = 0;
 static void
 qi_executor_start(QueryDesc *query_desc, int eflags)
 {
+    bool sql_execute = qi_utility_call_depth == 1 &&
+        qi_utility_node_tag == T_ExecuteStmt &&
+        query_desc != NULL &&
+        query_desc->sourceText != NULL &&
+        qi_execute_query_string != NULL &&
+        strcmp(query_desc->sourceText, qi_execute_query_string) == 0;
+    bool context_proven = qi_utility_call_depth == 0 || sql_execute;
+
+    qi_lifecycle_executor_start(query_desc, qi_executor_call_depth == 0,
+                                context_proven);
     qi_executor_call_depth++;
     PG_TRY();
     {
@@ -55,6 +69,7 @@ qi_executor_start(QueryDesc *query_desc, int eflags)
 
 QI_EXECUTOR_RUN_PROTO(qi_executor_run)
 {
+    qi_lifecycle_executor_run(query_desc);
     qi_executor_call_depth++;
     PG_TRY();
     {
@@ -102,6 +117,7 @@ qi_executor_end(QueryDesc *query_desc)
     PG_FINALLY();
     {
         qi_executor_call_depth--;
+        qi_lifecycle_executor_end(query_desc);
     }
     PG_END_TRY();
 }
@@ -112,6 +128,23 @@ qi_process_utility(PlannedStmt *pstmt, const char *query_string,
                    ParamListInfo params, QueryEnvironment *query_env,
                    DestReceiver *dest, QueryCompletion *qc)
 {
+    NodeTag saved_utility_node_tag = qi_utility_node_tag;
+    const char *saved_execute_query_string = qi_execute_query_string;
+
+    qi_utility_node_tag = pstmt->utilityStmt == NULL
+        ? T_Invalid : nodeTag(pstmt->utilityStmt);
+    qi_execute_query_string = NULL;
+    if (context == PROCESS_UTILITY_TOPLEVEL &&
+        query_string == debug_query_string &&
+        pstmt->utilityStmt != NULL && IsA(pstmt->utilityStmt, ExecuteStmt))
+    {
+        ExecuteStmt *execute = (ExecuteStmt *) pstmt->utilityStmt;
+        PreparedStatement *prepared =
+            FetchPreparedStatement(execute->name, false);
+
+        if (prepared != NULL && prepared->plansource != NULL)
+            qi_execute_query_string = prepared->plansource->query_string;
+    }
     qi_utility_call_depth++;
     PG_TRY();
     {
@@ -125,6 +158,8 @@ qi_process_utility(PlannedStmt *pstmt, const char *query_string,
     PG_FINALLY();
     {
         qi_utility_call_depth--;
+        qi_utility_node_tag = saved_utility_node_tag;
+        qi_execute_query_string = saved_execute_query_string;
     }
     PG_END_TRY();
 
@@ -134,6 +169,7 @@ qi_process_utility(PlannedStmt *pstmt, const char *query_string,
 void
 qi_context_init_hooks(void)
 {
+    qi_lifecycle_init();
     previous_executor_start_hook = ExecutorStart_hook;
     previous_executor_run_hook = ExecutorRun_hook;
     previous_executor_finish_hook = ExecutorFinish_hook;
@@ -160,23 +196,34 @@ qi_context_fini_hooks(void)
         ExecutorEnd_hook = previous_executor_end_hook;
     if (ProcessUtility_hook == qi_process_utility)
         ProcessUtility_hook = previous_process_utility_hook;
+    qi_lifecycle_fini();
 }
 
 bool
 qi_context_proven_for_routing(bool planner_hook_outermost, int planner_depth,
                               const char *query_string)
 {
+    bool sql_execute = qi_utility_call_depth == 1 &&
+        qi_utility_node_tag == T_ExecuteStmt &&
+        query_string == qi_execute_query_string;
+
     return MyBackendType == B_BACKEND &&
         !IsParallelWorker() &&
         query_string != NULL &&
-        query_string == debug_query_string &&
+        (query_string == debug_query_string || sql_execute) &&
         planner_depth == 1 &&
         qi_executor_call_depth == 0 &&
-        qi_utility_call_depth == 0 &&
+        (qi_utility_call_depth == 0 || sql_execute) &&
         planner_hook_outermost &&
         ExecutorStart_hook == qi_executor_start &&
         ExecutorRun_hook == qi_executor_run &&
         ExecutorFinish_hook == qi_executor_finish &&
         ExecutorEnd_hook == qi_executor_end &&
         ProcessUtility_hook == qi_process_utility;
+}
+
+bool
+qi_context_policy_request_allowed(void)
+{
+    return qi_utility_call_depth == 0;
 }

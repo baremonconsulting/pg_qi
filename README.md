@@ -139,6 +139,8 @@ administrator-created `NOLOGIN` role named `pgqi_diagnostic`; ordinary roles
 receive no diagnostic payload. See
 [`docs/phase7/PQ7-3-private-atomic-snapshot.md`](docs/phase7/PQ7-3-private-atomic-snapshot.md)
 for lifecycle, pooling, privacy, and correlation rules.
+Prepared-plan and cache semantics are specified in
+[`docs/phase7/PQ7-12-plan-lifecycle.md`](docs/phase7/PQ7-12-plan-lifecycle.md).
 
 The PQ-31 differential oracle is a CI and controlled-lab qualification tool,
 not a production router or telemetry interface. Its witness library is built

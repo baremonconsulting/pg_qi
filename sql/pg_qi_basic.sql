@@ -32,6 +32,7 @@ SELECT * FROM qi.test_decision_v2_contract();
 SELECT qi.test_shadow_p0_observer_contract();
 SELECT qi.test_semantic_contract();
 SELECT qi.test_v2_snapshot_contract();
+SELECT qi.test_lifecycle_contract();
 SELECT depth, cleanup_broken, accounting_valid FROM qi.test_frame_state();
 SHOW pg_qi.spike_stack_depth;
 SHOW pg_qi.spike_cleanup_broken;
