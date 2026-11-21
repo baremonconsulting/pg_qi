@@ -10,6 +10,7 @@
 #include "fmgr.h"
 #include "miscadmin.h"
 #include "nodes/parsenodes.h"
+#include "pg_qi/qi_delegation.h"
 #include "pg_qi/qi_lifecycle.h"
 #include "pg_qi/qi_snapshot.h"
 #include "utils/acl.h"
@@ -727,6 +728,45 @@ qi_snapshot_prepare(QiV2SnapshotCandidate *candidate,
     return true;
 }
 
+void
+qi_snapshot_confirm_count(QiV2SnapshotCandidate *candidate,
+                          const QueryDesc *query_desc)
+{
+    QiSemanticFacts semantic;
+    QiV2Decision decision;
+    const QiV2Decision *prior;
+
+    if (candidate == NULL || !candidate->valid || !candidate->enabled_at_decision ||
+        candidate->mode_at_decision != QI_ROUTING_SHADOW_P0 ||
+        candidate->lifecycle != QI_PLAN_LIFECYCLE_FRESH_EXECUTION ||
+        candidate->plan_features.state != QI_PLAN_FEATURE_BOUNDED ||
+        candidate->plan_features.spine != QI_PLAN_SPINE_PLAIN_AGG_SEQ_SCAN ||
+        candidate->plan_features.parallel_mode_needed ||
+        candidate->decision.policy_intent != QI_POLICY_PASS_THROUGH ||
+        candidate->decision.force_origin != QI_FORCE_OFF ||
+        candidate->decision.observed_engine == QI_SHADOW_ENGINE_DUCKDB)
+        return;
+
+    semantic = candidate->semantic;
+    if (!qi_semantic_confirm_count_execution(&semantic, query_desc,
+                                              candidate->plan_features.relation_oid) ||
+        qi_current_force_origin() != QI_FORCE_OFF)
+        return;
+    prior = &candidate->decision;
+    decision = qi_v2_evaluate(prior->eligible, qi_semantic_gate_state(&semantic),
+                              prior->beneficial, QI_V2_ACTIVATION_CLOSED,
+                              prior->rule_version, prior->model_version,
+                              prior->certificate_version);
+    decision.policy_intent = prior->policy_intent;
+    decision.force_origin = prior->force_origin;
+    decision.observed_engine = prior->observed_engine;
+    if (qi_v2_decision_valid(&decision))
+    {
+        candidate->semantic = semantic;
+        candidate->decision = decision;
+    }
+}
+
 bool
 qi_snapshot_commit(const QiV2SnapshotCandidate *candidate)
 {
@@ -808,11 +848,11 @@ qi_test_v2_snapshot_contract(PG_FUNCTION_ARGS)
         QI_FORCE_OFF, QI_SHADOW_ENGINE_UNKNOWN,
         QI_VERIFICATION_UNVERIFIED,
         QI_SHADOW_OBSERVATION_NO_AUTHORITATIVE_MATCH,
-        (QiSemanticFacts) {QI_SEMANTIC_UNKNOWN,
-                           QI_SEMANTIC_PROFILE_COUNT_STAR,
-                           QI_SEMANTIC_BLOCKER_INACTIVE |
-                           QI_SEMANTIC_BLOCKER_BUILD_IDENTITY_UNVERIFIED |
-                           QI_SEMANTIC_BLOCKER_SNAPSHOT_UNPROVEN},
+        (QiSemanticFacts) {.status = QI_SEMANTIC_UNKNOWN,
+                           .profile = QI_SEMANTIC_PROFILE_COUNT_STAR,
+                           .blockers = QI_SEMANTIC_BLOCKER_INACTIVE |
+                               QI_SEMANTIC_BLOCKER_BUILD_IDENTITY_UNVERIFIED |
+                               QI_SEMANTIC_BLOCKER_SNAPSHOT_UNPROVEN},
         QI_SHADOW_P0_FACTS_BOUNDED, QI_SHADOW_P0_FACTS_OK,
         qi_plan_features_unknown(QI_PLAN_FEATURE_NOT_OBSERVED),
         qi_stats_confidence_unknown(QI_STATS_NOT_OBSERVED),

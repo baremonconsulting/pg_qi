@@ -8,7 +8,9 @@
 #include "common/cryptohash.h"
 #include "fmgr.h"
 #include "access/xact.h"
+#include "pg_qi/qi_count_certificate.h"
 #include "pg_qi/qi_lifecycle.h"
+#include "utils/memutils.h"
 
 #define QI_LIFECYCLE_MAX_PENDING 8
 #define QI_LIFECYCLE_MAX_PLAN_NODES 8192
@@ -48,16 +50,26 @@ typedef struct QiLifecycleStatementToken
     bool parallel_mode_needed;
 } QiLifecycleStatementToken;
 
+typedef struct QiLifecycleGuard QiLifecycleGuard;
+
 typedef struct QiLifecyclePending
 {
     const PlannedStmt *planned_stmt;
     uint8 fingerprint[QI_LIFECYCLE_DIGEST_BYTES];
     QueryDesc *query_desc;
     QiV2SnapshotCandidate candidate;
+    QiLifecycleGuard *certificate_guard;
     bool armed;
     bool bound;
     bool fingerprint_valid;
 } QiLifecyclePending;
+
+struct QiLifecycleGuard
+{
+    MemoryContextCallback callback;
+    QiLifecyclePending *pending;
+    QiCountCertificateBinding certificate;
+};
 
 static QiLifecyclePending qi_lifecycle_pending[QI_LIFECYCLE_MAX_PENDING];
 static bool qi_lifecycle_callbacks_registered = false;
@@ -227,10 +239,51 @@ qi_lifecycle_clear(QiLifecyclePending *pending)
     MemSet(pending, 0, sizeof(*pending));
 }
 
+static void
+qi_lifecycle_invalidate_certificate(void *arg)
+{
+    QiLifecycleGuard *guard = (QiLifecycleGuard *) arg;
+
+    if (guard->pending->certificate_guard == guard)
+        guard->pending->certificate_guard = NULL;
+}
+
+static void
+qi_lifecycle_guard_certificate(QiLifecyclePending *pending,
+                              const PlannedStmt *planned_stmt,
+                              const QiCountCertificateBinding *certificate)
+{
+    MemoryContext context = GetMemoryChunkContext((void *) planned_stmt);
+    QiLifecycleGuard *guard = MemoryContextAllocExtended(context, sizeof(*guard),
+                                                         MCXT_ALLOC_NO_OOM);
+
+    if (guard == NULL)
+        return;
+    guard->pending = pending;
+    guard->certificate = *certificate;
+    guard->callback.func = qi_lifecycle_invalidate_certificate;
+    guard->callback.arg = guard;
+    MemoryContextRegisterResetCallback(context, &guard->callback);
+    pending->certificate_guard = guard;
+}
+
+static bool
+qi_lifecycle_matches_certificate(const QiLifecyclePending *pending,
+                                 const PlannedStmt *planned_stmt,
+                                 const QiCountCertificateBinding *certificate)
+{
+    const QiLifecycleGuard *guard = pending->certificate_guard;
+
+    return guard != NULL && pending->planned_stmt == planned_stmt &&
+        memcmp(guard->certificate.approved_sha256, certificate->approved_sha256,
+               sizeof(certificate->approved_sha256)) == 0;
+}
+
 bool
 qi_lifecycle_arm(const PlannedStmt *planned_stmt,
                  const QiV2SnapshotCandidate *candidate)
 {
+    QiCountCertificateBinding certificate;
     uint8 fingerprint[QI_LIFECYCLE_DIGEST_BYTES];
     int free_slot = -1;
     int i;
@@ -268,6 +321,10 @@ qi_lifecycle_arm(const PlannedStmt *planned_stmt,
         QI_PLAN_LIFECYCLE_FRESH_EXECUTION;
     qi_lifecycle_pending[free_slot].armed = true;
     qi_lifecycle_pending[free_slot].fingerprint_valid = true;
+    if (candidate->semantic.count_scope && candidate->mode_at_decision == QI_ROUTING_SHADOW_P0 &&
+        qi_count_certificate_bind(&certificate))
+        qi_lifecycle_guard_certificate(&qi_lifecycle_pending[free_slot], planned_stmt,
+                                       &certificate);
     return true;
 }
 
@@ -353,6 +410,7 @@ qi_lifecycle_executor_start(QueryDesc *query_desc, bool outermost,
 void
 qi_lifecycle_executor_run(QueryDesc *query_desc)
 {
+    QiCountCertificateBinding certificate;
     int i;
 
     if (query_desc == NULL)
@@ -364,6 +422,14 @@ qi_lifecycle_executor_run(QueryDesc *query_desc)
         if (pending->armed && pending->bound &&
             pending->query_desc == query_desc)
         {
+            /* A topology fingerprint is enough for generic historical
+             * observations, but not for an exact semantic certificate. A
+             * reload cannot requalify a plan armed under another record. */
+            if (pending->certificate_guard != NULL &&
+                qi_count_certificate_bind(&certificate) &&
+                qi_lifecycle_matches_certificate(pending, query_desc->plannedstmt,
+                                                 &certificate))
+                qi_snapshot_confirm_count(&pending->candidate, query_desc);
             (void) qi_snapshot_commit(&pending->candidate);
             qi_lifecycle_clear(pending);
             return;
@@ -412,6 +478,12 @@ qi_test_lifecycle_contract(PG_FUNCTION_ARGS)
     bool ambiguous_abstains;
     bool exact_binding;
     bool reset_clears;
+    bool released_plan_invalidates;
+    bool replacement_abstains;
+    const QiCountCertificateBinding certificate = {{'a'}};
+    const QiCountCertificateBinding replacement = {{'b'}};
+    MemoryContext plan_context;
+    PlannedStmt *guarded_plan;
     int armed_count;
     int i;
 
@@ -471,8 +543,22 @@ qi_test_lifecycle_contract(PG_FUNCTION_ARGS)
     (void) qi_lifecycle_arm(&plans[0], &candidate);
     qi_lifecycle_reset();
     reset_clears = !qi_lifecycle_pending[0].armed;
+    plan_context = AllocSetContextCreate(CurrentMemoryContext,
+                                         "pg_qi test plan ownership", ALLOCSET_SMALL_SIZES);
+    guarded_plan = MemoryContextAllocZero(plan_context, sizeof(*guarded_plan));
+    *guarded_plan = plans[0];
+    (void) qi_lifecycle_arm(guarded_plan, &candidate);
+    qi_lifecycle_guard_certificate(&qi_lifecycle_pending[0], guarded_plan, &certificate);
+    replacement_abstains =
+        qi_lifecycle_matches_certificate(&qi_lifecycle_pending[0], guarded_plan, &certificate) &&
+        !qi_lifecycle_matches_certificate(&qi_lifecycle_pending[0], guarded_plan, &replacement);
+    released_plan_invalidates = qi_lifecycle_pending[0].certificate_guard != NULL;
+    MemoryContextReset(plan_context);
+    released_plan_invalidates = released_plan_invalidates &&
+        qi_lifecycle_pending[0].certificate_guard == NULL;
+    MemoryContextDelete(plan_context);
     memcpy(qi_lifecycle_pending, saved, sizeof(saved));
     PG_RETURN_BOOL(latest_supersedes && ambiguous_abstains && exact_binding &&
-                   reset_clears);
+                   reset_clears && released_plan_invalidates && replacement_abstains);
 }
 #endif

@@ -22,7 +22,8 @@ from tools.phase5.corpus_oracle import (MAGIC_V2, OracleError, TypedSpool,
 from tools.phase7.differential_oracle import (ARMS, PG_SNAPSHOT, DifferentialError, evaluate,
                                               evaluate_qualified_pair,
                                               validate_cross_bindings,
-                                              validate_manifest, validate_receipt)
+                                              validate_manifest, validate_no_import_control,
+                                              validate_receipt)
 from tools.phase7.decision_snapshot import SnapshotError, parse_v2
 from tools.phase7.witness_record import WitnessError, parse_witness
 
@@ -100,6 +101,24 @@ def parse_arm(line: str) -> dict[str, object]:
             "terminal_status": fields[15]}
 
 
+def arm_receipt(manifest: dict, arm: str, result: dict, spool: Path,
+                exporter: dict, snapshot: str, token_digest: str, *, imported: bool) -> dict:
+    return {"schema_version": 1, "document_type": "pq31_arm_receipt",
+            "run_id": manifest["run_id"], "subject_id": manifest["subject_id"],
+            "arm": arm, "sql_sha256": manifest["sql_sha256"], "exporter": exporter,
+            "snapshot": {"token_sha256": token_digest, "imported": imported,
+                         "import_command_complete": imported, "exporter_snapshot": snapshot,
+                         "arm_snapshot": result["arm_snapshot"]},
+            "backend": {key: result[key] for key in
+                        ("pid", "database", "user", "database_oid", "user_oid")},
+            **{key: result[key] for key in
+               ("v2_before", "v2_after", "witness_before", "witness_after")},
+            "spool": {"path": str(spool), "sha256": hashlib.sha256(spool.read_bytes()).hexdigest(),
+                      "bytes": spool.stat().st_size, "rows": result["rows"],
+                      "terminal_status": result["terminal_status"], "sqlstate": result["sqlstate"]},
+            "acquisition": {"complete": result["complete"], "reason": result["reason"]}}
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser()
     result.add_argument("--driver", required=True, type=Path)
@@ -108,12 +127,14 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--sql-file", required=True, type=Path)
     result.add_argument("--run-root", required=True, type=Path)
     result.add_argument("--concurrent-sql-file", type=Path)
+    result.add_argument("--site-binding", help="require this site on every isolated-lab connection")
     result.add_argument("--deadline-ms", type=int, default=30000)
     return result
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
+    site_args = ["--site-binding", args.site_binding] if args.site_binding else []
     exporter: subprocess.Popen[str] | None = None
     proven_failure: dict[str, object] | None = None
     try:
@@ -137,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
             os.close(descriptor)
         exporter = subprocess.Popen(
             [str(args.driver), "--mode", "exporter", "--conninfo", args.conninfo,
-             "--deadline-ms", str(args.deadline_ms)], stdin=subprocess.PIPE,
+             "--deadline-ms", str(args.deadline_ms), *site_args], stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         token, exported_snapshot, exporter_pid, exporter_database, exporter_user, \
             exporter_database_oid, exporter_user_oid = parse_export(
@@ -153,7 +174,7 @@ def main(argv: list[str] | None = None) -> int:
             mutation = subprocess.run(
                 [str(args.driver), "--mode", "command", "--conninfo", args.conninfo,
                  "--sql-file", str(args.concurrent_sql_file),
-                 "--deadline-ms", str(args.deadline_ms)],
+                 "--deadline-ms", str(args.deadline_ms), *site_args],
                 capture_output=True, text=True, check=False)
             if mutation.returncode != 0 or mutation.stdout != "COMMAND\tcomplete\n":
                 raise RunError("concurrent snapshot control failed")
@@ -168,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
                 [str(args.driver), "--mode", "arm", "--conninfo", args.conninfo,
                  "--arm", arm, "--snapshot", token, "--sql-file", str(subject_copy),
                  "--subject-token", subject_token,
-                 "--spool", str(spool), "--deadline-ms", str(args.deadline_ms)],
+                 "--spool", str(spool), "--deadline-ms", str(args.deadline_ms), *site_args],
                 capture_output=True, text=True, check=False)
             lines = process.stdout.splitlines()
             if not lines:
@@ -353,28 +374,8 @@ def main(argv: list[str] | None = None) -> int:
                     if spool_available else "spool_missing"})
                 continue
             completed_results[arm] = arm_result
-            receipt = {"schema_version": 1, "document_type": "pq31_arm_receipt",
-                "run_id": manifest["run_id"], "subject_id": manifest["subject_id"],
-                "arm": arm, "sql_sha256": manifest["sql_sha256"],
-                "exporter": exporter_identity,
-                "snapshot": {"token_sha256": token_digest, "imported": True,
-                    "import_command_complete": True,
-                    "exporter_snapshot": exported_snapshot,
-                    "arm_snapshot": arm_result["arm_snapshot"]},
-                "backend": {"pid": arm_result["pid"],
-                    "database": arm_result["database"], "user": arm_result["user"],
-                    "database_oid": arm_result["database_oid"],
-                    "user_oid": arm_result["user_oid"]},
-                "v2_before": arm_result["v2_before"], "v2_after": arm_result["v2_after"],
-                "witness_before": arm_result["witness_before"],
-                "witness_after": arm_result["witness_after"],
-                "spool": {"path": str(spool),
-                    "sha256": hashlib.sha256(spool.read_bytes()).hexdigest(),
-                    "bytes": spool.stat().st_size, "rows": arm_result["rows"],
-                    "terminal_status": arm_result["terminal_status"],
-                    "sqlstate": arm_result["sqlstate"]},
-                "acquisition": {"complete": arm_result["complete"],
-                    "reason": arm_result["reason"]}}
+            receipt = arm_receipt(manifest, arm, arm_result, spool, exporter_identity,
+                                  exported_snapshot, token_digest, imported=True)
             if receipt["backend"]["database"] != exporter_database or \
                     receipt["backend"]["user"] != exporter_user:
                 raise RunError("exporter and arm principal differ")
@@ -418,14 +419,20 @@ def main(argv: list[str] | None = None) -> int:
                  "--arm", "native", "--snapshot", token, "--snapshot-mode", "skip",
                  "--subject-token", subject_token,
                  "--sql-file", str(subject_copy), "--spool", str(negative),
-                 "--deadline-ms", str(args.deadline_ms)], capture_output=True,
+                 "--deadline-ms", str(args.deadline_ms), *site_args], capture_output=True,
                 text=True, check=False)
             lines = process.stdout.splitlines()
             if len(lines) != 1:
                 raise RunError("missing-import control did not produce one result")
             negative_result = parse_arm(lines[0])
-            if not negative_result["complete"] or negative_result["terminal_status"] != "complete":
+            if process.returncode != 0 or not negative_result["complete"] or \
+                    negative_result["terminal_status"] != "complete":
                 raise RunError("missing-import control acquisition failed")
+            negative_receipt = arm_receipt(manifest, "native", negative_result, negative,
+                                           exporter_identity, exported_snapshot, token_digest,
+                                           imported=False)
+            validate_no_import_control(manifest, receipts, negative_receipt)
+            write_json_exclusive(args.run_root / "missing-import.receipt.json", negative_receipt)
             comparison = compare_spools(args.run_root / "native.spool", negative,
                                         args.run_root, ordered=manifest["ordered"],
                                         max_field_bytes=1024 * 1024)
@@ -438,6 +445,8 @@ def main(argv: list[str] | None = None) -> int:
                            "reason": "missing_import_control_ineffective"}
         report = {"schema_version": 1, "document_type": "pq31_differential_result",
                   **verdict, "missing_import_control": control}
+        if args.site_binding:
+            report["site_binding"] = args.site_binding
         write_json_exclusive(args.run_root / "result.json", report)
         return 0 if report["result"] in {"PASS", "ERROR_PARITY"} else 1
     except (DifferentialError, OracleError, SnapshotError, WitnessError) as exc:

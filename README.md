@@ -140,6 +140,9 @@ receive no diagnostic payload. See
 for lifecycle, pooling, privacy, and correlation rules.
 Prepared-plan and cache semantics are specified in
 [`docs/phase7/PQ7-12-plan-lifecycle.md`](docs/phase7/PQ7-12-plan-lifecycle.md).
+An approved, exact-build/site [`COUNT(*)` certificate](docs/phase7/PQ7-7-count-semantic-certificate.md)
+can qualify the semantic gate in shadow mode. It does not enable routing or
+open the recommendation barrier.
 The pinned PG16–19 production matrix, non-interference oracle, artifact
 boundary, and engineering overhead gate are documented in
 [`docs/production-compatibility-ci.md`](docs/production-compatibility-ci.md).

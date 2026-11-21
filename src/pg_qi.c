@@ -18,6 +18,7 @@
 #include "pg_qi/qi_classify.h"
 #include "pg_qi/qi_benefit.h"
 #include "pg_qi/qi_context.h"
+#include "pg_qi/qi_count_certificate.h"
 #include "pg_qi/qi_decision.h"
 #include "pg_qi/qi_decision_v2.h"
 #include "pg_qi/qi_delegation.h"
@@ -535,6 +536,7 @@ _PG_init(void)
     qi_shadow_init_gucs();
     qi_shadow_p0_init_gucs();
     qi_profile_init_gucs();
+    qi_count_certificate_init();
     qi_snapshot_init_guc();
 
 #if PG_QI_TESTING

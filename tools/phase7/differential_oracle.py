@@ -269,6 +269,28 @@ def validate_cross_bindings(manifest: dict[str, Any],
             raise DifferentialError("witness subject or backend binding mismatch")
 
 
+def validate_no_import_control(manifest: dict[str, Any],
+                               subjects: dict[str, dict[str, Any]],
+                               raw_control: dict[str, Any]) -> None:
+    """Bind the native negative control to this run but a different snapshot."""
+    bound = {arm: validate_receipt(copy.deepcopy(subjects[arm]), arm) for arm in ARMS}
+    control = validate_receipt(copy.deepcopy(raw_control), "native")
+    validate_cross_bindings(manifest, {**bound, "no_import_control": control})
+    snapshot = control["snapshot"]
+    expected = bound["native"]["snapshot"]
+    if (snapshot["imported"] or snapshot["import_command_complete"] or
+            not expected["imported"] or not expected["import_command_complete"] or
+            snapshot["token_sha256"] != expected["token_sha256"] or
+            snapshot["exporter_snapshot"] != expected["exporter_snapshot"] or
+            snapshot["arm_snapshot"] == expected["arm_snapshot"]):
+        raise DifferentialError("negative control did not prove a different, non-imported snapshot")
+    if (not control["acquisition"]["complete"] or not control["_v2_advanced"] or
+            not control["_witness_advanced"] or not control["_witness_sufficient"] or
+            control["_witness"].engine != "postgres" or
+            control["spool"]["terminal_status"] != "complete"):
+        raise DifferentialError("negative control native execution was not proved")
+
+
 def evaluate(manifest: dict[str, Any], raw_receipts: dict[str, dict[str, Any]],
              scratch_root: Path) -> dict[str, Any]:
     manifest = validate_manifest(manifest)

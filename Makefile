@@ -9,6 +9,7 @@ OBJS = src/pg_qi.o src/qi_classify.o src/qi_context.o src/qi_decision.o \
        src/qi_delegation.o src/qi_detector.o src/qi_eligibility.o \
        src/qi_shadow_p0.o src/qi_semantic.o src/qi_plan_features.o \
        src/qi_stats_confidence.o src/qi_profile_parser.o src/qi_profile.o \
+       src/qi_count_cert_parser.o src/qi_count_certificate.o \
        src/qi_benefit_model.o src/qi_benefit.o \
        src/qi_snapshot.o src/qi_lifecycle.o
 
@@ -33,9 +34,13 @@ PG_CONFIG ?= pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
 
+ifeq ($(with_ssl),openssl)
+SHLIB_LINK += -lcrypto
+endif
+
 .PHONY: pg_qi_build_identity_force
 pg_qi_build_identity_force:
 
 # Build identities are command-line inputs, not files. Recompile the one
 # translation unit that embeds them even when no source timestamp changed.
-src/qi_profile.o: pg_qi_build_identity_force
+src/qi_profile.o src/qi_count_certificate.o: pg_qi_build_identity_force

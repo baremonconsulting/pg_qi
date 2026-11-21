@@ -7,6 +7,7 @@
 
 #include "access/xact.h"
 #include "access/htup_details.h"
+#include "access/xlog.h"
 #include "catalog/pg_aggregate.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_class.h"
@@ -20,12 +21,16 @@
 #include "nodes/parsenodes.h"
 #include "nodes/nodeFuncs.h"
 #include "nodes/makefuncs.h"
+#include "nodes/plannodes.h"
 #include "nodes/primnodes.h"
 #include "pg_qi/qi_build_identity.h"
+#include "pg_qi/qi_count_certificate.h"
 #include "pg_qi/qi_semantic.h"
 #include "utils/acl.h"
 #include "utils/lsyscache.h"
 #include "utils/fmgroids.h"
+#include "utils/guc.h"
+#include "utils/snapmgr.h"
 #include "utils/syscache.h"
 
 #define QI_SEMANTIC_BASE_BLOCKERS \
@@ -53,8 +58,8 @@ typedef struct QiSemanticDeclaration
 } QiSemanticDeclaration;
 
 /*
- * These declarations describe a future certificate boundary.  They are not
- * certificates and cannot be activated by configuration or by a caller.
+ * These declarations alone are not certificates and cannot confer a pass.
+ * COUNT(*) can be confirmed separately at execution with approved evidence.
  */
 static const QiSemanticDeclaration qi_semantic_declarations[] = {
     {QI_SHADOW_P0_CAPABILITY_COUNT_STAR, QI_SEMANTIC_PROFILE_COUNT_STAR,
@@ -267,8 +272,8 @@ qi_semantic_acl_ok(const QiSemanticDeclaration *declaration,
 QiSemanticFacts
 qi_semantic_observe_query(const Query *query, const QiShadowP0Facts *p0_facts)
 {
-    QiSemanticFacts result = {QI_SEMANTIC_NOT_EVALUATED,
-                              QI_SEMANTIC_PROFILE_NONE, 0};
+    QiSemanticFacts result = {.status = QI_SEMANTIC_NOT_EVALUATED,
+                              .profile = QI_SEMANTIC_PROFILE_NONE};
     const QiSemanticDeclaration *declaration;
     RangeTblEntry *rte = NULL;
     RTEPermissionInfo *perminfo = NULL;
@@ -364,7 +369,98 @@ qi_semantic_observe_query(const Query *query, const QiShadowP0Facts *p0_facts)
         result.blockers |= QI_SEMANTIC_BLOCKER_SERIALIZABLE;
     if (TransactionIdIsValid(GetTopTransactionIdIfAny()))
         result.blockers |= QI_SEMANTIC_BLOCKER_OWN_XID;
+    /* The qualified provider does not accept FROM ONLY. Check the pre-plan
+     * RTE bit, not the query string or a normalized post-plan RTE. */
+    result.count_scope = result.profile == QI_SEMANTIC_PROFILE_COUNT_STAR &&
+        rte != NULL && rte->rtekind == RTE_RELATION && rte->inh;
     return result;
+}
+
+static bool
+qi_semantic_option_is(const char *name, const char *expected)
+{
+    const char *value = GetConfigOption(name, true, false);
+
+    return value != NULL && strcmp(value, expected) == 0;
+}
+
+static bool
+qi_semantic_exact_count_plan(const PlannedStmt *stmt, Oid expected_relation)
+{
+    const Agg *aggregate;
+    const Plan *plan;
+    const SeqScan *scan;
+    const RangeTblEntry *relation;
+    const TargetEntry *target;
+    const Aggref *result;
+    Index rti;
+
+    if (!OidIsValid(expected_relation) || stmt == NULL || stmt->commandType != CMD_SELECT ||
+        stmt->hasModifyingCTE || stmt->parallelModeNeeded || stmt->subplans != NIL ||
+        stmt->planTree == NULL || !IsA(stmt->planTree, Agg))
+        return false;
+    plan = stmt->planTree;
+    aggregate = (const Agg *) plan;
+    if (aggregate->aggstrategy != AGG_PLAIN || aggregate->aggsplit != AGGSPLIT_SIMPLE ||
+        aggregate->numCols != 0 || aggregate->groupingSets != NIL || aggregate->chain != NIL ||
+        plan->qual != NIL || plan->initPlan != NIL || plan->parallel_aware ||
+        plan->righttree != NULL || plan->lefttree == NULL || !IsA(plan->lefttree, SeqScan) ||
+        list_length(plan->targetlist) != 1 || !IsA(linitial(plan->targetlist), TargetEntry))
+        return false;
+    target = linitial_node(TargetEntry, plan->targetlist);
+    if (target->resjunk || target->expr == NULL || !IsA(target->expr, Aggref))
+        return false;
+    result = (const Aggref *) target->expr;
+    if (result->aggfnoid != 2803 || !result->aggstar || result->aggtype != INT8OID ||
+        result->aggkind != AGGKIND_NORMAL || result->aggvariadic ||
+        OidIsValid(result->aggcollid) || OidIsValid(result->inputcollid))
+        return false;
+    if (result->args != NIL || result->aggargtypes != NIL || result->aggorder != NIL ||
+        result->aggdistinct != NIL || result->aggfilter != NULL || result->aggdirectargs != NIL ||
+        result->agglevelsup != 0 || result->aggsplit != AGGSPLIT_SIMPLE)
+        return false;
+
+    plan = plan->lefttree;
+    scan = (const SeqScan *) plan;
+    rti = scan->scan.scanrelid;
+    if (plan->qual != NIL || plan->initPlan != NIL || plan->parallel_aware ||
+        plan->lefttree != NULL || plan->righttree != NULL ||
+        rti == 0 || rti > (Index) list_length(stmt->rtable) ||
+        !IsA(list_nth(stmt->rtable, rti - 1), RangeTblEntry))
+        return false;
+    relation = list_nth_node(RangeTblEntry, stmt->rtable, rti - 1);
+    return relation->rtekind == RTE_RELATION && relation->relid == expected_relation &&
+        relation->securityQuals == NIL;
+}
+
+bool
+qi_semantic_confirm_count_execution(QiSemanticFacts *facts,
+                                    const QueryDesc *query_desc,
+                                    Oid expected_relation)
+{
+    if (facts == NULL || facts->status != QI_SEMANTIC_UNKNOWN ||
+        facts->profile != QI_SEMANTIC_PROFILE_COUNT_STAR ||
+        !facts->count_scope || facts->blockers != QI_SEMANTIC_BASE_BLOCKERS ||
+        !qi_count_certificate_current() ||
+        query_desc == NULL || query_desc->operation != CMD_SELECT || query_desc->estate == NULL ||
+        query_desc->snapshot == InvalidSnapshot ||
+        !IsMVCCSnapshot(query_desc->snapshot) || !ActiveSnapshotSet() ||
+        query_desc->snapshot != GetActiveSnapshot() ||
+        query_desc->snapshot != query_desc->estate->es_snapshot ||
+        XactIsoLevel != XACT_REPEATABLE_READ || !XactReadOnly ||
+        IsSubTransaction() || RecoveryInProgress() ||
+        TransactionIdIsValid(GetTopTransactionIdIfAny()) ||
+        GetUserId() != GetSessionUserId() ||
+        !qi_semantic_option_is("pg_qi.enabled", "on") ||
+        !qi_semantic_option_is("pg_qi.routing_mode", "shadow_p0") ||
+        !qi_semantic_option_is("max_parallel_workers_per_gather", "0") ||
+        !qi_semantic_option_is("duckdb.max_workers_per_postgres_scan", "0") ||
+        !qi_semantic_exact_count_plan(query_desc->plannedstmt, expected_relation))
+        return false;
+
+    facts->status = QI_SEMANTIC_CERTIFIED;
+    facts->blockers = 0;
+    return true;
 }
 
 QiGateState
@@ -373,20 +469,63 @@ qi_semantic_gate_state(const QiSemanticFacts *facts)
     if (facts != NULL && facts->status == QI_SEMANTIC_NOT_EVALUATED &&
         facts->profile == QI_SEMANTIC_PROFILE_NONE)
         return QI_GATE_NOT_EVALUATED;
+    if (facts != NULL && facts->status == QI_SEMANTIC_CERTIFIED &&
+        facts->profile == QI_SEMANTIC_PROFILE_COUNT_STAR && facts->count_scope &&
+        facts->blockers == 0)
+        return QI_GATE_PASS;
     return QI_GATE_UNKNOWN;
 }
 
 #if PG_QI_TESTING
+static bool
+qi_test_count_plan_shape(void)
+{
+    PlannedStmt *stmt = makeNode(PlannedStmt);
+    Agg *aggregate = makeNode(Agg);
+    SeqScan *scan = makeNode(SeqScan);
+    RangeTblEntry *rte = makeNode(RangeTblEntry);
+    Aggref *result = makeNode(Aggref);
+    const Oid relation = 12345;
+    bool ok;
+
+    stmt->commandType = CMD_SELECT;
+    stmt->planTree = &aggregate->plan;
+    stmt->rtable = list_make1(rte);
+    rte->rtekind = RTE_RELATION;
+    rte->relid = relation;
+    aggregate->aggstrategy = AGG_PLAIN;
+    aggregate->aggsplit = AGGSPLIT_SIMPLE;
+    aggregate->plan.lefttree = &scan->scan.plan;
+    result->aggfnoid = 2803;
+    result->aggstar = true;
+    result->aggkind = AGGKIND_NORMAL;
+    result->aggtype = INT8OID;
+    result->aggsplit = AGGSPLIT_SIMPLE;
+    aggregate->plan.targetlist = list_make1(makeTargetEntry((Expr *) result, 1, NULL, false));
+    scan->scan.scanrelid = 1;
+
+    ok = qi_semantic_exact_count_plan(stmt, relation) &&
+        !qi_semantic_exact_count_plan(stmt, relation + 1);
+    scan->scan.plan.qual = list_make1(makeBoolConst(true, false));
+    ok = ok && !qi_semantic_exact_count_plan(stmt, relation);
+    scan->scan.plan.qual = NIL;
+    result->aggfnoid = 2147;
+    ok = ok && !qi_semantic_exact_count_plan(stmt, relation);
+    result->aggfnoid = 2803;
+    result->aggfilter = (Expr *) makeBoolConst(true, false);
+    return ok && !qi_semantic_exact_count_plan(stmt, relation);
+}
+
 Datum
 qi_test_semantic_contract(PG_FUNCTION_ARGS)
 {
-    QiSemanticFacts none = {QI_SEMANTIC_NOT_EVALUATED,
-                            QI_SEMANTIC_PROFILE_NONE, 0};
-    QiSemanticFacts matched = {QI_SEMANTIC_UNKNOWN,
-                               QI_SEMANTIC_PROFILE_COUNT_STAR,
-                               QI_SEMANTIC_BASE_BLOCKERS};
-    QiSemanticFacts corrupt = {(QiSemanticStatus) 99,
-                               QI_SEMANTIC_PROFILE_COUNT_STAR, 0};
+    QiSemanticFacts none = {.status = QI_SEMANTIC_NOT_EVALUATED,
+                            .profile = QI_SEMANTIC_PROFILE_NONE};
+    QiSemanticFacts matched = {.status = QI_SEMANTIC_UNKNOWN,
+                               .profile = QI_SEMANTIC_PROFILE_COUNT_STAR,
+                               .blockers = QI_SEMANTIC_BASE_BLOCKERS};
+    QiSemanticFacts corrupt = {.status = (QiSemanticStatus) 99,
+                               .profile = QI_SEMANTIC_PROFILE_COUNT_STAR};
     Size i;
     bool declarations_exact = lengthof(qi_semantic_declarations) == 4;
     uint32 blocker;
@@ -458,7 +597,7 @@ qi_test_semantic_contract(PG_FUNCTION_ARGS)
             qi_semantic_gate_state(&blocked) == QI_GATE_UNKNOWN;
     }
 
-    PG_RETURN_BOOL(declarations_exact &&
+    PG_RETURN_BOOL(declarations_exact && qi_test_count_plan_shape() &&
                    qi_semantic_gate_state(&none) == QI_GATE_NOT_EVALUATED &&
                    qi_semantic_gate_state(&matched) == QI_GATE_UNKNOWN &&
                    qi_semantic_gate_state(&corrupt) == QI_GATE_UNKNOWN &&
