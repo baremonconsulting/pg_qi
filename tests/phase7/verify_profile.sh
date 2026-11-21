@@ -86,6 +86,10 @@ SELECT pg_sleep(0.05);
 SELECT count(*) FROM profile_fixture;
 \o :work/a.out
 SHOW pg_qi.profile_evidence;
+\o :work/a_benefit.out
+SHOW pg_qi.benefit_evidence;
+\o :work/a_decision.out
+SHOW pg_qi.decision_v2;
 \o /dev/null
 
 ALTER SYSTEM SET pg_qi.model_profile TO :'b';
@@ -154,6 +158,8 @@ SHOW pg_qi.profile_evidence;
 SET ROLE profile_plain;
 \o :work/denied.out
 SHOW pg_qi.profile_evidence;
+\o :work/benefit_denied.out
+SHOW pg_qi.benefit_evidence;
 \o /dev/null
 RESET ROLE;
 
@@ -162,6 +168,8 @@ SELECT count(*) FROM profile_fixture;
 SELECT set_config('role', 'profile_diagnostic', false);
 \o :work/withheld.out
 SHOW pg_qi.profile_evidence;
+\o :work/benefit_withheld.out
+SHOW pg_qi.benefit_evidence;
 \o /dev/null
 RESET ROLE;
 
@@ -187,9 +195,17 @@ def record(name):
 
 missing = record("missing.out")
 a = record("a.out")
+a_benefit = record("a_benefit.out")
+a_decision = record("a_decision.out")
 b = record("b.out")
 assert missing["reason"] == "missing" and missing["present"] == "false"
 assert a["reason"] == "present" and a["present"] == "true"
+assert a_benefit["state"] == "unknown"
+assert a_benefit["reason"] == "stats_unconfident"
+assert int(a_benefit["postgres_ns_low"]) > 0
+assert int(a_benefit["duckdb_ns_high"]) > 0
+assert (a_benefit["cid"], a_benefit["g"], a_benefit["e"]) == \
+       (a_decision["cid"], a_decision["g"], a_decision["e"])
 assert b["reason"] == "present" and b["present"] == "true"
 assert (a["generation"], b["generation"]) == ("11", "12")
 assert a["fingerprint"] != b["fingerprint"]
@@ -204,6 +220,8 @@ assert record("invalid.out")["reason"] == "malformed"
 assert record("oversize.out")["reason"] == "oversize"
 assert record("denied.out") == {"v": "1", "s": "denied"}
 assert record("withheld.out") == {"v": "1", "s": "withheld"}
+assert record("benefit_denied.out") == {"v": "1", "s": "denied"}
+assert record("benefit_withheld.out") == {"v": "1", "s": "withheld"}
 assert int(a["install_sequence"]) < int(b["install_sequence"])
 PY
 

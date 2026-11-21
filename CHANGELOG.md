@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- A decision-only conservative benefit model with checked integer bounds,
+  profile format v2 and private benefit evidence.
 - A private, bounded, backend-local V2 decision snapshot with atomic
   publication, role-safe `SHOW` read-back, strict readers, and lifecycle tests.
 - Private `SHOW pg_qi.stats_confidence` evidence with fail-closed freshness

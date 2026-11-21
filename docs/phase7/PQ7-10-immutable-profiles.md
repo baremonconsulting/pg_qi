@@ -32,13 +32,17 @@ the bounded fail-closed backstop for that server-level behavior.
 
 ## Format and bounds
 
-Format v1 is fixed-order ASCII `key=value` fields separated by semicolons and
+PQ7-10 introduced format v1 as fixed-order ASCII `key=value` fields separated by semicolons and
 ending in a lowercase CRC32C. Unknown, missing, duplicate or reordered fields,
 noncanonical integers, overflow, embedded NUL, uppercase hexadecimal,
 trailing bytes, invalid intervals and values over 2,048 bytes are rejected.
 All quantities are unsigned integers with explicit units in their key names or
 format definition. Floating point, locale-dependent parsing and unbounded
 allocation are absent.
+
+PQ7-11 supersedes the accepted payload with format v2 to add calibrated
+benefit-model terms; format v1 remains historical and is rejected rather than
+interpreted under changed units.
 
 The bundle binds one generation and validity interval to:
 

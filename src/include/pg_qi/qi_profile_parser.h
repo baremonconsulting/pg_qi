@@ -9,7 +9,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define QI_PROFILE_FORMAT_VERSION 1U
+#define QI_PROFILE_FORMAT_VERSION 2U
 #define QI_PROFILE_MAX_BYTES 2048U
 #define QI_PROFILE_SHA1_HEX_BYTES 40U
 #define QI_PROFILE_SHA256_HEX_BYTES 64U
@@ -48,8 +48,11 @@ typedef struct QiProfileData
     uint32_t threads;
     uint32_t concurrency;
     uint64_t fixed_overhead_us;
+    uint64_t postgres_ns_per_cost;
     uint64_t scan_ns_per_kb;
     uint64_t conversion_ns_per_row;
+    uint64_t output_ns_per_byte;
+    uint64_t p95_dispersion_us;
     uint32_t margin_ppm;
     uint32_t checksum;
 } QiProfileData;

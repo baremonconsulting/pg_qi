@@ -44,9 +44,29 @@ typedef struct QiProfileEvidence
     uint32 fingerprint;
 } QiProfileEvidence;
 
+typedef struct QiProfileModel
+{
+    bool valid;
+    uint64 install_sequence;
+    uint32 fingerprint;
+    uint64 memory_bytes;
+    uint64 temp_bytes;
+    uint32 threads;
+    uint32 concurrency;
+    uint64 fixed_overhead_us;
+    uint64 postgres_ns_per_cost;
+    uint64 scan_ns_per_kb;
+    uint64 conversion_ns_per_row;
+    uint64 output_ns_per_byte;
+    uint64 p95_dispersion_us;
+    uint32 margin_ppm;
+} QiProfileModel;
+
 extern void qi_profile_init_gucs(void);
 extern QiProfileEvidence qi_profile_not_observed(void);
 extern QiProfileEvidence qi_profile_observe(TimestampTz now);
+extern QiProfileEvidence qi_profile_observe_model(TimestampTz now,
+                                                  QiProfileModel *model);
 extern const char *qi_profile_reason_name(QiProfileReason reason);
 
 #if PG_QI_TESTING

@@ -9,6 +9,7 @@
 #include "postgres.h"
 
 #include "nodes/nodes.h"
+#include "pg_qi/qi_benefit.h"
 #include "pg_qi/qi_decision_v2.h"
 #include "pg_qi/qi_plan_features.h"
 #include "pg_qi/qi_profile.h"
@@ -49,6 +50,7 @@ typedef struct QiV2SnapshotCandidate
     QiNativePlanFeatures plan_features;
     QiStatsConfidence stats_confidence;
     QiProfileEvidence profile_evidence;
+    QiBenefitResult benefit;
     bool valid;
 } QiV2SnapshotCandidate;
 
@@ -69,7 +71,8 @@ extern bool qi_snapshot_prepare(QiV2SnapshotCandidate *candidate,
                                 QiShadowP0FactsReason p0_reason,
                                 QiNativePlanFeatures plan_features,
                                 QiStatsConfidence stats_confidence,
-                                QiProfileEvidence profile_evidence);
+                                QiProfileEvidence profile_evidence,
+                                QiBenefitResult benefit);
 extern bool qi_snapshot_commit(const QiV2SnapshotCandidate *candidate);
 extern void qi_snapshot_handle_utility(Node *utility_stmt);
 

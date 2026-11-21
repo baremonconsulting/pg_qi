@@ -208,9 +208,15 @@ qi_profile_parse(const char *text, size_t length, QiProfileData *output)
         QI_PROFILE_MAX_CONCURRENCY);
     DECIMAL(";fixed_us=", candidate.fixed_overhead_us,
             QI_PROFILE_MAX_COEFFICIENT);
+    DECIMAL(";pg_ns_cost=", candidate.postgres_ns_per_cost,
+            QI_PROFILE_MAX_COEFFICIENT);
     DECIMAL(";scan_ns_kb=", candidate.scan_ns_per_kb,
             QI_PROFILE_MAX_COEFFICIENT);
     DECIMAL(";conv_ns_row=", candidate.conversion_ns_per_row,
+            QI_PROFILE_MAX_COEFFICIENT);
+    DECIMAL(";output_ns_byte=", candidate.output_ns_per_byte,
+            QI_PROFILE_MAX_COEFFICIENT);
+    DECIMAL(";p95_us=", candidate.p95_dispersion_us,
             QI_PROFILE_MAX_COEFFICIENT);
     U32(";margin_ppm=", candidate.margin_ppm,
         QI_PROFILE_MAX_MARGIN_PPM);
@@ -226,7 +232,7 @@ qi_profile_parse(const char *text, size_t length, QiProfileData *output)
 
     if (candidate.generation == 0 || candidate.memory_bytes == 0 ||
         candidate.threads == 0 || candidate.concurrency == 0 ||
-        candidate.margin_ppm == 0)
+        candidate.postgres_ns_per_cost == 0 || candidate.margin_ppm == 0)
         return QI_PROFILE_PARSE_INVALID_LIMIT;
     if (candidate.expires_at_unix <= candidate.issued_at_unix ||
         candidate.expires_at_unix - candidate.issued_at_unix >

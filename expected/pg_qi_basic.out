@@ -162,6 +162,8 @@ SELECT qi.test_stats_confidence_contract();
 t
 SELECT qi.test_profile_contract();
 t
+SELECT qi.test_benefit_contract();
+t
 INSERT INTO spike_small
 SELECT i, i * 10 FROM generate_series(1, 100) AS g(i);
 SET duckdb.force_execution = on;

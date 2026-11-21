@@ -47,7 +47,7 @@ def profile(args: argparse.Namespace) -> str:
             args.expires_at - args.issued_at > MAX_VALIDITY_SECONDS:
         raise SystemExit("validity interval must be positive and at most 90 days")
     fields = [
-        ("v", 1),
+        ("v", 2),
         ("gen", args.generation),
         ("pg", args.postgres_version_num),
         ("pgbuild", args.postgres_build),
@@ -66,8 +66,11 @@ def profile(args: argparse.Namespace) -> str:
         ("threads", args.threads),
         ("concurrency", args.concurrency),
         ("fixed_us", args.fixed_overhead_us),
+        ("pg_ns_cost", args.postgres_ns_per_cost),
         ("scan_ns_kb", args.scan_ns_per_kb),
         ("conv_ns_row", args.conversion_ns_per_row),
+        ("output_ns_byte", args.output_ns_per_byte),
+        ("p95_us", args.p95_dispersion_us),
         ("margin_ppm", args.margin_ppm),
     ]
     body = ";".join(f"{key}={value}" for key, value in fields)
@@ -90,8 +93,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--threads", type=bounded("threads", 1, 1024), default=4)
     parser.add_argument("--concurrency", type=bounded("concurrency", 1, 65535), default=2)
     parser.add_argument("--fixed-overhead-us", type=bounded("fixed overhead", 0, 10**12), default=1000)
+    parser.add_argument("--postgres-ns-per-cost", type=bounded("PostgreSQL ns per cost", 1, 10**12), default=1000)
     parser.add_argument("--scan-ns-per-kb", type=bounded("scan cost", 0, 10**12), default=100)
     parser.add_argument("--conversion-ns-per-row", type=bounded("conversion cost", 0, 10**12), default=10)
+    parser.add_argument("--output-ns-per-byte", type=bounded("output cost", 0, 10**12), default=1)
+    parser.add_argument("--p95-dispersion-us", type=bounded("p95 dispersion", 0, 10**12), default=1000)
     parser.add_argument("--margin-ppm", type=bounded("margin", 1, 1000000), default=100000)
     parser.add_argument("--output")
     return parser.parse_args()

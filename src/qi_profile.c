@@ -170,14 +170,43 @@ qi_profile_classify(const QiInstalledProfile *installed, TimestampTz now,
 }
 
 QiProfileEvidence
-qi_profile_observe(TimestampTz now)
+qi_profile_observe_model(TimestampTz now, QiProfileModel *model)
 {
     QiInstalledProfile installed = qi_installed_profile;
+    QiProfileEvidence evidence;
 
-    return qi_profile_classify(&installed, now, qi_site_build_id,
-                               PG_QI_BUILD_ID, PG_QI_POSTGRES_BUILD_ID,
-                               QI_EXPECTED_PG_DUCKDB_SHA,
-                               QI_EXPECTED_DUCKDB_SHA, PG_VERSION_NUM);
+    if (model != NULL)
+        MemSet(model, 0, sizeof(*model));
+    evidence = qi_profile_classify(&installed, now, qi_site_build_id,
+                                   PG_QI_BUILD_ID,
+                                   PG_QI_POSTGRES_BUILD_ID,
+                                   QI_EXPECTED_PG_DUCKDB_SHA,
+                                   QI_EXPECTED_DUCKDB_SHA, PG_VERSION_NUM);
+    if (model != NULL && evidence.profile_present)
+    {
+        model->valid = true;
+        model->install_sequence = evidence.install_sequence;
+        model->fingerprint = evidence.fingerprint;
+        model->memory_bytes = installed.data.memory_bytes;
+        model->temp_bytes = installed.data.temp_bytes;
+        model->threads = installed.data.threads;
+        model->concurrency = installed.data.concurrency;
+        model->fixed_overhead_us = installed.data.fixed_overhead_us;
+        model->postgres_ns_per_cost = installed.data.postgres_ns_per_cost;
+        model->scan_ns_per_kb = installed.data.scan_ns_per_kb;
+        model->conversion_ns_per_row =
+            installed.data.conversion_ns_per_row;
+        model->output_ns_per_byte = installed.data.output_ns_per_byte;
+        model->p95_dispersion_us = installed.data.p95_dispersion_us;
+        model->margin_ppm = installed.data.margin_ppm;
+    }
+    return evidence;
+}
+
+QiProfileEvidence
+qi_profile_observe(TimestampTz now)
+{
+    return qi_profile_observe_model(now, NULL);
 }
 
 const char *

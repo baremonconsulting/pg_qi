@@ -16,6 +16,7 @@
 #include "miscadmin.h"
 #include "pg_qi/planner_compat.h"
 #include "pg_qi/qi_classify.h"
+#include "pg_qi/qi_benefit.h"
 #include "pg_qi/qi_context.h"
 #include "pg_qi/qi_decision.h"
 #include "pg_qi/qi_decision_v2.h"
@@ -117,6 +118,7 @@ PG_FUNCTION_INFO_V1(qi_test_plan_features_contract);
 PG_FUNCTION_INFO_V1(qi_test_stats_confidence_contract);
 PG_FUNCTION_INFO_V1(qi_test_profile_contract);
 PG_FUNCTION_INFO_V1(qi_test_profile_parse);
+PG_FUNCTION_INFO_V1(qi_test_benefit_contract);
 PG_FUNCTION_INFO_V1(qi_test_shadow_p0_observer_contract);
 PG_FUNCTION_INFO_V1(qi_test_semantic_contract);
 PG_FUNCTION_INFO_V1(qi_test_semantic_probe);
@@ -302,6 +304,11 @@ done:
     QiStatsConfidence stats_confidence =
         qi_stats_confidence_unknown(QI_STATS_NOT_OBSERVED);
     QiProfileEvidence profile_evidence = qi_profile_not_observed();
+    QiProfileModel profile_model = {0};
+    QiBenefitResult benefit = {
+        .state = QI_BENEFIT_NOT_EVALUATED,
+        .reason = QI_BENEFIT_NOT_OBSERVED
+    };
     volatile bool frame_active = false;
 
     pg_qi_shadow_planner_depth++;
@@ -422,7 +429,10 @@ done:
             plan_features = qi_plan_features_observe(
                 (PlannedStmt *) planned_stmt, &shadow_p0_facts);
             stats_confidence = qi_stats_confidence_observe(&plan_features);
-            profile_evidence = qi_profile_observe(GetCurrentTimestamp());
+            profile_evidence = qi_profile_observe_model(
+                GetCurrentTimestamp(), &profile_model);
+            benefit = qi_benefit_observe(&plan_features, &stats_confidence,
+                                         &profile_evidence, &profile_model);
         }
 
         if (request_applied)
@@ -441,7 +451,7 @@ done:
                     QI_SHADOW_P0_FACTS_UNKNOWN,
                 shadow_p0_facts_observed ? shadow_p0_facts.reason :
                     QI_SHADOW_P0_FACTS_NO_QUERY,
-                plan_features, stats_confidence, profile_evidence);
+                plan_features, stats_confidence, profile_evidence, benefit);
 
         if (frame_active)
         {

@@ -43,3 +43,5 @@ CREATE FUNCTION test_profile_contract() RETURNS boolean
 AS 'MODULE_PATHNAME', 'qi_test_profile_contract' LANGUAGE C VOLATILE STRICT PARALLEL UNSAFE;
 CREATE FUNCTION test_profile_parse(text) RETURNS text
 AS 'MODULE_PATHNAME', 'qi_test_profile_parse' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION test_benefit_contract() RETURNS boolean
+AS 'MODULE_PATHNAME', 'qi_test_benefit_contract' LANGUAGE C VOLATILE STRICT PARALLEL UNSAFE;

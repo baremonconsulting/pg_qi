@@ -20,6 +20,7 @@
 #define QI_PLAN_FEATURE_RENDER_BYTES 1024
 #define QI_STATS_CONFIDENCE_RENDER_BYTES 768
 #define QI_PROFILE_EVIDENCE_RENDER_BYTES 512
+#define QI_BENEFIT_EVIDENCE_RENDER_BYTES 512
 
 typedef struct QiV2SnapshotEvent
 {
@@ -51,6 +52,9 @@ static char qi_stats_confidence_render_buffer[
 static char *qi_profile_evidence_placeholder = NULL;
 static char qi_profile_evidence_render_buffer[
     QI_PROFILE_EVIDENCE_RENDER_BYTES];
+static char *qi_benefit_evidence_placeholder = NULL;
+static char qi_benefit_evidence_render_buffer[
+    QI_BENEFIT_EVIDENCE_RENDER_BYTES];
 
 static void
 qi_snapshot_initialize(void)
@@ -552,6 +556,56 @@ qi_profile_evidence_show(void)
     return qi_profile_evidence_render_buffer;
 }
 
+static const char *
+qi_benefit_evidence_show(void)
+{
+    QiV2SnapshotEvent *event;
+    QiV2SnapshotCandidate *candidate;
+    QiBenefitResult *benefit;
+    char incarnation[QI_SNAPSHOT_INCARNATION_BYTES * 2 + 1] = "";
+    const char *state;
+    int written;
+
+    qi_snapshot_initialize();
+    if (!qi_snapshot_authorized())
+        return "v=1;s=denied";
+    if (qi_snapshot_store.exhausted)
+        return "v=1;s=exhausted";
+    if (!qi_snapshot_store.available)
+        return "v=1;s=unavailable";
+    qi_snapshot_incarnation_hex(incarnation, sizeof(incarnation));
+    if (!qi_snapshot_store.has_event)
+    {
+        snprintf(qi_benefit_evidence_render_buffer,
+                 sizeof(qi_benefit_evidence_render_buffer),
+                 "v=1;s=none;cid=%s;g=" UINT64_FORMAT ";e=0",
+                 incarnation, qi_snapshot_store.generation);
+        return qi_benefit_evidence_render_buffer;
+    }
+    event = &qi_snapshot_store.slots[qi_snapshot_store.active_slot];
+    candidate = &event->candidate;
+    if (candidate->token.effective_user != GetUserId() ||
+        candidate->token.session_user != GetSessionUserId())
+        return "v=1;s=withheld";
+    benefit = &candidate->benefit;
+    state = benefit->state == QI_BENEFIT_PASS ? "pass" :
+        benefit->state == QI_BENEFIT_VETO ? "veto" :
+        benefit->state == QI_BENEFIT_UNKNOWN ? "unknown" : "not_evaluated";
+    written = snprintf(qi_benefit_evidence_render_buffer,
+        sizeof(qi_benefit_evidence_render_buffer),
+        "v=1;s=complete;cid=%s;g=" UINT64_FORMAT ";e=" UINT64_FORMAT
+        ";state=%s;reason=%s;postgres_ns_low=" UINT64_FORMAT
+        ";duckdb_ns_high=" UINT64_FORMAT ";margin_ns=" UINT64_FORMAT,
+        incarnation, candidate->token.generation, event->event_sequence,
+        state, qi_benefit_reason_name(benefit->reason),
+        benefit->postgres_ns_low, benefit->duckdb_ns_high,
+        benefit->absolute_margin_ns);
+    if (written < 0 ||
+        (Size) written >= sizeof(qi_benefit_evidence_render_buffer))
+        return "v=1;s=invalid";
+    return qi_benefit_evidence_render_buffer;
+}
+
 void
 qi_snapshot_init_guc(void)
 {
@@ -579,6 +633,12 @@ qi_snapshot_init_guc(void)
                                PGC_INTERNAL,
                                GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE,
                                NULL, NULL, qi_profile_evidence_show);
+    DefineCustomStringVariable("pg_qi.benefit_evidence",
+                               "Reports private conservative benefit evidence.",
+                               NULL, &qi_benefit_evidence_placeholder, "",
+                               PGC_INTERNAL,
+                               GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE,
+                               NULL, NULL, qi_benefit_evidence_show);
 }
 
 QiV2SnapshotToken
@@ -610,7 +670,8 @@ qi_snapshot_prepare(QiV2SnapshotCandidate *candidate,
                     QiShadowP0FactsReason p0_reason,
                     QiNativePlanFeatures plan_features,
                     QiStatsConfidence stats_confidence,
-                    QiProfileEvidence profile_evidence)
+                    QiProfileEvidence profile_evidence,
+                    QiBenefitResult benefit)
 {
     QiV2Decision decision;
 
@@ -622,7 +683,7 @@ qi_snapshot_prepare(QiV2SnapshotCandidate *candidate,
 
     decision = qi_v2_evaluate(QI_GATE_NOT_EVALUATED,
                               qi_semantic_gate_state(&semantic),
-                              QI_GATE_NOT_EVALUATED,
+                              qi_benefit_gate_state(&benefit),
                               QI_V2_ACTIVATION_CLOSED,
                               QI_DECISION_V2_RULE_VERSION,
                               QI_DECISION_V2_MODEL_VERSION,
@@ -647,6 +708,7 @@ qi_snapshot_prepare(QiV2SnapshotCandidate *candidate,
     candidate->plan_features = plan_features;
     candidate->stats_confidence = stats_confidence;
     candidate->profile_evidence = profile_evidence;
+    candidate->benefit = benefit;
     candidate->valid = true;
     return true;
 }
@@ -731,7 +793,9 @@ qi_test_v2_snapshot_contract(PG_FUNCTION_ARGS)
         QI_SHADOW_P0_FACTS_BOUNDED, QI_SHADOW_P0_FACTS_OK,
         qi_plan_features_unknown(QI_PLAN_FEATURE_NOT_OBSERVED),
         qi_stats_confidence_unknown(QI_STATS_NOT_OBSERVED),
-        qi_profile_not_observed()) &&
+        qi_profile_not_observed(),
+        (QiBenefitResult) {QI_BENEFIT_NOT_EVALUATED,
+                           QI_BENEFIT_NOT_OBSERVED, 0, 0, 0}) &&
         qi_snapshot_commit(&candidate);
     sequence_one = qi_snapshot_store.has_event &&
         qi_snapshot_store.event_sequence == 1;
