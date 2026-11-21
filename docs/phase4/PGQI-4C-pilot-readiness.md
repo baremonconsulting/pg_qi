@@ -15,7 +15,7 @@ unexamined final build.
 | ID | Evidence | Hard acceptance condition |
 |---|---|---|
 | C1 | Per-run provenance | Exact source revision and dirty state, server build, installed pg_qi and pg_duckdb hashes, build mode, corpus hash and unique run ID are recorded. A new server starts after production installation. |
-| C2 | Production smoke and benchmark | A supported literal query returns the expected rows and publishes `delegation_verified`, `request_applied=on`, `duckdb`, `verified`. Off and disabled controls never publish an owned request. Raw samples are retained; timing has no shared-runner pass threshold. |
+| C2 | Production smoke and benchmark | A supported literal query returns the expected rows and publishes `delegation_verified`, `request_applied=on`, `duckdb`, `verified`. Off, disabled, and `shadow_p0` controls never publish an owned request. Raw samples are retained; the production matrix applies only a broad p50/p95 anti-catastrophe threshold to `shadow_p0`, not a product-performance gate. |
 | C3 | Security and lifecycle tests | Ordinary-role controls, conservative unsupported cases, owned-force restoration, nesting and error propagation pass using the production extension and the separate outer-hook fixture. |
 | C4 | Same-session diagnostics | Each post-query snapshot is collected with individual `SHOW` commands on the subject connection. Diagnostics are outside measured intervals. Errors and cached reuse are documented as retaining the last completed snapshot. |
 | C5 | Rollback drill | Only a newly created marker-owned cluster is touched. The drill proves future-planning disablement and a default-off reconnect. Cached plans, external force and binary rollback are not misrepresented. |
@@ -33,8 +33,9 @@ unexamined final build.
 - A disk hash alone is not proof of a module mapped by an already-running
   server. The harness starts a fresh server after verifying the installed
   path and records this provenance boundary.
-- Result correctness is a hard gate. Latencies are request measurements and
-  are informational on shared infrastructure.
+- Result correctness is a hard gate. The PQ-42 production matrix also applies
+  deliberately broad p50/p95 anti-catastrophe bounds; absolute latency and p99
+  remain evidence rather than product performance claims.
 - Failed and partial runs remain evidence. Missing files or a missing `PASS`
   terminal state cannot be interpreted as success.
 

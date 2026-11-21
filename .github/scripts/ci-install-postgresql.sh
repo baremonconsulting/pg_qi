@@ -1,9 +1,18 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
+script_dir=$(cd "$(dirname "$0")" && pwd)
 
 major=${1:?PostgreSQL major version is required}
-pg19_sha=${PG19_SHA:-dffcca2e3c81178c64d4c1f44543a3507d0b7508}
+source_pinned=${PG_SOURCE_PINNED:-0}
+case "$source_pinned" in 0|1) ;; *) echo "PG_SOURCE_PINNED must be 0 or 1" >&2; exit 2;; esac
+case "$major" in
+    16) source_sha=${PG16_SHA:-c0534eb02de050ac1035ad7b3ad7c3f02980f153}; expected_version='PostgreSQL 16.16' ;;
+    17) source_sha=${PG17_SHA:-702b3dc86d35bcc08c8e23cffa3c4d9fe9d32c85}; expected_version='PostgreSQL 17.12' ;;
+    18) source_sha=${PG18_SHA:-f5c41f6681c910b3f69951bf6fb97c6d74605d25}; expected_version='PostgreSQL 18.7' ;;
+    19) source_sha=${PG19_SHA:-5c839a2a08b9b87a349be97371fac6c5a2873b10}; expected_version='PostgreSQL 19.0' ;;
+    *) echo "unsupported PostgreSQL major: $major" >&2; exit 2 ;;
+esac
 pgdg_key_urls=(
     https://www.postgresql.org/media/keys/ACCC4CF8.asc
     https://apt.postgresql.org/pub/repos/apt/ACCC4CF8.asc
@@ -78,26 +87,46 @@ sudo apt-get install --yes --no-install-recommends \
     bison build-essential clang cmake flex libcurl4-openssl-dev liblz4-dev \
     libreadline-dev libssl-dev ninja-build pkg-config unzip zlib1g-dev
 
-if [ "$major" = 19 ]; then
-    source_dir="${RUNNER_TEMP:?RUNNER_TEMP is required}/postgresql-19-source"
-    build_dir="${RUNNER_TEMP}/postgresql-19-build"
+if [ "$source_pinned" = 1 ] || [ "$major" = 19 ]; then
+    source_dir="${RUNNER_TEMP:?RUNNER_TEMP is required}/postgresql-$major-source"
+    build_dir="${RUNNER_TEMP}/postgresql-$major-build"
     git clone --filter=blob:none https://github.com/postgres/postgres.git \
         "$source_dir"
-    git -C "$source_dir" checkout --detach "$pg19_sha"
-    test "$(git -C "$source_dir" rev-parse HEAD)" = "$pg19_sha"
+    git -C "$source_dir" checkout --detach "$source_sha"
+    test "$(git -C "$source_dir" rev-parse HEAD)" = "$source_sha"
     mkdir -p "$build_dir"
     (
         cd "$build_dir"
-        "$source_dir/configure" --prefix=/usr/lib/postgresql/19 \
+        "$source_dir/configure" --prefix="/usr/lib/postgresql/$major" \
             --with-openssl --with-lz4
         make -j2
         sudo make install
+        hash_tool=$script_dir/ci-sha256.sh
+        source_postgres_sha=$(bash "$hash_tool" "$build_dir/src/backend/postgres")
+        installed_postgres_sha=$(bash "$hash_tool" "/usr/lib/postgresql/$major/bin/postgres")
+        test "$source_postgres_sha" = "$installed_postgres_sha"
+        make -C "$source_dir/contrib/file_fdw" USE_PGXS=1 \
+            PG_CONFIG="/usr/lib/postgresql/$major/bin/pg_config" -j2
+        sudo make -C "$source_dir/contrib/file_fdw" USE_PGXS=1 \
+            PG_CONFIG="/usr/lib/postgresql/$major/bin/pg_config" install
     )
-    test "$(/usr/lib/postgresql/19/bin/pg_config --version)" = \
-        "PostgreSQL 19rc2"
+    test "$(/usr/lib/postgresql/$major/bin/pg_config --version)" = \
+        "$expected_version"
+    test "$(/usr/lib/postgresql/$major/bin/postgres --version)" = \
+        "postgres (PostgreSQL) ${expected_version#PostgreSQL }"
 else
     sudo apt-get install --yes --no-install-recommends \
         "postgresql-$major" "postgresql-server-dev-$major"
+fi
+
+installed_version=$(/usr/lib/postgresql/$major/bin/pg_config --version)
+if [ "$source_pinned" = 1 ] || [ "$major" = 19 ]; then
+    test "$installed_version" = "$expected_version"
+else
+    case "$installed_version" in "PostgreSQL $major".*) ;; *)
+        echo "unexpected PostgreSQL package version: $installed_version" >&2
+        exit 1
+    esac
 fi
 
 trap - EXIT

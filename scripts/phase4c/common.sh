@@ -72,7 +72,10 @@ pgqi4c_verify_installed_production() {
     libdir=$($pgconfig --pkglibdir)
     installed=$libdir/pg_qi.so
     test -f "$installed" || { echo "pg_qi is not installed at $installed" >&2; return 1; }
-    test "$(sha256sum "$built" | cut -d' ' -f1)" = "$(sha256sum "$installed" | cut -d' ' -f1)" || {
+    local built_sha installed_sha
+    built_sha=$(bash "$pgqi4c_repo/.github/scripts/ci-sha256.sh" "$built")
+    installed_sha=$(bash "$pgqi4c_repo/.github/scripts/ci-sha256.sh" "$installed")
+    test "$built_sha" = "$installed_sha" || {
         echo "installed pg_qi does not match the production build; install it explicitly in the dedicated test PostgreSQL tree" >&2
         return 1
     }

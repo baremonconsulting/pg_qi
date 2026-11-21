@@ -3,7 +3,7 @@
 ## Status
 
 This document describes the current `pg_qi` codebase after Spike 1, the
-production/test split and the PostgreSQL 19 RC2 compatibility replay. The
+production/test split and the PostgreSQL 19.0 compatibility target. The
 project remains pre-alpha. The production build installs planner, executor and
 utility hooks, evaluates a conservative allow-list and records local plan
 evidence. Experimental routing is explicit, `SUSET` and disabled by default.

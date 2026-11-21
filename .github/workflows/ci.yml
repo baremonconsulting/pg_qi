@@ -10,11 +10,13 @@ permissions:
   contents: read
 
 env:
-  PG19_SHA: dffcca2e3c81178c64d4c1f44543a3507d0b7508
+  PG16_SHA: c0534eb02de050ac1035ad7b3ad7c3f02980f153
+  PG17_SHA: 702b3dc86d35bcc08c8e23cffa3c4d9fe9d32c85
+  PG18_SHA: f5c41f6681c910b3f69951bf6fb97c6d74605d25
+  PG19_SHA: 5c839a2a08b9b87a349be97371fac6c5a2873b10
   PG_DUCKDB_SHA: 8756099e267c47f0b86c24de4cf995327f1f4279
   DUCKDB_SHA: d54cbbe3df17e8e5ce68312f483b4155836112aa
   PG_QI_BUILD_ID: ${{ github.sha }}
-  PG_QI_POSTGRES_BUILD_ID: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
   PG_QI_SITE_BUILD_ID: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   PG_DUCKDB_BUILD_MODE: source
 
@@ -103,6 +105,7 @@ jobs:
   production-shadow:
     name: Production routing PG${{ matrix.postgresql }}
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -110,13 +113,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install PostgreSQL and dependencies
+        env:
+          PG_SOURCE_PINNED: "1"
         run: bash .github/scripts/ci-install-postgresql.sh "${{ matrix.postgresql }}"
       - name: Build pinned pg_duckdb
         run: bash .github/scripts/ci-build-pg-duckdb.sh "${{ matrix.postgresql }}"
+      - name: Bind the production build to the PostgreSQL provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          build_id=$(bash .github/scripts/ci-postgres-build-id.sh "${{ matrix.postgresql }}")
+          test "${#build_id}" -eq 64
+          echo "PG_QI_POSTGRES_BUILD_ID=$build_id" >>"$GITHUB_ENV"
       - name: Build and install production pg_qi
         env:
           PG_QI_TESTING: "0"
         run: bash .github/scripts/ci-build-install-pg-qi.sh "${{ matrix.postgresql }}" "ci-artifacts/production-shadow-pg${{ matrix.postgresql }}"
+      - name: Verify production artifact boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .github/scripts/ci-production-boundary.sh \
+            "${{ matrix.postgresql }}" \
+            "ci-artifacts/production-shadow-pg${{ matrix.postgresql }}"
       - name: Build production hook-chain fixture
         shell: bash
         run: |
@@ -125,14 +144,6 @@ jobs:
           make -C tests/outer_hook PG_CONFIG="$pgconfig" clean
           make -C tests/outer_hook PG_CONFIG="$pgconfig" -j2
           sudo make -C tests/outer_hook PG_CONFIG="$pgconfig" install
-      - name: Verify production artifact boundary
-        shell: bash
-        run: |
-          set -euo pipefail
-          if strings pg_qi.so | grep -E 'pg_qi\.spike_|pg_qi\.test_|qi_spike_|qi_test_|PG_QI_FINAL' >/dev/null; then
-            echo "test-only surface leaked into production library" >&2
-            exit 1
-          fi
       - name: Run production routing regression
         shell: bash
         run: |
@@ -147,8 +158,35 @@ jobs:
           { echo "unix_socket_directories = '$pghost'"; echo "listen_addresses = ''"; echo "shared_preload_libraries = 'pg_duckdb,pg_qi_outer_test,pg_qi'"; echo "pg_qi.site_build_id = '$PG_QI_SITE_BUILD_ID'"; } >>"$pgdata/postgresql.conf"
           "$pgbin/pg_ctl" -D "$pgdata" -l "$pglog" -w start
           trap '"$pgbin/pg_ctl" -D "$pgdata" -m fast -w stop || true' EXIT
+          case "$major" in
+            16) expected_server=16.16 ;; 17) expected_server=17.12 ;;
+            18) expected_server=18.7 ;; 19) expected_server=19.0 ;;
+          esac
+          test "$(PGHOST="$pghost" "$pgbin/psql" -X -qAt postgres -c 'SHOW server_version')" = "$expected_server"
+          postmaster_pid=$(head -n 1 "$pgdata/postmaster.pid")
+          source_postgres="${RUNNER_TEMP}/postgresql-$major-build/src/backend/postgres"
+          sha_file() { bash .github/scripts/ci-sha256.sh "$1"; }
+          running_postgres_sha=$(sha_file "/proc/$postmaster_pid/exe")
+          source_postgres_sha=$(sha_file "$source_postgres")
+          test "$running_postgres_sha" = "$source_postgres_sha"
+          IFS=$'\t' read -r pg_qi_loaded running_pg_qi_sha < <(python3 .github/scripts/ci-mapped-file.py "$postmaster_pid" '/pg_qi\.so')
+          IFS=$'\t' read -r pg_duckdb_loaded running_pg_duckdb_sha < <(python3 .github/scripts/ci-mapped-file.py "$postmaster_pid" '/pg_duckdb\.so')
+          IFS=$'\t' read -r duckdb_loaded running_duckdb_sha < <(python3 .github/scripts/ci-mapped-file.py "$postmaster_pid" '/libduckdb\.so')
+          test -n "$pg_qi_loaded" -a -n "$pg_duckdb_loaded" -a -n "$duckdb_loaded"
+          installed_pg_qi_sha=$(sha_file "$($pgbin/pg_config --pkglibdir)/pg_qi.so")
+          source_pg_duckdb_sha=$(sha_file "${RUNNER_TEMP}/pg_duckdb-$major/pg_duckdb.so")
+          source_duckdb_sha=$(sha_file "${RUNNER_TEMP}/pg_duckdb-$major/third_party/duckdb/build/release/src/libduckdb.so")
+          test "$running_pg_qi_sha" = "$installed_pg_qi_sha"
+          test "$running_pg_duckdb_sha" = "$source_pg_duckdb_sha"
+          test "$running_duckdb_sha" = "$source_duckdb_sha"
+          printf 'postmaster_pid=%s\npostgres_sha256=%s\npg_qi_sha256=%s\npg_duckdb_sha256=%s\nduckdb_sha256=%s\n' \
+            "$postmaster_pid" "$running_postgres_sha" \
+            "$running_pg_qi_sha" "$running_pg_duckdb_sha" "$running_duckdb_sha" \
+            >"ci-artifacts/production-shadow-pg$major/runtime-provider.txt"
           PGHOST="$pghost" PGUSER="$USER" make PG_CONFIG="$pgbin/pg_config" PG_QI_TESTING=0 installcheck
           PGHOST="$pghost" PGUSER="$USER" bash tests/outer_hook/verify.sh "$major"
+          PGHOST="$pghost" PGUSER="$USER" bash tests/outer_hook/verify_runtime.sh "$major" \
+            "ci-artifacts/production-shadow-pg$major/pq42-runtime" preloaded
           PGHOST="$pghost" PGUSER="$USER" bash tests/phase7/verify_snapshot.sh "$major"
           PGHOST="$pghost" PGUSER="$USER" bash tests/phase7/verify_plan_features.sh "$major"
           PGHOST="$pghost" PGUSER="$USER" bash tests/phase7/verify_stats_confidence.sh "$major"
@@ -157,6 +195,9 @@ jobs:
           bash tests/phase7/verify_profile_parser.sh
           bash tests/phase7/verify_benefit_model.sh
           python3 -m unittest tests/phase7/test_decision_snapshot.py
+          python3 -m unittest tests/phase7/test_pq42_ci.py
+          PGHOST="$pghost" PGUSER="$USER" bash tests/phase7/verify_noninterference.sh "$major" \
+            "ci-artifacts/production-shadow-pg$major/pq42-noninterference"
           "$pgbin/pg_ctl" -D "$pgdata" -m fast -w stop
           trap - EXIT
       - name: Run PQ-31 differential oracle integration
@@ -172,12 +213,54 @@ jobs:
         shell: bash
         env:
           PG_INSTALL_ROOT: /usr/lib/postgresql
+          PG_QI_REJECT_NOT_RUN: "1"
         run: |
           set -euo pipefail
           major="${{ matrix.postgresql }}"
           out="${RUNNER_TEMP}/pgqi4c-pg$major"
           bash scripts/phase4c/run-production.sh "$major" "$out" | tee "ci-artifacts/production-shadow-pg$major/pgqi4c-smoke-path.txt"
           bash scripts/phase4c/run-rollback-drill.sh "$major" "$out" | tee "ci-artifacts/production-shadow-pg$major/pgqi4c-rollback-path.txt"
+          benchmark_path=$(bash scripts/phase4c/run-benchmark.sh "$major" 50 500 "$out")
+          printf '%s\n' "$benchmark_path" >"ci-artifacts/production-shadow-pg$major/pgqi4c-benchmark-path.txt"
+          cp -a "$benchmark_path" "ci-artifacts/production-shadow-pg$major/pq42-benchmark"
+      - name: Write and validate provider manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest="ci-artifacts/production-shadow-pg${{ matrix.postgresql }}/provider-manifest.json"
+          python3 .github/scripts/ci-provider-manifest.py generate \
+            "${{ matrix.postgresql }}" "$manifest"
+          python3 .github/scripts/ci-provider-manifest.py validate "$manifest"
+          python3 - "$manifest" "ci-artifacts/production-shadow-pg${{ matrix.postgresql }}/runtime-provider.txt" <<'PY'
+          import json, sys
+          manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+          receipt = dict(line.rstrip().split("=", 1) for line in open(sys.argv[2], encoding="utf-8"))
+          pairs = (("postgres_sha256", "postgresql_binary_sha256"),
+                   ("pg_qi_sha256", "pg_qi_binary_sha256"),
+                   ("pg_duckdb_sha256", "pg_duckdb_binary_sha256"),
+                   ("duckdb_sha256", "duckdb_binary_sha256"))
+          if any(receipt.get(left) != manifest.get(right) for left, right in pairs):
+              raise SystemExit("runtime provider receipt differs from manifest")
+          PY
+      - name: Remove test fixture and run final production boundary
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          major="${{ matrix.postgresql }}"
+          pgconfig="/usr/lib/postgresql/$major/bin/pg_config"
+          sudo rm -f "$($pgconfig --pkglibdir)/pg_qi_outer_test.so"
+          PG_CONFIG="$pgconfig" bash .github/scripts/ci-production-boundary.sh \
+            "$major" "ci-artifacts/production-shadow-pg$major" \
+            production-boundary-final.txt
+          python3 - "ci-artifacts/production-shadow-pg$major/provider-manifest.json" \
+            "ci-artifacts/production-shadow-pg$major/production-boundary-final.txt" <<'PY'
+          import json, sys
+          manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+          boundary = dict(line.rstrip().split("=", 1) for line in open(sys.argv[2], encoding="utf-8"))
+          if boundary.get("status") != "PASS" or boundary.get("installed_sha256") != manifest.get("pg_qi_binary_sha256"):
+              raise SystemExit("final production boundary differs from manifest")
+          PY
       - name: Collect production shadow diagnostics
         if: always()
         shell: bash
@@ -402,9 +485,18 @@ jobs:
         env:
           PG_CONFIG: /opt/postgresql/17-assert/bin/pg_config
         run: bash .github/scripts/ci-build-pg-duckdb.sh 17
-      - name: Build and install pg_qi
+      - name: Build and install production pg_qi under assertions
         env:
           PG_CONFIG: /opt/postgresql/17-assert/bin/pg_config
+          PG_QI_TESTING: "0"
+        run: |
+          bash .github/scripts/ci-build-install-pg-qi.sh 17 ci-artifacts/concurrency-production-pg17
+          PG_CONFIG=/opt/postgresql/17-assert/bin/pg_config \
+            bash .github/scripts/ci-production-boundary.sh 17 ci-artifacts/concurrency-production-pg17
+      - name: Build and install assertion test pg_qi
+        env:
+          PG_CONFIG: /opt/postgresql/17-assert/bin/pg_config
+          PG_QI_TESTING: "1"
         run: bash .github/scripts/ci-build-install-pg-qi.sh 17 ci-artifacts/concurrency-pg17
       - name: Run eight-client 300-second smoke
         env:
@@ -422,6 +514,7 @@ jobs:
           path: |
             ${{ runner.temp }}/wp10-pg17
             ci-artifacts/concurrency-pg17
+            ci-artifacts/concurrency-production-pg17
 
   parallel-isolation:
     name: Parallel worker isolation S11 PG17

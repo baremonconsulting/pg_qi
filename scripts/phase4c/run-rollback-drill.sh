@@ -18,8 +18,8 @@ installed_duckdb="$($pgbin/pg_config --pkglibdir)/pg_duckdb.so"
 test -f "$installed" || { echo "pg_qi production library is not installed" >&2; exit 1; }
 test -f "$installed_duckdb" || { echo "pg_duckdb library is not installed" >&2; exit 1; }
 if strings "$installed" | grep -E 'pg_qi\.spike_|pg_qi\.test_|qi_spike_|qi_test_|PG_QI_FINAL' >/dev/null; then echo "test-only installed library" >&2; exit 1; fi
-installed_pre_sha=$(sha256sum "$installed" | cut -d' ' -f1)
-duckdb_pre_sha=$(sha256sum "$installed_duckdb" | cut -d' ' -f1)
+installed_pre_sha=$(bash "$pgqi4c_repo/.github/scripts/ci-sha256.sh" "$installed")
+duckdb_pre_sha=$(bash "$pgqi4c_repo/.github/scripts/ci-sha256.sh" "$installed_duckdb")
 started=0
 drill_status=1
 cleanup() { local rc=$?; if test "$started" -eq 1 && ! pgqi4c_stop "$pgbin" "$root"; then printf 'INCOMPLETE cleanup_failed\n' >"$root/STATUS"; rc=1; fi; test "$drill_status" -eq 0 || printf 'INCOMPLETE\n' >"$root/STATUS"; exit "$rc"; }
@@ -48,8 +48,8 @@ printf '%s\n' "$reconnect" >"$root/reconnect.txt"
 } >"$root/manifest.txt"
 pgqi4c_stop "$pgbin" "$root"
 started=0
-test "$(sha256sum "$installed" | cut -d' ' -f1)" = "$installed_pre_sha"
-test "$(sha256sum "$installed_duckdb" | cut -d' ' -f1)" = "$duckdb_pre_sha"
+test "$(bash "$pgqi4c_repo/.github/scripts/ci-sha256.sh" "$installed")" = "$installed_pre_sha"
+test "$(bash "$pgqi4c_repo/.github/scripts/ci-sha256.sh" "$installed_duckdb")" = "$duckdb_pre_sha"
 sha256sum "$root"/*.txt "$root/manifest.txt" >"$root/evidence.sha256"
 test -s "$root/evidence.sha256" && test -s "$root/session-disable.txt"
 printf 'PASS\n' >"$root/STATUS"
