@@ -10,6 +10,7 @@
 #include "fmgr.h"
 #include "miscadmin.h"
 #include "nodes/parsenodes.h"
+#include "pg_qi/qi_lifecycle.h"
 #include "pg_qi/qi_snapshot.h"
 #include "utils/acl.h"
 #include "utils/guc.h"
@@ -17,6 +18,10 @@
 
 #define QI_SNAPSHOT_INCARNATION_BYTES 16
 #define QI_SNAPSHOT_RENDER_BYTES 1024
+#define QI_PLAN_FEATURE_RENDER_BYTES 1024
+#define QI_STATS_CONFIDENCE_RENDER_BYTES 768
+#define QI_PROFILE_EVIDENCE_RENDER_BYTES 512
+#define QI_BENEFIT_EVIDENCE_RENDER_BYTES 512
 
 typedef struct QiV2SnapshotEvent
 {
@@ -40,6 +45,17 @@ typedef struct QiV2SnapshotStore
 static QiV2SnapshotStore qi_snapshot_store;
 static char *qi_snapshot_placeholder = NULL;
 static char qi_snapshot_render_buffer[QI_SNAPSHOT_RENDER_BYTES];
+static char *qi_plan_feature_placeholder = NULL;
+static char qi_plan_feature_render_buffer[QI_PLAN_FEATURE_RENDER_BYTES];
+static char *qi_stats_confidence_placeholder = NULL;
+static char qi_stats_confidence_render_buffer[
+    QI_STATS_CONFIDENCE_RENDER_BYTES];
+static char *qi_profile_evidence_placeholder = NULL;
+static char qi_profile_evidence_render_buffer[
+    QI_PROFILE_EVIDENCE_RENDER_BYTES];
+static char *qi_benefit_evidence_placeholder = NULL;
+static char qi_benefit_evidence_render_buffer[
+    QI_BENEFIT_EVIDENCE_RENDER_BYTES];
 
 static void
 qi_snapshot_initialize(void)
@@ -198,6 +214,17 @@ qi_p0_state_name(QiShadowP0FactsState state)
 }
 
 static const char *
+qi_lifecycle_name(QiPlanLifecycle lifecycle)
+{
+    switch (lifecycle)
+    {
+        case QI_PLAN_LIFECYCLE_UNPROVED: return "unproved";
+        case QI_PLAN_LIFECYCLE_FRESH_EXECUTION: return "fresh_execution";
+    }
+    return "invalid";
+}
+
+static const char *
 qi_p0_reason_name(QiShadowP0FactsReason reason)
 {
     switch (reason)
@@ -245,17 +272,17 @@ qi_snapshot_show(void)
 
     qi_snapshot_initialize();
     if (!qi_snapshot_authorized())
-        return "v=2;sv=1;s=denied";
+        return "v=2;sv=2;s=denied";
     if (qi_snapshot_store.exhausted)
-        return "v=2;sv=1;s=exhausted";
+        return "v=2;sv=2;s=exhausted";
     if (!qi_snapshot_store.available)
-        return "v=2;sv=1;s=unavailable";
+        return "v=2;sv=2;s=unavailable";
 
     qi_snapshot_incarnation_hex(incarnation, sizeof(incarnation));
     if (!qi_snapshot_store.has_event)
     {
         snprintf(qi_snapshot_render_buffer, sizeof(qi_snapshot_render_buffer),
-                 "v=2;sv=1;s=none;cid=%s;g=" UINT64_FORMAT ";e=0",
+                 "v=2;sv=2;s=none;cid=%s;g=" UINT64_FORMAT ";e=0",
                  incarnation, qi_snapshot_store.generation);
         return qi_snapshot_render_buffer;
     }
@@ -264,17 +291,17 @@ qi_snapshot_show(void)
     candidate = &event->candidate;
     if (candidate->token.effective_user != GetUserId() ||
         candidate->token.session_user != GetSessionUserId())
-        return "v=2;sv=1;s=withheld";
+        return "v=2;sv=2;s=withheld";
 
     decision = &candidate->decision;
     written = snprintf(qi_snapshot_render_buffer,
         sizeof(qi_snapshot_render_buffer),
-        "v=2;sv=1;s=complete;cid=%s;g=" UINT64_FORMAT
+        "v=2;sv=2;s=complete;cid=%s;g=" UINT64_FORMAT
         ";e=" UINT64_FORMAT ";mode=%s;enabled=%s;context=%s"
         ";eligible=%s;safe=%s;beneficial=%s;barrier=%s"
         ";recommendation=%s;reason=%d;rule=%d;model=%d;certificate=%d"
         ";policy=%s;force=%s;engine=%s;verification=%s;observation=%s"
-        ";p0=%s;p0_reason=%s",
+        ";p0=%s;p0_reason=%s;lifecycle=%s",
         incarnation, candidate->token.generation, event->event_sequence,
         qi_mode_name(candidate->mode_at_decision),
         candidate->enabled_at_decision ? "on" : "off",
@@ -293,10 +320,303 @@ qi_snapshot_show(void)
         qi_verification_name(candidate->verification),
         qi_observation_name(candidate->observation),
         qi_p0_state_name(candidate->p0_state),
-        qi_p0_reason_name(candidate->p0_reason));
+        qi_p0_reason_name(candidate->p0_reason),
+        qi_lifecycle_name(candidate->lifecycle));
     if (written < 0 || (Size) written >= sizeof(qi_snapshot_render_buffer))
-        return "v=2;sv=1;s=invalid";
+        return "v=2;sv=2;s=invalid";
     return qi_snapshot_render_buffer;
+}
+
+static const char *
+qi_plan_features_show(void)
+{
+    QiV2SnapshotEvent *event;
+    QiV2SnapshotCandidate *candidate;
+    QiNativePlanFeatures *features;
+    char incarnation[QI_SNAPSHOT_INCARNATION_BYTES * 2 + 1] = "";
+    char relpages[32];
+    char reltuples[64];
+    int written;
+
+    qi_snapshot_initialize();
+    if (!qi_snapshot_authorized())
+        return "v=1;s=denied";
+    if (qi_snapshot_store.exhausted)
+        return "v=1;s=exhausted";
+    if (!qi_snapshot_store.available)
+        return "v=1;s=unavailable";
+    qi_snapshot_incarnation_hex(incarnation, sizeof(incarnation));
+    if (!qi_snapshot_store.has_event)
+    {
+        snprintf(qi_plan_feature_render_buffer,
+                 sizeof(qi_plan_feature_render_buffer),
+                 "v=1;s=none;cid=%s;g=" UINT64_FORMAT ";e=0",
+                 incarnation, qi_snapshot_store.generation);
+        return qi_plan_feature_render_buffer;
+    }
+
+    event = &qi_snapshot_store.slots[qi_snapshot_store.active_slot];
+    candidate = &event->candidate;
+    if (candidate->token.effective_user != GetUserId() ||
+        candidate->token.session_user != GetSessionUserId())
+        return "v=1;s=withheld";
+    features = &candidate->plan_features;
+    if (features->state != QI_PLAN_FEATURE_BOUNDED)
+    {
+        written = snprintf(qi_plan_feature_render_buffer,
+            sizeof(qi_plan_feature_render_buffer),
+            "v=1;s=complete;cid=%s;g=" UINT64_FORMAT ";e=" UINT64_FORMAT
+            ";state=%s;reason=%s;spine=%s;known=" UINT64_FORMAT
+            ";nodes=%u;depth=%u",
+            incarnation, candidate->token.generation, event->event_sequence,
+            qi_plan_feature_state_name(features->state),
+            qi_plan_feature_reason_name(features->reason),
+            qi_plan_feature_spine_name(features->spine),
+            features->known_fields, features->nodes_seen,
+            features->max_depth_seen);
+        if (written < 0 ||
+            (Size) written >= sizeof(qi_plan_feature_render_buffer))
+            return "v=1;s=invalid";
+        return qi_plan_feature_render_buffer;
+    }
+    if ((features->known_fields & QI_PLAN_KNOWN_RELPAGES) != 0)
+        snprintf(relpages, sizeof(relpages), "%d", features->relpages);
+    else
+        strlcpy(relpages, "unknown", sizeof(relpages));
+    if ((features->known_fields & QI_PLAN_KNOWN_RELTUPLES) != 0)
+        snprintf(reltuples, sizeof(reltuples), "%.17g", features->reltuples);
+    else
+        strlcpy(reltuples, "unknown", sizeof(reltuples));
+    written = snprintf(qi_plan_feature_render_buffer,
+        sizeof(qi_plan_feature_render_buffer),
+        "v=1;s=complete;cid=%s;g=" UINT64_FORMAT ";e=" UINT64_FORMAT
+        ";state=%s;reason=%s;spine=%s;known=" UINT64_FORMAT
+        ";relation=%u;agg_startup=%.17g;agg_total=%.17g;agg_rows=%.17g"
+        ";agg_width=%d;scan_startup=%.17g;scan_total=%.17g"
+        ";scan_rows=%.17g;scan_width=%d"
+        ";catalog_relpages=%s;catalog_reltuples=%s"
+        ";agg_parallel_safe=%s;scan_parallel_safe=%s;parallel_aware=%s"
+        ";parallel_mode_needed=%s;workers=%d;has_limit=%s"
+        ";nodes=%u;depth=%u",
+        incarnation, candidate->token.generation, event->event_sequence,
+        qi_plan_feature_state_name(features->state),
+        qi_plan_feature_reason_name(features->reason),
+        qi_plan_feature_spine_name(features->spine),
+        features->known_fields, features->relation_oid,
+        features->aggregate.startup_cost, features->aggregate.total_cost,
+        features->aggregate.rows, features->aggregate.width,
+        features->scan.startup_cost, features->scan.total_cost,
+        features->scan.rows, features->scan.width,
+        relpages, reltuples,
+        features->aggregate_parallel_safe ? "true" : "false",
+        features->scan_parallel_safe ? "true" : "false",
+        features->parallel_aware ? "true" : "false",
+        features->parallel_mode_needed ? "true" : "false",
+        features->workers_planned,
+        features->has_limit ? "true" : "false",
+        features->nodes_seen, features->max_depth_seen);
+    if (written < 0 || (Size) written >= sizeof(qi_plan_feature_render_buffer))
+        return "v=1;s=invalid";
+    return qi_plan_feature_render_buffer;
+}
+
+static const char *
+qi_stats_confidence_show(void)
+{
+    QiV2SnapshotEvent *event;
+    QiV2SnapshotCandidate *candidate;
+    QiStatsConfidence *confidence;
+    char incarnation[QI_SNAPSHOT_INCARNATION_BYTES * 2 + 1] = "";
+    char relation[32];
+    char relpages[32];
+    char reltuples[64];
+    char scan_rows[64];
+    char scan_width[32];
+    char modifications[64];
+    char analyze_age[64];
+    int written;
+
+    qi_snapshot_initialize();
+    if (!qi_snapshot_authorized())
+        return "v=1;s=denied";
+    if (qi_snapshot_store.exhausted)
+        return "v=1;s=exhausted";
+    if (!qi_snapshot_store.available)
+        return "v=1;s=unavailable";
+    qi_snapshot_incarnation_hex(incarnation, sizeof(incarnation));
+    if (!qi_snapshot_store.has_event)
+    {
+        snprintf(qi_stats_confidence_render_buffer,
+                 sizeof(qi_stats_confidence_render_buffer),
+                 "v=1;s=none;cid=%s;g=" UINT64_FORMAT ";e=0",
+                 incarnation, qi_snapshot_store.generation);
+        return qi_stats_confidence_render_buffer;
+    }
+
+    event = &qi_snapshot_store.slots[qi_snapshot_store.active_slot];
+    candidate = &event->candidate;
+    if (candidate->token.effective_user != GetUserId() ||
+        candidate->token.session_user != GetSessionUserId())
+        return "v=1;s=withheld";
+    confidence = &candidate->stats_confidence;
+    if ((confidence->known_fields & QI_STATS_KNOWN_RELATION) != 0)
+        snprintf(relation, sizeof(relation), "%u", confidence->relation_oid);
+    else
+        strlcpy(relation, "unknown", sizeof(relation));
+    if ((confidence->known_fields & QI_STATS_KNOWN_CATALOG_SIZE) != 0)
+    {
+        snprintf(relpages, sizeof(relpages), "%d", confidence->relpages);
+        snprintf(reltuples, sizeof(reltuples), "%.17g",
+                 confidence->reltuples);
+    }
+    else
+    {
+        strlcpy(relpages, "unknown", sizeof(relpages));
+        strlcpy(reltuples, "unknown", sizeof(reltuples));
+    }
+    if ((confidence->known_fields & QI_STATS_KNOWN_PLAN_ESTIMATE) != 0)
+    {
+        snprintf(scan_rows, sizeof(scan_rows), "%.17g",
+                 confidence->scan_rows);
+        snprintf(scan_width, sizeof(scan_width), "%d",
+                 confidence->scan_width);
+    }
+    else
+    {
+        strlcpy(scan_rows, "unknown", sizeof(scan_rows));
+        strlcpy(scan_width, "unknown", sizeof(scan_width));
+    }
+    if ((confidence->known_fields & QI_STATS_KNOWN_MODIFICATIONS) != 0)
+        snprintf(modifications, sizeof(modifications), INT64_FORMAT,
+                 confidence->modifications_since_analyze);
+    else
+        strlcpy(modifications, "unknown", sizeof(modifications));
+    if ((confidence->known_fields & QI_STATS_KNOWN_ANALYZE_AGE) != 0)
+        snprintf(analyze_age, sizeof(analyze_age), INT64_FORMAT,
+                 confidence->analyze_age_ms);
+    else
+        strlcpy(analyze_age, "unknown", sizeof(analyze_age));
+    written = snprintf(qi_stats_confidence_render_buffer,
+        sizeof(qi_stats_confidence_render_buffer),
+        "v=1;s=complete;cid=%s;g=" UINT64_FORMAT ";e=" UINT64_FORMAT
+        ";state=%s;reason=%s;known=" UINT64_FORMAT
+        ";relation=%s;source=%s;catalog_relpages=%s"
+        ";catalog_reltuples=%s;scan_rows=%s;scan_width=%s"
+        ";n_mod_since_analyze=%s;analyze_age_ms=%s",
+        incarnation, candidate->token.generation, event->event_sequence,
+        qi_stats_confidence_state_name(confidence->state),
+        qi_stats_confidence_reason_name(confidence->reason),
+        confidence->known_fields, relation,
+        qi_stats_analyze_source_name(confidence->analyze_source),
+        relpages, reltuples, scan_rows, scan_width,
+        modifications, analyze_age);
+    if (written < 0 ||
+        (Size) written >= sizeof(qi_stats_confidence_render_buffer))
+        return "v=1;s=invalid";
+    return qi_stats_confidence_render_buffer;
+}
+
+static const char *
+qi_profile_evidence_show(void)
+{
+    QiV2SnapshotEvent *event;
+    QiV2SnapshotCandidate *candidate;
+    QiProfileEvidence *evidence;
+    char incarnation[QI_SNAPSHOT_INCARNATION_BYTES * 2 + 1] = "";
+    int written;
+
+    qi_snapshot_initialize();
+    if (!qi_snapshot_authorized())
+        return "v=1;s=denied";
+    if (qi_snapshot_store.exhausted)
+        return "v=1;s=exhausted";
+    if (!qi_snapshot_store.available)
+        return "v=1;s=unavailable";
+    qi_snapshot_incarnation_hex(incarnation, sizeof(incarnation));
+    if (!qi_snapshot_store.has_event)
+    {
+        snprintf(qi_profile_evidence_render_buffer,
+                 sizeof(qi_profile_evidence_render_buffer),
+                 "v=1;s=none;cid=%s;g=" UINT64_FORMAT ";e=0",
+                 incarnation, qi_snapshot_store.generation);
+        return qi_profile_evidence_render_buffer;
+    }
+
+    event = &qi_snapshot_store.slots[qi_snapshot_store.active_slot];
+    candidate = &event->candidate;
+    if (candidate->token.effective_user != GetUserId() ||
+        candidate->token.session_user != GetSessionUserId())
+        return "v=1;s=withheld";
+    evidence = &candidate->profile_evidence;
+    written = snprintf(qi_profile_evidence_render_buffer,
+        sizeof(qi_profile_evidence_render_buffer),
+        "v=1;s=complete;cid=%s;g=" UINT64_FORMAT ";e=" UINT64_FORMAT
+        ";state=%s;reason=%s;present=%s;limits_verified=%s"
+        ";envelope=%s;generation=" UINT64_FORMAT
+        ";install_sequence=" UINT64_FORMAT ";fingerprint=%08x"
+        ";expires_at=" UINT64_FORMAT,
+        incarnation, candidate->token.generation, event->event_sequence,
+        evidence->profile_present ? "present" : "unknown",
+        qi_profile_reason_name(evidence->reason),
+        evidence->profile_present ? "true" : "false",
+        evidence->limits_verified ? "true" : "false",
+        evidence->envelope_hypothetical ? "hypothetical" : "invalid",
+        evidence->generation, evidence->install_sequence,
+        evidence->fingerprint, evidence->expires_at_unix);
+    if (written < 0 ||
+        (Size) written >= sizeof(qi_profile_evidence_render_buffer))
+        return "v=1;s=invalid";
+    return qi_profile_evidence_render_buffer;
+}
+
+static const char *
+qi_benefit_evidence_show(void)
+{
+    QiV2SnapshotEvent *event;
+    QiV2SnapshotCandidate *candidate;
+    QiBenefitResult *benefit;
+    char incarnation[QI_SNAPSHOT_INCARNATION_BYTES * 2 + 1] = "";
+    const char *state;
+    int written;
+
+    qi_snapshot_initialize();
+    if (!qi_snapshot_authorized())
+        return "v=1;s=denied";
+    if (qi_snapshot_store.exhausted)
+        return "v=1;s=exhausted";
+    if (!qi_snapshot_store.available)
+        return "v=1;s=unavailable";
+    qi_snapshot_incarnation_hex(incarnation, sizeof(incarnation));
+    if (!qi_snapshot_store.has_event)
+    {
+        snprintf(qi_benefit_evidence_render_buffer,
+                 sizeof(qi_benefit_evidence_render_buffer),
+                 "v=1;s=none;cid=%s;g=" UINT64_FORMAT ";e=0",
+                 incarnation, qi_snapshot_store.generation);
+        return qi_benefit_evidence_render_buffer;
+    }
+    event = &qi_snapshot_store.slots[qi_snapshot_store.active_slot];
+    candidate = &event->candidate;
+    if (candidate->token.effective_user != GetUserId() ||
+        candidate->token.session_user != GetSessionUserId())
+        return "v=1;s=withheld";
+    benefit = &candidate->benefit;
+    state = benefit->state == QI_BENEFIT_PASS ? "pass" :
+        benefit->state == QI_BENEFIT_VETO ? "veto" :
+        benefit->state == QI_BENEFIT_UNKNOWN ? "unknown" : "not_evaluated";
+    written = snprintf(qi_benefit_evidence_render_buffer,
+        sizeof(qi_benefit_evidence_render_buffer),
+        "v=1;s=complete;cid=%s;g=" UINT64_FORMAT ";e=" UINT64_FORMAT
+        ";state=%s;reason=%s;postgres_ns_low=" UINT64_FORMAT
+        ";duckdb_ns_high=" UINT64_FORMAT ";margin_ns=" UINT64_FORMAT,
+        incarnation, candidate->token.generation, event->event_sequence,
+        state, qi_benefit_reason_name(benefit->reason),
+        benefit->postgres_ns_low, benefit->duckdb_ns_high,
+        benefit->absolute_margin_ns);
+    if (written < 0 ||
+        (Size) written >= sizeof(qi_benefit_evidence_render_buffer))
+        return "v=1;s=invalid";
+    return qi_benefit_evidence_render_buffer;
 }
 
 void
@@ -308,6 +628,30 @@ qi_snapshot_init_guc(void)
                                PGC_INTERNAL,
                                GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE,
                                NULL, NULL, qi_snapshot_show);
+    DefineCustomStringVariable("pg_qi.plan_features",
+                               "Reports private bounded native plan features.",
+                               NULL, &qi_plan_feature_placeholder, "",
+                               PGC_INTERNAL,
+                               GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE,
+                               NULL, NULL, qi_plan_features_show);
+    DefineCustomStringVariable("pg_qi.stats_confidence",
+                               "Reports private statistics confidence evidence.",
+                               NULL, &qi_stats_confidence_placeholder, "",
+                               PGC_INTERNAL,
+                               GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE,
+                               NULL, NULL, qi_stats_confidence_show);
+    DefineCustomStringVariable("pg_qi.profile_evidence",
+                               "Reports private immutable profile evidence.",
+                               NULL, &qi_profile_evidence_placeholder, "",
+                               PGC_INTERNAL,
+                               GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE,
+                               NULL, NULL, qi_profile_evidence_show);
+    DefineCustomStringVariable("pg_qi.benefit_evidence",
+                               "Reports private conservative benefit evidence.",
+                               NULL, &qi_benefit_evidence_placeholder, "",
+                               PGC_INTERNAL,
+                               GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE,
+                               NULL, NULL, qi_benefit_evidence_show);
 }
 
 QiV2SnapshotToken
@@ -336,7 +680,11 @@ qi_snapshot_prepare(QiV2SnapshotCandidate *candidate,
                     QiShadowObservation observation,
                     QiSemanticFacts semantic,
                     QiShadowP0FactsState p0_state,
-                    QiShadowP0FactsReason p0_reason)
+                    QiShadowP0FactsReason p0_reason,
+                    QiNativePlanFeatures plan_features,
+                    QiStatsConfidence stats_confidence,
+                    QiProfileEvidence profile_evidence,
+                    QiBenefitResult benefit)
 {
     QiV2Decision decision;
 
@@ -348,7 +696,7 @@ qi_snapshot_prepare(QiV2SnapshotCandidate *candidate,
 
     decision = qi_v2_evaluate(QI_GATE_NOT_EVALUATED,
                               qi_semantic_gate_state(&semantic),
-                              QI_GATE_NOT_EVALUATED,
+                              qi_benefit_gate_state(&benefit),
                               QI_V2_ACTIVATION_CLOSED,
                               QI_DECISION_V2_RULE_VERSION,
                               QI_DECISION_V2_MODEL_VERSION,
@@ -370,6 +718,11 @@ qi_snapshot_prepare(QiV2SnapshotCandidate *candidate,
     candidate->p0_state = p0_state;
     candidate->p0_reason = p0_reason;
     candidate->semantic = semantic;
+    candidate->plan_features = plan_features;
+    candidate->stats_confidence = stats_confidence;
+    candidate->profile_evidence = profile_evidence;
+    candidate->benefit = benefit;
+    candidate->lifecycle = QI_PLAN_LIFECYCLE_UNPROVED;
     candidate->valid = true;
     return true;
 }
@@ -381,6 +734,7 @@ qi_snapshot_commit(const QiV2SnapshotCandidate *candidate)
     QiV2SnapshotEvent event;
 
     if (candidate == NULL || !candidate->valid ||
+        candidate->lifecycle != QI_PLAN_LIFECYCLE_FRESH_EXECUTION ||
         !qi_snapshot_store.available || qi_snapshot_store.exhausted ||
         candidate->token.generation != qi_snapshot_store.generation ||
         candidate->token.effective_user != GetUserId() ||
@@ -410,15 +764,22 @@ qi_snapshot_handle_utility(Node *utility_stmt)
         return;
     if (IsA(utility_stmt, DiscardStmt) &&
         ((DiscardStmt *) utility_stmt)->target == DISCARD_ALL)
+    {
+        qi_lifecycle_reset();
         qi_snapshot_reset_lifetime();
+    }
     else if (IsA(utility_stmt, VariableSetStmt))
     {
         VariableSetStmt *set = (VariableSetStmt *) utility_stmt;
 
-        if (set->name != NULL &&
+        if (set->kind == VAR_RESET_ALL ||
+            (set->name != NULL &&
             (strcmp(set->name, "role") == 0 ||
-             strcmp(set->name, "session_authorization") == 0))
+             strcmp(set->name, "session_authorization") == 0)))
+        {
+            qi_lifecycle_reset();
             qi_snapshot_reset_lifetime();
+        }
     }
 }
 
@@ -430,6 +791,7 @@ qi_test_v2_snapshot_contract(PG_FUNCTION_ARGS)
     QiV2SnapshotToken token;
     QiV2SnapshotCandidate candidate;
     bool first_commit;
+    bool unproved_rejected;
     bool sequence_one;
     bool saturation_rejected;
     bool saturation_latched;
@@ -451,8 +813,15 @@ qi_test_v2_snapshot_contract(PG_FUNCTION_ARGS)
                            QI_SEMANTIC_BLOCKER_INACTIVE |
                            QI_SEMANTIC_BLOCKER_BUILD_IDENTITY_UNVERIFIED |
                            QI_SEMANTIC_BLOCKER_SNAPSHOT_UNPROVEN},
-        QI_SHADOW_P0_FACTS_BOUNDED, QI_SHADOW_P0_FACTS_OK) &&
-        qi_snapshot_commit(&candidate);
+        QI_SHADOW_P0_FACTS_BOUNDED, QI_SHADOW_P0_FACTS_OK,
+        qi_plan_features_unknown(QI_PLAN_FEATURE_NOT_OBSERVED),
+        qi_stats_confidence_unknown(QI_STATS_NOT_OBSERVED),
+        qi_profile_not_observed(),
+        (QiBenefitResult) {QI_BENEFIT_NOT_EVALUATED,
+                           QI_BENEFIT_NOT_OBSERVED, 0, 0, 0});
+    unproved_rejected = !qi_snapshot_commit(&candidate);
+    candidate.lifecycle = QI_PLAN_LIFECYCLE_FRESH_EXECUTION;
+    first_commit = first_commit && qi_snapshot_commit(&candidate);
     sequence_one = qi_snapshot_store.has_event &&
         qi_snapshot_store.event_sequence == 1;
     qi_snapshot_store.event_sequence = PG_UINT64_MAX;
@@ -473,7 +842,8 @@ qi_test_v2_snapshot_contract(PG_FUNCTION_ARGS)
         qi_snapshot_store.generation == PG_UINT64_MAX;
     qi_snapshot_store = saved;
 
-    PG_RETURN_BOOL(first_commit && sequence_one && saturation_rejected &&
+    PG_RETURN_BOOL(unproved_rejected && first_commit && sequence_one &&
+                   saturation_rejected &&
                    saturation_latched && reset_changed_generation &&
                    generation_saturation_latched);
 }

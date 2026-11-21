@@ -72,7 +72,7 @@ recorded as local DuckDB evidence with `unverified`; a negative match is
 ## Verification
 
 CI builds production and test variants separately on PostgreSQL 16, 17, 18
-and pinned PostgreSQL 19 RC2. The production-shadow job installs the actual
+and pinned PostgreSQL 19.0. The production-shadow job installs the actual
 default build and checks:
 
 - a plain candidate and policy-missing pass-through;

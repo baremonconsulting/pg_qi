@@ -16,15 +16,20 @@
 #include "miscadmin.h"
 #include "pg_qi/planner_compat.h"
 #include "pg_qi/qi_classify.h"
+#include "pg_qi/qi_benefit.h"
 #include "pg_qi/qi_context.h"
 #include "pg_qi/qi_decision.h"
 #include "pg_qi/qi_decision_v2.h"
 #include "pg_qi/qi_delegation.h"
 #include "pg_qi/qi_detector.h"
 #include "pg_qi/qi_eligibility.h"
+#include "pg_qi/qi_lifecycle.h"
+#include "pg_qi/qi_plan_features.h"
+#include "pg_qi/qi_profile.h"
 #include "pg_qi/qi_shadow_p0.h"
 #include "pg_qi/qi_semantic.h"
 #include "pg_qi/qi_snapshot.h"
+#include "pg_qi/qi_stats_confidence.h"
 #if PG_QI_TESTING
 #include "pg_qi/qi_diag.h"
 #include "pg_qi/qi_reenter.h"
@@ -33,6 +38,7 @@
 #include "storage/ipc.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
+#include "utils/timestamp.h"
 
 PG_MODULE_MAGIC;
 
@@ -109,6 +115,12 @@ PG_FUNCTION_INFO_V1(qi_spike_observer);
 PG_FUNCTION_INFO_V1(qi_test_active_control_guard);
 PG_FUNCTION_INFO_V1(qi_test_classifier_contract);
 PG_FUNCTION_INFO_V1(qi_test_decision_v2_contract);
+PG_FUNCTION_INFO_V1(qi_test_plan_features_contract);
+PG_FUNCTION_INFO_V1(qi_test_stats_confidence_contract);
+PG_FUNCTION_INFO_V1(qi_test_profile_contract);
+PG_FUNCTION_INFO_V1(qi_test_profile_parse);
+PG_FUNCTION_INFO_V1(qi_test_benefit_contract);
+PG_FUNCTION_INFO_V1(qi_test_lifecycle_contract);
 PG_FUNCTION_INFO_V1(qi_test_shadow_p0_observer_contract);
 PG_FUNCTION_INFO_V1(qi_test_semantic_contract);
 PG_FUNCTION_INFO_V1(qi_test_semantic_probe);
@@ -289,6 +301,16 @@ done:
         .profile = QI_SEMANTIC_PROFILE_NONE,
         .blockers = 0
     };
+    QiNativePlanFeatures plan_features =
+        qi_plan_features_unknown(QI_PLAN_FEATURE_NOT_OBSERVED);
+    QiStatsConfidence stats_confidence =
+        qi_stats_confidence_unknown(QI_STATS_NOT_OBSERVED);
+    QiProfileEvidence profile_evidence = qi_profile_not_observed();
+    QiProfileModel profile_model = {0};
+    QiBenefitResult benefit = {
+        .state = QI_BENEFIT_NOT_EVALUATED,
+        .reason = QI_BENEFIT_NOT_OBSERVED
+    };
     volatile bool frame_active = false;
 
     pg_qi_shadow_planner_depth++;
@@ -362,6 +384,11 @@ done:
                         reason = QI_SHADOW_POLICY_MISSING;
                         break;
                     case QI_ROUTING_ALLOWLIST:
+                        if (!qi_context_policy_request_allowed())
+                        {
+                            reason = QI_SHADOW_DECISION_ONLY;
+                            break;
+                        }
                         policy_intent = QI_POLICY_REQUEST_DELEGATION;
                         reason = QI_SHADOW_DELEGATION_REQUESTED;
                         decision_force_origin = QI_FORCE_QI_STACK;
@@ -404,6 +431,17 @@ done:
                 verification = QI_VERIFICATION_VERIFIED;
         }
 
+        if (shadow_p0_facts_observed)
+        {
+            plan_features = qi_plan_features_observe(
+                (PlannedStmt *) planned_stmt, &shadow_p0_facts);
+            stats_confidence = qi_stats_confidence_observe(&plan_features);
+            profile_evidence = qi_profile_observe_model(
+                GetCurrentTimestamp(), &profile_model);
+            benefit = qi_benefit_observe(&plan_features, &stats_confidence,
+                                         &profile_evidence, &profile_model);
+        }
+
         if (request_applied)
             reason = verification == QI_VERIFICATION_VERIFIED &&
                 observed_engine == QI_SHADOW_ENGINE_DUCKDB
@@ -419,7 +457,8 @@ done:
                 shadow_p0_facts_observed ? shadow_p0_facts.state :
                     QI_SHADOW_P0_FACTS_UNKNOWN,
                 shadow_p0_facts_observed ? shadow_p0_facts.reason :
-                    QI_SHADOW_P0_FACTS_NO_QUERY);
+                    QI_SHADOW_P0_FACTS_NO_QUERY,
+                plan_features, stats_confidence, profile_evidence, benefit);
 
         if (frame_active)
         {
@@ -446,7 +485,8 @@ done:
                 qi_context_proven_for_routing(
                     planner_hook == pg_qi_planner,
                     pg_qi_shadow_planner_depth, query_string))
-                (void) qi_snapshot_commit(&v2_candidate);
+                (void) qi_lifecycle_arm((PlannedStmt *) planned_stmt,
+                                        &v2_candidate);
         }
     }
     PG_CATCH();
@@ -494,6 +534,7 @@ _PG_init(void)
 
     qi_shadow_init_gucs();
     qi_shadow_p0_init_gucs();
+    qi_profile_init_gucs();
     qi_snapshot_init_guc();
 
 #if PG_QI_TESTING

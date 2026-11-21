@@ -50,7 +50,9 @@ enables benchmark modes, or emits `PG_QI_FINAL` evidence.
 
 ## Verification
 
-CI compiles both variants with `-Werror` on PostgreSQL 16, 17, 18 and the
-pinned PostgreSQL 19 RC2 source build. It also
+The production compatibility matrix compiles the production variant with
+`-Werror` on pinned PostgreSQL 16.16, 17.12, 18.7 and 19.0 source builds.
+The broader production/test compile jobs use supported major packages for
+PostgreSQL 16–18 and the pinned PostgreSQL 19 source build. CI also
 scans the production library for test-only names and runs the existing
 regression and S0-S11 suites against the explicit test build.

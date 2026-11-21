@@ -85,6 +85,7 @@ static void snapshot(PGconn *c, FILE *out, const char *case_id)
         "pg_qi.shadow_force_origin", "pg_qi.shadow_classifier_status",
         "pg_qi.shadow_classifier_reason", "pg_qi.shadow_observed_engine",
         "pg_qi.shadow_verification", "pg_qi.shadow_request_applied",
+        "pg_qi.shadow_p0_facts_state", "pg_qi.shadow_p0_facts_reason",
         "duckdb.force_execution"
     };
     size_t i;
@@ -162,6 +163,7 @@ static uint64_t elapsed_us(struct timespec a, struct timespec b)
 static void set_mode(PGconn *c, const char *mode)
 {
     if (!strcmp(mode, "allowlist")) { command(c, "SET pg_qi.enabled=on"); command(c, "SET pg_qi.routing_mode=allowlist"); }
+    else if (!strcmp(mode, "shadow_p0")) { command(c, "SET pg_qi.enabled=on"); command(c, "SET pg_qi.routing_mode=shadow_p0"); }
     else if (!strcmp(mode, "off")) { command(c, "SET pg_qi.enabled=on"); command(c, "SET pg_qi.routing_mode=off"); }
     else if (!strcmp(mode, "disabled")) { command(c, "SET pg_qi.routing_mode=off"); command(c, "SET pg_qi.enabled=off"); }
     else fail(c, NULL, "invalid mode");
@@ -281,9 +283,21 @@ static void benchmark(PGconn *c, FILE *out, const char *mode, long warmup, long 
 {
     long i;
     PGresult *r;
+    char *shadow_before = NULL;
+    char *shadow_after = NULL;
+    long shadow_before_id = 0;
+    long shadow_after_id = 0;
+    char *end = NULL;
     set_mode(c, mode);
     command(c, "SET statement_timeout='30s'");
     for (i=0; i<warmup; i++) { r=run(c,"SELECT id,v FROM qi_pilot_t WHERE v = 1",PGRES_TUPLES_OK); validate_rows(c,r); PQclear(r); }
+    if (!strcmp(mode, "shadow_p0"))
+    {
+        shadow_before = show_value(c, "pg_qi.shadow_decision_id");
+        errno = 0;
+        shadow_before_id = strtol(shadow_before, &end, 10);
+        if (errno || !end || *end) fail(c, NULL, "invalid pre-benchmark decision id");
+    }
     fprintf(out, "sample\tlatency_us\n");
     for (i=0; i<samples; i++) {
         struct timespec a,b;
@@ -294,7 +308,25 @@ static void benchmark(PGconn *c, FILE *out, const char *mode, long warmup, long 
         fprintf(out, "%ld\t%llu\n", i+1, (unsigned long long)elapsed_us(a,b));
     }
     if (!strcmp(mode,"allowlist")) { expect_show(c,"pg_qi.shadow_reason","delegation_verified"); expect_show(c,"pg_qi.shadow_request_applied","on"); }
-    else expect_show(c,"pg_qi.shadow_request_applied","off");
+    else {
+        expect_show(c,"pg_qi.shadow_request_applied","off");
+        if (!strcmp(mode,"shadow_p0"))
+        {
+            shadow_after = show_value(c, "pg_qi.shadow_decision_id");
+            errno = 0;
+            shadow_after_id = strtol(shadow_after, &end, 10);
+            if (errno || !end || *end || shadow_after_id - shadow_before_id != samples)
+                fail(c, NULL, "timed shadow decisions did not match sample count");
+            expect_show(c,"pg_qi.routing_mode","shadow_p0");
+            expect_show(c,"pg_qi.shadow_reason","decision_only");
+            expect_show(c,"pg_qi.shadow_p0_facts_state","unknown");
+            expect_show(c,"pg_qi.shadow_p0_facts_reason","unsupported_shape");
+            fprintf(out, "info\tshadow_decision_before\t%s\ninfo\tshadow_decision_after\t%s\n",
+                    shadow_before, shadow_after);
+            free(shadow_before);
+            free(shadow_after);
+        }
+    }
     fprintf(out, "info\tmode\t%s\ninfo\twarmup\t%ld\ninfo\tsamples\t%ld\n", mode, warmup, samples);
     snapshot(c, out, mode);
 }

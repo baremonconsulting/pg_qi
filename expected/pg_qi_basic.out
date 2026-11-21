@@ -52,6 +52,8 @@ SELECT qi.test_semantic_contract();
 t
 SELECT qi.test_v2_snapshot_contract();
 t
+SELECT qi.test_lifecycle_contract();
+t
 SELECT depth, cleanup_broken, accounting_valid FROM qi.test_frame_state();
 0|f|t
 SHOW pg_qi.spike_stack_depth;
@@ -156,6 +158,14 @@ DROP TABLE semantic_probe;
 REVOKE USAGE ON SCHEMA qi FROM semantic_reader;
 DROP ROLE semantic_reader;
 CREATE TABLE spike_small(id integer PRIMARY KEY, v integer);
+SELECT qi.test_plan_features_contract();
+t
+SELECT qi.test_stats_confidence_contract();
+t
+SELECT qi.test_profile_contract();
+t
+SELECT qi.test_benefit_contract();
+t
 INSERT INTO spike_small
 SELECT i, i * 10 FROM generate_series(1, 100) AS g(i);
 SET duckdb.force_execution = on;

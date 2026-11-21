@@ -9,9 +9,13 @@
 #include "postgres.h"
 
 #include "nodes/nodes.h"
+#include "pg_qi/qi_benefit.h"
 #include "pg_qi/qi_decision_v2.h"
+#include "pg_qi/qi_plan_features.h"
+#include "pg_qi/qi_profile.h"
 #include "pg_qi/qi_semantic.h"
 #include "pg_qi/qi_shadow_p0.h"
+#include "pg_qi/qi_stats_confidence.h"
 
 #define QI_SNAPSHOT_ENVELOPE_VERSION 1
 #define QI_SNAPSHOT_DIAGNOSTIC_ROLE "pgqi_diagnostic"
@@ -22,6 +26,12 @@ typedef enum QiRoutingMode
     QI_ROUTING_ALLOWLIST,
     QI_ROUTING_SHADOW_P0
 } QiRoutingMode;
+
+typedef enum QiPlanLifecycle
+{
+    QI_PLAN_LIFECYCLE_UNPROVED = 0,
+    QI_PLAN_LIFECYCLE_FRESH_EXECUTION
+} QiPlanLifecycle;
 
 typedef struct QiV2SnapshotToken
 {
@@ -43,6 +53,11 @@ typedef struct QiV2SnapshotCandidate
     QiShadowP0FactsState p0_state;
     QiShadowP0FactsReason p0_reason;
     QiSemanticFacts semantic;
+    QiNativePlanFeatures plan_features;
+    QiStatsConfidence stats_confidence;
+    QiProfileEvidence profile_evidence;
+    QiBenefitResult benefit;
+    QiPlanLifecycle lifecycle;
     bool valid;
 } QiV2SnapshotCandidate;
 
@@ -60,7 +75,11 @@ extern bool qi_snapshot_prepare(QiV2SnapshotCandidate *candidate,
                                 QiShadowObservation observation,
                                 QiSemanticFacts semantic,
                                 QiShadowP0FactsState p0_state,
-                                QiShadowP0FactsReason p0_reason);
+                                QiShadowP0FactsReason p0_reason,
+                                QiNativePlanFeatures plan_features,
+                                QiStatsConfidence stats_confidence,
+                                QiProfileEvidence profile_evidence,
+                                QiBenefitResult benefit);
 extern bool qi_snapshot_commit(const QiV2SnapshotCandidate *candidate);
 extern void qi_snapshot_handle_utility(Node *utility_stmt);
 

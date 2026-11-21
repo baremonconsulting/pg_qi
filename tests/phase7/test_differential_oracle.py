@@ -17,13 +17,13 @@ from tools.phase5.corpus_oracle import MAGIC_V2, TRAILER_MARKER
 from tools.phase7.differential_oracle import DifferentialError, evaluate, main as oracle_main
 
 
-V2 = ("v=2;sv=1;s=complete;cid=0123456789abcdef0123456789abcdef;g=1;e=1;"
+V2 = ("v=2;sv=2;s=complete;cid=0123456789abcdef0123456789abcdef;g=1;e=1;"
       "mode=shadow_p0;enabled=on;context=proven_client;eligible=not_evaluated;"
       "safe=not_evaluated;beneficial=not_evaluated;barrier=closed;"
       "recommendation=insufficient_evidence;reason=0;rule=1;model=1;"
       "certificate=1;policy=pass_through;force=off;engine=unknown;"
       "verification=unverified;observation=no_authoritative_match;"
-      "p0=bounded;p0_reason=ok")
+      "p0=bounded;p0_reason=ok;lifecycle=fresh_execution")
 
 
 def write_v2(path: Path, columns: list[tuple[str, int, int, int]], rows: list[tuple],
@@ -255,13 +255,13 @@ class DifferentialOracleTest(unittest.TestCase):
                          "decision_not_advanced")
 
     def test_empty_v2_envelope_is_inconclusive(self) -> None:
-        none = "v=2;sv=1;s=none;cid=0123456789abcdef0123456789abcdef;g=1;e=0"
+        none = "v=2;sv=2;s=none;cid=0123456789abcdef0123456789abcdef;g=1;e=0"
         receipts = copy.deepcopy(self.receipts)
         for receipt in receipts.values():
             receipt["v2_before"] = none; receipt["v2_after"] = none
         self.assertEqual(evaluate(self.manifest, receipts, self.scratch)["reason"],
                          "decision_not_advanced")
-        withheld = "v=2;sv=1;s=withheld"
+        withheld = "v=2;sv=2;s=withheld"
         receipts = copy.deepcopy(self.receipts)
         receipts["forced"]["v2_before"] = withheld
         receipts["forced"]["v2_after"] = withheld

@@ -43,3 +43,17 @@ case "$build_mode" in
         exit 2
         ;;
 esac
+
+installed_pg_duckdb=$($PG_CONFIG --pkglibdir)/pg_duckdb.so
+built_pg_duckdb=$work_dir/pg_duckdb.so
+built_duckdb=$work_dir/third_party/duckdb/build/release/src/libduckdb.so
+installed_duckdb=$($PG_CONFIG --pkglibdir)/libduckdb.so
+test -f "$built_pg_duckdb" -a -f "$installed_pg_duckdb"
+test -f "$built_duckdb" -a -f "$installed_duckdb"
+hash_tool=$(cd "$(dirname "$0")" && pwd)/ci-sha256.sh
+built_pg_duckdb_sha=$(bash "$hash_tool" "$built_pg_duckdb")
+installed_pg_duckdb_sha=$(bash "$hash_tool" "$installed_pg_duckdb")
+built_duckdb_sha=$(bash "$hash_tool" "$built_duckdb")
+installed_duckdb_sha=$(bash "$hash_tool" "$installed_duckdb")
+test "$built_pg_duckdb_sha" = "$installed_pg_duckdb_sha"
+test "$built_duckdb_sha" = "$installed_duckdb_sha"

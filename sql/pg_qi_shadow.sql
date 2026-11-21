@@ -255,6 +255,14 @@ SHOW pg_qi.shadow_classifier_status;
 SHOW pg_qi.shadow_request_applied;
 SHOW duckdb.force_execution;
 DEALLOCATE shadow_parameter;
+PREPARE shadow_execute_safe AS
+    SELECT id FROM shadow_plain WHERE id = 1;
+EXECUTE shadow_execute_safe;
+SHOW pg_qi.shadow_reason;
+SHOW pg_qi.shadow_policy_intent;
+SHOW pg_qi.shadow_request_applied;
+SHOW duckdb.force_execution;
+DEALLOCATE shadow_execute_safe;
 SET pg_qi.routing_mode = off;
 
 CREATE TABLE shadow_child() INHERITS (shadow_plain);

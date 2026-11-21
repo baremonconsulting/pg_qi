@@ -22,7 +22,7 @@ trap 'exit 143' TERM
 started=1
 pgqi4c_start "$pgbin" "$smoke_root/benchmark-cluster" "pg_duckdb,pg_qi" "$socket_dir"
 "$pgbin/psql" -X -v ON_ERROR_STOP=1 -h "$socket_dir" -d postgres -f "$pgqi4c_repo/tests/phase4c/setup.sql" >"$smoke_root/benchmark-setup.log" 2>&1
-for mode in disabled off allowlist; do
+for mode in disabled off shadow_p0 allowlist; do
     "$smoke_root/production-driver" \
         "host=$socket_dir dbname=postgres connect_timeout=10 application_name=pgqi4c_benchmark_$mode" \
         benchmark "$mode" "$smoke_root/$mode.tsv" "$warmup" "$samples"
@@ -35,12 +35,14 @@ manifest_pg_duckdb_sha=$(sed -n 's/^pg_duckdb_installed_sha256=//p' "$smoke_root
 test "$(sha256sum "$($pgbin/pg_config --pkglibdir)/pg_qi.so" | cut -d' ' -f1)" = "$manifest_pg_qi_sha"
 test "$(sha256sum "$($pgbin/pg_config --pkglibdir)/pg_duckdb.so" | cut -d' ' -f1)" = "$manifest_pg_duckdb_sha"
 printf 'mode\tp50_us\tp95_us\tp99_us\n' >"$smoke_root/summary.tsv"
-for mode in disabled off allowlist; do
+for mode in disabled off shadow_p0 allowlist; do
     values=$(awk -F '\t' '$1 ~ /^[0-9]+$/ {print $2}' "$smoke_root/$mode.tsv" | sort -n)
     count=$(printf '%s\n' "$values" | wc -l)
     pick() { printf '%s\n' "$values" | sed -n "$(( (count * $1 + 99) / 100 ))p"; }
     printf '%s\t%s\t%s\t%s\n' "$mode" "$(pick 50)" "$(pick 95)" "$(pick 99)" >>"$smoke_root/summary.tsv"
 done
+python3 "$pgqi4c_repo/scripts/phase4c/verify-overhead.py" \
+    "$smoke_root" "$samples" >"$smoke_root/overhead-gate.txt"
 sha256sum "$smoke_root"/*.tsv >"$smoke_root/benchmark-evidence.sha256"
 printf 'PASS\n' >"$smoke_root/BENCHMARK_STATUS"
 benchmark_status=0

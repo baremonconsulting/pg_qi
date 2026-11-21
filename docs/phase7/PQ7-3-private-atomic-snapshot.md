@@ -12,6 +12,9 @@ candidate copied into an inactive fixed slot and made active with one slot
 index update. Nested planning, SPI planning from executor hooks, utility
 planning, parallel workers, unproved hook topology, planner errors,
 cancellation, and cleanup failure do not publish a V2 event.
+PQ7-12 adds one narrow utility exception for a top-level client SQL `EXECUTE`
+whose prepared-statement source is proven exactly; it remains decision-only.
+Only `SELECT` plans without modifying CTEs can publish lifecycle evidence.
 The outer-client proof also requires the planner query source to be the active
 backend command source. SQL planned by deferred triggers or deferred foreign
 key checks during transaction completion is therefore not published as a
@@ -60,9 +63,14 @@ state, and opaque correlation identity.
 read-back: planning that SELECT creates a newer event before the value is
 read. Regression coverage preserves this warning.
 
-A complete event proves that planning completed; it does not prove that later
-execution succeeded. Re-executing a cached plan does not invoke the planner
-and therefore does not create a fresh event. Consumers must require the
+A complete event proves that planning completed and the corresponding
+executor run began; it does not prove that execution succeeded. The wire
+field `lifecycle=fresh_execution` records that correlation. This addition is
+the exact-field-set envelope schema `sv=2`; strict `sv=1` readers and records
+are intentionally incompatible rather than silently reinterpreted.
+Re-executing a
+cached plan does not invoke the planner and therefore does not create a fresh
+event. Consumers must require the
 expected correlation identity and sequence instead of treating the most
 recent backend record as evidence for an arbitrary execution.
 

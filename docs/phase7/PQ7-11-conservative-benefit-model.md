@@ -1,0 +1,68 @@
+# PQ7-11 — conservative benefit model
+
+PQ7-11 adds a pure, checked-integer comparison between a conservative native
+PostgreSQL lower latency bound and a conservative delegated DuckDB upper
+latency bound. It remains decision-only and cannot alter routing or resources.
+
+## Profile v2
+
+Profile format v2 adds calibrated `pg_ns_cost`, `output_ns_byte` and `p95_us`
+terms. `threads` is the total profile envelope shared across the declared
+`concurrency`. The slowdown factor is conservatively
+`max(1, ceil(concurrency / threads))`; the model never assumes perfect thread
+scaling. Fixed overhead is not scaled because `fixed_us` is calibrated for the
+declared concurrency envelope. Scan, conversion and output coefficients are
+calibrated as single-thread costs. All profile values remain build-, site-
+and time-bound and are copied atomically with their evidence.
+
+The generator rejects invalid identifiers, bounds and validity windows before
+writing a profile. Format v1 is rejected rather than silently interpreted with
+new units.
+
+## Bounds
+
+The adapter accepts only the bounded plain aggregate over sequential scan
+shape from PQ7-8. Planner doubles must be finite, nonnegative and inside the
+exact-integer conversion domain. Delegated quantities round up and the native
+cost rounds down. Because PostgreSQL cost units are session-configurable, the
+adapter abstains unless `seq_page_cost`, `cpu_tuple_cost` and
+`cpu_operator_cost` retain the PostgreSQL defaults used for calibration.
+
+The pure model uses checked uint64 arithmetic:
+
+```
+logical_scan_kb = max(relpages * block_kb,
+                      ceil(scan_rows * scan_width / 1024))
+conversion_rows = max(scan_rows, reltuples) + output_rows
+contention_factor = max(1, ceil(concurrency / threads))
+
+T_pg_low = floor(pg_total_cost) * pg_ns_cost
+T_duck_high = fixed_us * 1000
+              + (scan_work + conversion_work + output_work)
+                * contention_factor
+```
+
+The absolute margin is strictly greater than both fixed overhead and the p95
+dispersion value. The relative margin is compared by checked ppm cross
+multiplication. Overflow, invalid input or the undecided margin band yields
+UNKNOWN; values are never saturated or clamped.
+
+## Trust gates
+
+A positive result additionally requires confident statistics and verified
+resource limits. PQ7-9 and PQ7-10 deliberately do not yet prove those states,
+so live PQ7-11 observations abstain even when the pure numerical model would
+be favourable. Synthetic contract tests exercise PASS and distinct UNKNOWN
+outcomes without weakening production evidence. A numerical VETO would need a
+DuckDB lower bound and PostgreSQL upper bound, which PQ7-11 does not claim.
+
+`SHOW pg_qi.benefit_evidence` is private under the existing diagnostic-role
+and session-identity checks. It reports the atomic event identity, state,
+reason and derived bounds. Authorised readers may infer calibrated terms from
+those bounds, so this diagnostic is not a coefficient-secrecy boundary.
+
+## Non-interference
+
+The benefit state is supplied to the existing V2 decision contract with the
+activation barrier closed. No force state, plan pointer, execution engine,
+resource setting or V1 behavior is changed.

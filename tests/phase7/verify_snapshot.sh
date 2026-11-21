@@ -78,10 +78,13 @@ SHOW pg_qi.decision_v2;
 CREATE TABLE snapshot_deferred(id integer PRIMARY KEY);
 CREATE FUNCTION snapshot_deferred_fire() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+    EXECUTE 'EXECUTE snapshot_trigger_prepared';
     PERFORM 42;
     RETURN NEW;
 END
 $$;
+PREPARE snapshot_trigger_prepared AS
+    SELECT id FROM snapshot_plain WHERE id = 1;
 CREATE CONSTRAINT TRIGGER snapshot_deferred_trigger
 AFTER INSERT ON snapshot_deferred DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION snapshot_deferred_fire();
@@ -105,6 +108,7 @@ INSERT INTO snapshot_child VALUES (1);
 \echo AFTER_DEFERRED_FK_INSERT
 SHOW pg_qi.decision_v2;
 COMMIT;
+DEALLOCATE snapshot_trigger_prepared;
 \echo AFTER_DEFERRED_FK_COMMIT
 SHOW pg_qi.decision_v2;
 SET ROLE snapshot_plain;
@@ -221,8 +225,8 @@ assert parsed["MODE_OLD"] == parsed["CURRENT_SETTING"]
 assert parsed["MODE_NEW"]["mode"] == "off"
 assert int(parsed["MODE_NEW"]["e"]) == int(parsed["MODE_OLD"]["e"]) + 1
 assert int(parsed["AFTER_SPI"]["e"]) == int(parsed["MODE_NEW"]["e"]) + 1
-assert int(parsed["AFTER_DEFERRED"]["e"]) == int(parsed["BEFORE_DEFERRED"]["e"]) + 1
-assert int(parsed["AFTER_DEFERRED_FK_INSERT"]["e"]) == int(parsed["BEFORE_DEFERRED_FK"]["e"]) + 1
+assert parsed["AFTER_DEFERRED"] == parsed["BEFORE_DEFERRED"]
+assert parsed["AFTER_DEFERRED_FK_INSERT"] == parsed["BEFORE_DEFERRED_FK"]
 assert parsed["AFTER_DEFERRED_FK_COMMIT"] == parsed["AFTER_DEFERRED_FK_INSERT"]
 assert parsed["DENIED"]["s"] == "denied"
 assert parsed["DENIED_CURRENT_SETTING"]["s"] == "denied"

@@ -21,6 +21,7 @@
 #include "nodes/nodeFuncs.h"
 #include "nodes/makefuncs.h"
 #include "nodes/primnodes.h"
+#include "pg_qi/qi_build_identity.h"
 #include "pg_qi/qi_semantic.h"
 #include "utils/acl.h"
 #include "utils/lsyscache.h"
@@ -31,11 +32,6 @@
     (QI_SEMANTIC_BLOCKER_INACTIVE | \
      QI_SEMANTIC_BLOCKER_BUILD_IDENTITY_UNVERIFIED | \
      QI_SEMANTIC_BLOCKER_SNAPSHOT_UNPROVEN)
-#define QI_EXPECTED_PG_DUCKDB_SHA \
-    "8756099e267c47f0b86c24de4cf995327f1f4279"
-#define QI_EXPECTED_DUCKDB_SHA \
-    "d54cbbe3df17e8e5ce68312f483b4155836112aa"
-
 typedef struct QiSemanticDeclaration
 {
     QiShadowP0Capability capability;

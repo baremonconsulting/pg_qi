@@ -8,8 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Fail-closed plan-lifecycle correlation for simple and prepared execution,
+  including cached-plan abstention, DDL replan evidence and SQL/libpq tests.
+  SQL `EXECUTE` is now identified as a proven lifecycle context, while its
+  allow-list policy remains decision-only and cannot request delegation.
+- A decision-only conservative benefit model with checked integer bounds,
+  profile format v2 and private benefit evidence.
 - A private, bounded, backend-local V2 decision snapshot with atomic
   publication, role-safe `SHOW` read-back, strict readers, and lifecycle tests.
+- Private `SHOW pg_qi.stats_confidence` evidence with fail-closed freshness
+  reasons and PostgreSQL 16–19 lifecycle coverage.
+- Bounded, build-bound model/resource profiles with SIGHUP-time parsing,
+  per-decision expiry, atomic backend-local replacement and private evidence.
 - A stricter direct-client proof that prevents deferred trigger and referential
   integrity planning during transaction completion from entering V1 or V2.
 - Reservation of the `pg_qi` GUC prefix so misspelled or unknown parameters

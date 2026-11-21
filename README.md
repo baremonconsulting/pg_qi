@@ -27,7 +27,7 @@
 The repository currently contains:
 
 - a PGXS buildable PostgreSQL extension;
-- planner-hook chaining compatible with PostgreSQL 16, 17, 18 and 19 RC2;
+- planner-hook chaining compatible with PostgreSQL 16, 17, 18 and 19;
 - backend-local delegation frames with error-safe GUC restoration;
 - a validated temporary adapter for requesting `pg_duckdb` planning through
   `duckdb.force_execution`;
@@ -45,7 +45,7 @@ The repository currently contains:
 - an explicit test-only build containing Spike 1 controls, diagnostics,
   failpoints, re-entry simulation and benchmarks;
 - regression and S0–S11 integration tests;
-- CI builds and tests for PostgreSQL 16, 17, 18 and 19 RC2.
+- CI builds and tests for PostgreSQL 16, 17, 18 and 19.
 
 Spike 1 demonstrated deterministic one-shot delegation in its test harness,
 including nested planning, errors, cached plans, concurrency and parallel
@@ -61,7 +61,7 @@ The broader WP14.2 classifier remains a test-gate prototype. See the
 
 ## Requirements
 
-- PostgreSQL 16, 17, 18 or 19 RC2 with server development headers;
+- PostgreSQL 16, 17, 18 or 19 with server development headers;
 - a C compiler and GNU Make;
 - PGXS, normally installed with the PostgreSQL server development package;
 - `pg_duckdb` for preload and runtime operation of the planner integration.
@@ -74,9 +74,8 @@ PostgreSQL 16–18 baseline matrix retains the original Spike 1 pin
 `ee38d3b540ecea1d93683ba99bdcec5632a21eaf` with DuckDB `v1.5.4`.
 Dependency changes require the integration matrix to be replayed.
 
-PostgreSQL 19 support is pinned to RC2 commit
-`dffcca2e3c81178c64d4c1f44543a3507d0b7508`. The pin will be replayed before
-claiming support for the final PostgreSQL 19 release.
+PostgreSQL 19 support is pinned to the final 19.0 commit
+`5c839a2a08b9b87a349be97371fac6c5a2873b10` (`REL_19_0`).
 
 ## Build
 
@@ -139,6 +138,11 @@ administrator-created `NOLOGIN` role named `pgqi_diagnostic`; ordinary roles
 receive no diagnostic payload. See
 [`docs/phase7/PQ7-3-private-atomic-snapshot.md`](docs/phase7/PQ7-3-private-atomic-snapshot.md)
 for lifecycle, pooling, privacy, and correlation rules.
+Prepared-plan and cache semantics are specified in
+[`docs/phase7/PQ7-12-plan-lifecycle.md`](docs/phase7/PQ7-12-plan-lifecycle.md).
+The pinned PG16–19 production matrix, non-interference oracle, artifact
+boundary, and engineering overhead gate are documented in
+[`docs/production-compatibility-ci.md`](docs/production-compatibility-ci.md).
 
 The PQ-31 differential oracle is a CI and controlled-lab qualification tool,
 not a production router or telemetry interface. Its witness library is built
