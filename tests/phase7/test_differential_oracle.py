@@ -14,7 +14,8 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from tools.phase5.corpus_oracle import MAGIC_V2, TRAILER_MARKER
-from tools.phase7.differential_oracle import DifferentialError, evaluate, main as oracle_main
+from tools.phase7.differential_oracle import (DifferentialError, evaluate, main as oracle_main,
+                                              validate_no_import_control)
 
 
 V2 = ("v=2;sv=2;s=complete;cid=0123456789abcdef0123456789abcdef;g=1;e=1;"
@@ -138,6 +139,30 @@ class DifferentialOracleTest(unittest.TestCase):
         self.receipts["native"]["witness_after"] = witness(11, "duckdb", self.columns)
         self.assertEqual(evaluate(self.manifest, copy.deepcopy(self.receipts),
                                   self.scratch)["reason"], "native_or_shadow_interference")
+
+    def test_no_import_control_binds_run_backend_snapshot_and_spool(self) -> None:
+        path = self.root / "missing-import.spool"
+        write_v2(path, self.columns, [(3, "new commit")])
+        control = self.receipt("native", "postgres", path, 1)
+        control["backend"]["pid"] = 104
+        control["witness_before"] = witness(10, "postgres", self.columns, pid=104)
+        control["witness_after"] = witness(11, "postgres", self.columns, pid=104)
+        control["snapshot"].update(imported=False, import_command_complete=False,
+                                   arm_snapshot="1:2:")
+        validate_no_import_control(self.manifest, self.receipts, control)
+
+        variants = {
+            "other run": {"run_id": "run-2"},
+            "reused backend": {"backend": self.receipts["native"]["backend"]},
+            "old snapshot": {"snapshot": {**control["snapshot"], "arm_snapshot": "1:1:"}},
+            "imported snapshot": {"snapshot": {**control["snapshot"], "imported": True}},
+            "different exporter token": {"snapshot": {**control["snapshot"], "token_sha256": "c" * 64}},
+            "no native execution": {"witness_after": witness(11, "unknown", self.columns, pid=104)},
+            "changed spool": {"spool": {**control["spool"], "sha256": "9" * 64}},
+        }
+        for name, change in variants.items():
+            with self.subTest(name=name), self.assertRaises(DifferentialError):
+                validate_no_import_control(self.manifest, self.receipts, {**control, **change})
 
     def test_force_decline_and_unknown_are_inconclusive(self) -> None:
         for engine, reason in (("postgres", "force_declined"),

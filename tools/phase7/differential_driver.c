@@ -21,8 +21,30 @@ safe_field(const char *value)
         strchr(value, '\r') == NULL && strchr(value, '\n') == NULL;
 }
 
+/* Optional isolated-lab attestation, before arming the execution witness. */
+static bool
+verify_site(PGconn *connection, const char *expected, int64_t deadline)
+{
+    char *actual;
+    bool match;
+
+    if (expected == NULL)
+        return true;
+    actual = query_scalar(connection,
+        "SELECT system_identifier::text || ':' || "
+        "pg_catalog.current_setting('pg_qi.site_build_id', true) || ':' || "
+        "pg_catalog.current_setting('server_version_num') || ':' || "
+        "(EXTRACT(EPOCH FROM pg_catalog.pg_postmaster_start_time()) * 1000000)::bigint::text "
+        "FROM pg_catalog.pg_control_system()", deadline);
+    match = actual != NULL && strcmp(actual, expected) == 0;
+    free(actual);
+    if (!match)
+        fputs("isolated-lab site identity does not match\n", stderr);
+    return match;
+}
+
 static int
-run_exporter(const char *conninfo, uint64_t deadline_ms)
+run_exporter(const char *conninfo, uint64_t deadline_ms, const char *site)
 {
     PGconn *connection;
     char *token = NULL;
@@ -35,7 +57,7 @@ run_exporter(const char *conninfo, uint64_t deadline_ms)
     if (connection == NULL ||
             !commands_bounded(connection,
                               "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
-                              deadline))
+                              deadline) || !verify_site(connection, site, deadline))
         goto done;
     token = query_scalar(connection, "SELECT pg_export_snapshot()", deadline);
     identity = query_scalar(connection,
@@ -62,7 +84,8 @@ done:
 }
 
 static int
-run_command(const char *conninfo, const char *sql_path, uint64_t deadline_ms)
+run_command(const char *conninfo, const char *sql_path, uint64_t deadline_ms,
+            const char *site)
 {
     PGconn *connection = NULL;
     char *sql = read_file(sql_path);
@@ -71,7 +94,7 @@ run_command(const char *conninfo, const char *sql_path, uint64_t deadline_ms)
 
     if (sql == NULL || !*sql || (connection = connect_bounded(conninfo, deadline)) == NULL)
         goto done;
-    if (!commands_bounded(connection, sql, deadline))
+    if (!verify_site(connection, site, deadline) || !commands_bounded(connection, sql, deadline))
         goto done;
     puts("COMMAND\tcomplete");
     fflush(stdout);
@@ -147,7 +170,8 @@ drain_after_cancel(PGconn *connection, int64_t deadline)
 static int
 run_arm(const char *conninfo, const char *arm, const char *snapshot,
         const char *sql_path, const char *spool_path, uint64_t deadline_ms,
-        bool import_snapshot, const char *subject_token, Limits *limits)
+        bool import_snapshot, const char *subject_token, const char *site,
+        Limits *limits)
 {
     PGconn *connection = NULL;
     FILE *spool = NULL;
@@ -181,7 +205,10 @@ run_arm(const char *conninfo, const char *arm, const char *snapshot,
             !commands_bounded(connection, "SET LOCAL duckdb.force_execution=off", deadline))
         goto done;
 
-    /* This is deliberately the first snapshot-taking statement in the arm. */
+    /* Attest only after import. Neither identity read is an observed subject. */
+    reason = "site_identity";
+    if (!verify_site(connection, site, deadline))
+        goto done;
     reason = "identity";
     identity = query_scalar(connection,
         "SELECT pg_current_snapshot()::text || E'\\t' || pg_backend_pid()::text || "
@@ -308,6 +335,7 @@ main(int argc, char **argv)
     const char *sql_path = NULL;
     const char *spool_path = NULL;
     const char *subject_token = NULL;
+    const char *site = NULL;
     bool import_snapshot = true;
     uint64_t deadline_ms = 30000;
     uint64_t value;
@@ -338,6 +366,7 @@ main(int argc, char **argv)
         else if (!strcmp(option, "--sql-file")) sql_path = argument;
         else if (!strcmp(option, "--spool")) spool_path = argument;
         else if (!strcmp(option, "--subject-token")) subject_token = argument;
+        else if (!strcmp(option, "--site-binding") && *argument) site = argument;
         else if (!strcmp(option, "--snapshot-mode") &&
                  (!strcmp(argument, "import") || !strcmp(argument, "skip")))
             import_snapshot = !strcmp(argument, "import");
@@ -355,13 +384,13 @@ main(int argc, char **argv)
         return 64;
     }
     if (!strcmp(mode, "exporter"))
-        return run_exporter(conninfo, deadline_ms);
+        return run_exporter(conninfo, deadline_ms, site);
     if (!strcmp(mode, "command") && sql_path != NULL)
-        return run_command(conninfo, sql_path, deadline_ms);
+        return run_command(conninfo, sql_path, deadline_ms, site);
     if (!strcmp(mode, "arm") && arm != NULL && snapshot != NULL &&
             sql_path != NULL && spool_path != NULL && subject_token != NULL)
         return run_arm(conninfo, arm, snapshot, sql_path, spool_path,
-                       deadline_ms, import_snapshot, subject_token, &limits);
+                       deadline_ms, import_snapshot, subject_token, site, &limits);
     phase7_usage(argv[0]);
     return 64;
 }

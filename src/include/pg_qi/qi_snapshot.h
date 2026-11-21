@@ -81,6 +81,8 @@ extern bool qi_snapshot_prepare(QiV2SnapshotCandidate *candidate,
                                 QiProfileEvidence profile_evidence,
                                 QiBenefitResult benefit);
 extern bool qi_snapshot_commit(const QiV2SnapshotCandidate *candidate);
+extern void qi_snapshot_confirm_count(QiV2SnapshotCandidate *candidate,
+                                      const QueryDesc *query_desc);
 extern void qi_snapshot_handle_utility(Node *utility_stmt);
 
 #if PG_QI_TESTING

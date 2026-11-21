@@ -207,6 +207,24 @@ jobs:
           major="${{ matrix.postgresql }}"
           out="ci-artifacts/production-shadow-pg$major/pq31-differential"
           bash tests/phase7/run-differential-integration.sh "$major" "$out"
+      - name: Verify scoped COUNT(*) semantic certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          major="${{ matrix.postgresql }}"
+          out="${RUNNER_TEMP}/pgqi-count-certificate-pg$major"
+          report="ci-artifacts/production-shadow-pg$major/count-certificate"
+          mkdir -p "$report"
+          result=0
+          PG_CONFIG="/usr/lib/postgresql/$major/bin/pg_config" \
+            bash tests/phase7/verify_count_certificate.sh "$major" "$out" \
+            | tee "$report/run.log" || result=$?
+          for evidence in "$out"/count-matrix-pg"$major".*/; do
+            for file in matrix-result.json evidence-index.json runtime-results.tsv parser-contract.log issuer-contract.log; do
+              if test -f "$evidence/$file"; then cp "$evidence/$file" "$report/"; fi
+            done
+          done
+          exit "$result"
       - name: Run PGQI-4C refusal tests
         run: bash tests/phase4c/refusal-tests.sh
       - name: Run PGQI-4C production smoke and rollback drill

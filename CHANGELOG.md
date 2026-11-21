@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Exact-site `COUNT(*)` semantic qualification for decision-only shadow,
+  with typed differential evidence and an independently approved, expiring
+  certificate. The routing and recommendation activation boundaries are unchanged.
 - Fail-closed plan-lifecycle correlation for simple and prepared execution,
   including cached-plan abstention, DDL replan evidence and SQL/libpq tests.
   SQL `EXECUTE` is now identified as a proven lifecycle context, while its
