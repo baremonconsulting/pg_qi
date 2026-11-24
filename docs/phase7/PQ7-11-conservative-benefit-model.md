@@ -78,7 +78,9 @@ row estimate. It charges each observed sort or hash stage for those rows.
 For a hash stage it allows 64 bytes of overhead per row, plus the keys and
 aggregate states. A sort allows 32 bytes in addition to the row payload.
 A factor of two leaves room for row growth and duplicated state, with one
-MiB of reserve per configured DuckDB thread. These are conservative sizing
+MiB of reserve per configured DuckDB thread. For a top-level sort the
+estimate also allows one materialised result, sized from the estimated
+output rows and projected column widths. These are conservative sizing
 assumptions for the supported shapes. The resulting value is a planning
 estimate and the catalogue's row count can be stale.
 

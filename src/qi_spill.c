@@ -130,7 +130,7 @@ qi_spill_key_bytes(const Plan *input, int count, const AttrNumber *columns,
 }
 
 static QiSpillReason
-qi_spill_add_sort(const Plan *node, uint64 *per_row)
+qi_spill_add_sort(const Plan *node, uint64 *per_row, uint64 *result_width)
 {
     ListCell *cell;
     uint64 width = 0;
@@ -144,6 +144,8 @@ qi_spill_add_sort(const Plan *node, uint64 *per_row)
         if (bytes == 0)
             return QI_SPILL_UNBOUNDED_WIDTH;
         width += bytes;
+        if (result_width != NULL && !target->resjunk)
+            *result_width += bytes;
     }
     *per_row += Max(width, (uint64) node->plan_width) +
         QI_SPILL_SORT_OVERHEAD;
@@ -263,6 +265,8 @@ qi_spill_observe(const PlannedStmt *stmt)
     };
     const Plan *node;
     uint64 per_row = 0;
+    uint64 result_width = 0;
+    uint64 result_bytes;
     uint64 rows;
     uint64 bytes;
     unsigned int twice_threshold;
@@ -301,7 +305,8 @@ qi_spill_observe(const PlannedStmt *stmt)
         {
             if (evidence.shape == QI_SPILL_NONE)
                 evidence.shape = QI_SPILL_SORT;
-            reason = qi_spill_add_sort(node, &per_row);
+            reason = qi_spill_add_sort(node, &per_row,
+                                       depth == 0 ? &result_width : NULL);
         }
         else if (IsA(node, Agg) && !grouped)
         {
@@ -349,11 +354,15 @@ qi_spill_observe(const PlannedStmt *stmt)
     /*
      * Charge all observed stages against the larger input estimate. Reserve
      * one MiB per worker and allow duplicated state and row growth.
+     * Allow one materialised result for a top-level sort over a heap scan.
      */
     if (pg_mul_u64_overflow(rows, per_row, &bytes) ||
         pg_mul_u64_overflow(bytes, QI_SPILL_ROW_MARGIN, &bytes) ||
         pg_mul_u64_overflow(bytes, (uint64) threads, &bytes) ||
-        pg_add_u64_overflow(bytes, (uint64) threads * QI_SPILL_MIB, &bytes))
+        pg_add_u64_overflow(bytes, (uint64) threads * QI_SPILL_MIB, &bytes) ||
+        pg_mul_u64_overflow((uint64) ceil(stmt->planTree->plan_rows),
+                            result_width, &result_bytes) ||
+        pg_add_u64_overflow(bytes, result_bytes, &bytes))
     {
         evidence.reason = QI_SPILL_INVALID_ESTIMATE;
         return evidence;

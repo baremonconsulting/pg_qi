@@ -66,6 +66,19 @@ SHOW pg_qi.benefit_evidence;
 \o :work/sort_large.decision
 SHOW pg_qi.decision_v2;
 
+SET LOCAL duckdb.memory_limit = 8;
+CREATE TABLE wide_sort_fixture AS
+SELECT i::bigint * 104857603 AS id, i % 4093 AS k,
+       i::bigint * 734003221 AS p0, i::bigint * 1363148839 AS p1,
+       i::bigint * 2411724869 AS p2, i::bigint * 3250585693 AS p3,
+       i::bigint * 4508876929 AS p4, i::bigint * 6396313783 AS p5
+FROM generate_series(1, 96000) AS series(i);
+ANALYZE wide_sort_fixture;
+\o /dev/null
+SELECT id, k, p0, p1, p2, p3, p4, p5 FROM wide_sort_fixture ORDER BY k, id;
+\o :work/wide_sort.spill
+SHOW pg_qi.spill_evidence;
+
 SET LOCAL duckdb.memory_limit = 32;
 \o /dev/null
 SELECT label FROM spill_fixture ORDER BY label;
@@ -152,6 +165,8 @@ require(benefit, s="complete", state="unknown", reason="spill_resources_unverifi
 require(decision, s="complete", beneficial="unknown", barrier="closed",
         recommendation="insufficient_evidence", policy="pass_through", force="off")
 assert all(pressure[key] == benefit[key] == decision[key] for key in ("cid", "g", "e"))
+require(read("wide_sort.spill"), s="complete", state="likely_spill", shape="sort",
+        budget_bytes="8388608")
 require(read("variable_width.spill"), s="complete", state="unknown", reason="unbounded_width")
 require(read("variable_width.benefit"), s="complete", state="unknown", reason="spill_estimate_unknown")
 require(read("variable_count.spill"), s="complete", state="unknown", reason="unbounded_width")
