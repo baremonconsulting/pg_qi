@@ -11,7 +11,7 @@ OBJS = src/pg_qi.o src/qi_classify.o src/qi_context.o src/qi_decision.o \
        src/qi_stats_confidence.o src/qi_profile_parser.o src/qi_profile.o \
        src/qi_count_cert_parser.o src/qi_count_certificate.o \
        src/qi_benefit_model.o src/qi_benefit.o \
-       src/qi_snapshot.o src/qi_lifecycle.o
+       src/qi_snapshot.o src/qi_lifecycle.o src/qi_explain_guard.o
 
 DATA = sql/pg_qi--0.0.1.sql
 

@@ -198,6 +198,7 @@ jobs:
           python3 -m unittest tests/phase7/test_pq42_ci.py
           PGHOST="$pghost" PGUSER="$USER" bash tests/phase7/verify_noninterference.sh "$major" \
             "ci-artifacts/production-shadow-pg$major/pq42-noninterference"
+          PGHOST="$pghost" PGUSER="$USER" bash tests/explain_guard/verify.sh "$major"
           "$pgbin/pg_ctl" -D "$pgdata" -m fast -w stop
           trap - EXIT
       - name: Run PQ-31 differential oracle integration

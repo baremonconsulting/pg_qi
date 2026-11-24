@@ -86,6 +86,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   explicit local policy and every fail-closed gate allow it. Default behavior
   remains observational pass-through.
 
+### Fixed
+
+- A DuckDB-executed query no longer crashes the backend when `auto_explain`
+  logs its plan. pg_duckdb's EXPLAIN callback re-executed the query outside an
+  `EXPLAIN` command, without an active snapshot for simple-protocol queries.
+  Preloaded `pg_qi` now hides that callback for DuckDB scans not prepared for
+  `EXPLAIN`; such plans still show the `DuckDBScan` node.
+
 ### Security
 
 - Removed invasive Spike 1 controls and diagnostics from the default shared
