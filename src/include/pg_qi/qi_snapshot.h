@@ -57,6 +57,7 @@ typedef struct QiV2SnapshotCandidate
     QiStatsConfidence stats_confidence;
     QiProfileEvidence profile_evidence;
     QiBenefitResult benefit;
+    QiSpillEvidence spill;
     QiPlanLifecycle lifecycle;
     bool valid;
 } QiV2SnapshotCandidate;
@@ -79,7 +80,8 @@ extern bool qi_snapshot_prepare(QiV2SnapshotCandidate *candidate,
                                 QiNativePlanFeatures plan_features,
                                 QiStatsConfidence stats_confidence,
                                 QiProfileEvidence profile_evidence,
-                                QiBenefitResult benefit);
+                                QiBenefitResult benefit,
+                                QiSpillEvidence spill);
 extern bool qi_snapshot_commit(const QiV2SnapshotCandidate *candidate);
 extern void qi_snapshot_confirm_count(QiV2SnapshotCandidate *candidate,
                                       const QueryDesc *query_desc);

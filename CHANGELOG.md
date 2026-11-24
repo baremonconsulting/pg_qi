@@ -85,6 +85,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The production planner hook can make a scoped delegation request only when
   explicit local policy and every fail-closed gate allow it. Default behaviour
   remains observational pass-through.
+- Record estimated DuckDB spill risk for supported fixed-width grouping,
+  DISTINCT and sort plans in decision-only shadow mode. Record why the benefit
+  model abstains when a memory estimate or spill resources are uncertain.
 
 ### Fixed
 

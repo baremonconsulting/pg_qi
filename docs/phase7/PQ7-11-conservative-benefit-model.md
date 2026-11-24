@@ -61,6 +61,33 @@ and session-identity checks. It reports the atomic event identity, state,
 reason and derived bounds. Authorised readers may infer calibrated terms from
 those bounds, so this diagnostic is not a coefficient-secrecy boundary.
 
+## Spill estimates in shadow mode
+
+`SHOW pg_qi.spill_evidence` reports the shape, estimated bytes, budget and
+reason for the same private snapshot as `pg_qi.benefit_evidence`. It covers
+fixed-width integer and Boolean values in grouped counts, COUNT(DISTINCT),
+row DISTINCT and sorts over a simple sequential heap scan. Parallel plans,
+additional scans, variable-width keys and unsupported aggregate states yield
+an unknown estimate.
+
+The estimate uses the larger of the scan's row estimate and the catalogue's
+row estimate. It charges each observed sort or hash stage for those rows.
+For a hash stage it allows 64 bytes of overhead per row, plus the keys and
+aggregate states. A sort allows 32 bytes in addition to the row payload.
+A factor of two leaves room for row growth and duplicated state, with one
+MiB of reserve per configured DuckDB thread. These are conservative sizing
+assumptions for the supported shapes. The resulting value is a planning
+estimate and the catalogue's row count can be stale.
+
+A positive `duckdb.memory_limit` provides the comparison budget, in MiB
+on the tested provider. An automatic memory limit or thread count makes the
+budget unknown. A value at or above the budget records likely spill. The
+benefit model then requires evidence of DuckDB's filesystem access and
+available space. The planner has neither proof, so it records
+`spill_resources_unverified`. An unsupported estimate records
+`spill_estimate_unknown`. An estimate below the configured budget leaves
+the existing statistics, profile and resource gates in place.
+
 ## Non-interference
 
 The benefit state is supplied to the existing V2 decision contract with the

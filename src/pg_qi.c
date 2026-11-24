@@ -280,6 +280,7 @@ done:
     bool context_proven;
     bool request_applied = false;
     bool shadow_p0_facts_observed = false;
+    bool inspect_spill = false;
     QiRoutingMode mode_at_decision = (QiRoutingMode) pg_qi_routing_mode;
     bool enabled_at_decision = pg_qi_enabled;
     QiV2SnapshotToken v2_token;
@@ -308,6 +309,7 @@ done:
         qi_stats_confidence_unknown(QI_STATS_NOT_OBSERVED);
     QiProfileEvidence profile_evidence = qi_profile_not_observed();
     QiProfileModel profile_model = {0};
+    QiSpillEvidence spill = {0};
     QiBenefitResult benefit = {
         .state = QI_BENEFIT_NOT_EVALUATED,
         .reason = QI_BENEFIT_NOT_OBSERVED
@@ -369,6 +371,11 @@ done:
                 semantic_facts = qi_semantic_observe_query(
                     parse, &shadow_p0_facts);
                 shadow_p0_facts_observed = true;
+                inspect_spill = parse != NULL &&
+                    (parse->groupClause != NIL || parse->groupingSets != NIL ||
+                     parse->distinctClause != NIL || parse->sortClause != NIL ||
+                     (parse->hasAggs &&
+                      shadow_p0_facts.state != QI_SHADOW_P0_FACTS_BOUNDED));
             }
 
             eligibility = qi_eligibility_query(parse);
@@ -441,6 +448,11 @@ done:
                 GetCurrentTimestamp(), &profile_model);
             benefit = qi_benefit_observe(&plan_features, &stats_confidence,
                                          &profile_evidence, &profile_model);
+            if (inspect_spill)
+            {
+                spill = qi_spill_observe((PlannedStmt *) planned_stmt);
+                benefit = qi_benefit_apply_spill(benefit, spill);
+            }
         }
 
         if (request_applied)
@@ -459,7 +471,7 @@ done:
                     QI_SHADOW_P0_FACTS_UNKNOWN,
                 shadow_p0_facts_observed ? shadow_p0_facts.reason :
                     QI_SHADOW_P0_FACTS_NO_QUERY,
-                plan_features, stats_confidence, profile_evidence, benefit);
+                plan_features, stats_confidence, profile_evidence, benefit, spill);
 
         if (frame_active)
         {
