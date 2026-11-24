@@ -202,6 +202,12 @@ qi_context_fini_hooks(void)
 }
 
 bool
+qi_context_inside_executor(void)
+{
+    return qi_executor_call_depth > 0;
+}
+
+bool
 qi_context_proven_for_routing(bool planner_hook_outermost, int planner_depth,
                               const char *query_string)
 {

@@ -339,9 +339,9 @@ $$;
 SELECT shadow_spi();
 42
 SHOW pg_qi.shadow_context;
-unproved_outermost
+proven_client
 SHOW pg_qi.shadow_reason;
-context_unproved
+classifier_rejected
 SHOW pg_qi.shadow_request_applied;
 off
 EXPLAIN SELECT id FROM shadow_plain WHERE id = 1;
@@ -468,13 +468,13 @@ SELECT id FROM shadow_plain WHERE id = 1;
 SHOW pg_qi.shadow_reason;
 policy_missing
 SHOW pg_qi.shadow_decision_id;
-126
+124
 SELECT 1 / 0;
 ERROR:  division by zero
 SHOW pg_qi.shadow_reason;
 policy_missing
 SHOW pg_qi.shadow_decision_id;
-126
+124
 SELECT id FROM shadow_plain WHERE id = 2;
 2
 SHOW pg_qi.shadow_context;

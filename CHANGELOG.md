@@ -88,6 +88,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Preserve the client statement's `pg_qi.shadow_*` evidence when the DuckDB
+  heap reader or nested SQL plans another query during execution.
 - A DuckDB-executed query no longer crashes the backend when `auto_explain`
   logs its plan. pg_duckdb's EXPLAIN callback re-executed the query outside an
   `EXPLAIN` command, without an active snapshot for simple-protocol queries.
