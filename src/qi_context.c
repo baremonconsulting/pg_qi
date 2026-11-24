@@ -10,6 +10,7 @@
 #include "executor/executor.h"
 #include "miscadmin.h"
 #include "pg_qi/qi_context.h"
+#include "pg_qi/qi_explain_guard.h"
 #include "pg_qi/qi_lifecycle.h"
 #include "pg_qi/qi_snapshot.h"
 #include "tcop/tcopprot.h"
@@ -59,6 +60,7 @@ qi_executor_start(QueryDesc *query_desc, int eflags)
             previous_executor_start_hook(query_desc, eflags);
         else
             standard_ExecutorStart(query_desc, eflags);
+        qi_explain_guard_executor_started(query_desc);
     }
     PG_FINALLY();
     {

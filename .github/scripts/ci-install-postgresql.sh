@@ -105,10 +105,12 @@ if [ "$source_pinned" = 1 ] || [ "$major" = 19 ]; then
         source_postgres_sha=$(bash "$hash_tool" "$build_dir/src/backend/postgres")
         installed_postgres_sha=$(bash "$hash_tool" "/usr/lib/postgresql/$major/bin/postgres")
         test "$source_postgres_sha" = "$installed_postgres_sha"
-        make -C "$source_dir/contrib/file_fdw" USE_PGXS=1 \
-            PG_CONFIG="/usr/lib/postgresql/$major/bin/pg_config" -j2
-        sudo make -C "$source_dir/contrib/file_fdw" USE_PGXS=1 \
-            PG_CONFIG="/usr/lib/postgresql/$major/bin/pg_config" install
+        for module in file_fdw auto_explain; do
+            make -C "$source_dir/contrib/$module" USE_PGXS=1 \
+                PG_CONFIG="/usr/lib/postgresql/$major/bin/pg_config" -j2
+            sudo make -C "$source_dir/contrib/$module" USE_PGXS=1 \
+                PG_CONFIG="/usr/lib/postgresql/$major/bin/pg_config" install
+        done
     )
     test "$(/usr/lib/postgresql/$major/bin/pg_config --version)" = \
         "$expected_version"
