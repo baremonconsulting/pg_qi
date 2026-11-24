@@ -8,6 +8,7 @@
 
 #include "postgres.h"
 
+#include "nodes/parsenodes.h"
 #include "nodes/plannodes.h"
 
 typedef enum QiSpillState
@@ -46,6 +47,7 @@ typedef struct QiSpillEvidence
     uint64 budget_bytes;
 } QiSpillEvidence;
 
+extern bool qi_spill_query_requested(const Query *query);
 extern QiSpillEvidence qi_spill_observe(const PlannedStmt *stmt);
 extern const char *qi_spill_state_name(QiSpillState state);
 extern const char *qi_spill_reason_name(QiSpillReason reason);

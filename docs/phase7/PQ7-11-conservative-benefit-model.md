@@ -70,6 +70,9 @@ row DISTINCT and sorts over a simple sequential heap scan. Parallel plans,
 additional scans, variable-width keys and unsupported aggregate states yield
 an unknown estimate.
 
+For ungrouped aggregates, the check looks for DISTINCT or ORDER BY inside
+aggregate calls in the outer query.
+
 The estimate uses the larger of the scan's row estimate and the catalogue's
 row estimate. It charges each observed sort or hash stage for those rows.
 For a hash stage it allows 64 bytes of overhead per row, plus the keys and

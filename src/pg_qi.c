@@ -371,11 +371,7 @@ done:
                 semantic_facts = qi_semantic_observe_query(
                     parse, &shadow_p0_facts);
                 shadow_p0_facts_observed = true;
-                inspect_spill = parse != NULL &&
-                    (parse->groupClause != NIL || parse->groupingSets != NIL ||
-                     parse->distinctClause != NIL || parse->sortClause != NIL ||
-                     (parse->hasAggs &&
-                      shadow_p0_facts.state != QI_SHADOW_P0_FACTS_BOUNDED));
+                inspect_spill = qi_spill_query_requested(parse);
             }
 
             eligibility = qi_eligibility_query(parse);

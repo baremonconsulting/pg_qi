@@ -92,6 +92,11 @@ SELECT count(*) FROM spill_fixture;
 SHOW pg_qi.spill_evidence;
 
 \o /dev/null
+SELECT count(DISTINCT key) + 1 FROM spill_fixture;
+\o :work/wrapped_distinct.spill
+SHOW pg_qi.spill_evidence;
+
+\o /dev/null
 SET LOCAL duckdb.memory_limit = 0;
 SELECT DISTINCT key FROM spill_fixture;
 \o :work/default_budget.spill
@@ -147,6 +152,7 @@ require(read("variable_width.spill"), s="complete", state="unknown", reason="unb
 require(read("variable_width.benefit"), s="complete", state="unknown", reason="spill_estimate_unknown")
 require(read("variable_count.spill"), s="complete", state="unknown", reason="unbounded_width")
 require(read("sorted_distinct.spill"), s="complete", state="within_budget", shape="distinct")
+require(read("wrapped_distinct.spill"), s="complete", state="unknown", reason="unsupported_plan")
 require(read("default_budget.spill"), s="complete", state="unknown", reason="budget_unknown")
 for case in ("scalar_control", "off_control"):
     require(read(f"{case}.spill"), s="complete", state="not_evaluated")

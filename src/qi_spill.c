@@ -20,11 +20,59 @@
 
 #define QI_SPILL_MAX_NODES       4
 #define QI_SPILL_MAX_COLUMNS     16
+#define QI_SPILL_MAX_EXPRESSIONS 64
 #define QI_SPILL_MAX_EXACT_ROWS  9007199254740992.0
 #define QI_SPILL_MIB             UINT64CONST(1048576)
 #define QI_SPILL_HASH_OVERHEAD   64U
 #define QI_SPILL_SORT_OVERHEAD   32U
 #define QI_SPILL_ROW_MARGIN      2U
+
+typedef struct QiSpillAggregateSearch
+{
+    unsigned int remaining;
+    bool found;
+} QiSpillAggregateSearch;
+
+static bool
+qi_spill_find_ordered_aggregate(Node *node, void *arg)
+{
+    QiSpillAggregateSearch *search = arg;
+
+    if (node == NULL || IsA(node, Query))
+        return false;
+    if (search->remaining == 0)
+        return true;
+    --search->remaining;
+
+    if (IsA(node, Aggref))
+    {
+        const Aggref *call = (const Aggref *) node;
+
+        search->found = call->agglevelsup == 0 &&
+            (call->aggdistinct != NIL || call->aggorder != NIL);
+        return search->found;
+    }
+    return expression_tree_walker(node, qi_spill_find_ordered_aggregate, arg);
+}
+
+bool
+qi_spill_query_requested(const Query *query)
+{
+    QiSpillAggregateSearch search = {.remaining = QI_SPILL_MAX_EXPRESSIONS};
+
+    if (query == NULL || query->commandType != CMD_SELECT)
+        return false;
+    if (query->groupClause != NIL || query->groupingSets != NIL ||
+        query->distinctClause != NIL || query->sortClause != NIL)
+        return true;
+    if (!query->hasAggs)
+        return false;
+
+    /* Find DISTINCT or ordering within scalar aggregate calls. */
+    if (!qi_spill_find_ordered_aggregate((Node *) query->targetList, &search))
+        qi_spill_find_ordered_aggregate(query->havingQual, &search);
+    return search.found;
+}
 
 /* Size the supported DuckDB values independently of PostgreSQL's mean width. */
 static unsigned int
