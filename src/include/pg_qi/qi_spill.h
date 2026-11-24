@@ -46,8 +46,10 @@ typedef struct QiSpillEvidence
     uint64 unadjusted_bytes;
     uint64 estimated_bytes;
     uint64 budget_bytes;
+    double threshold;
 } QiSpillEvidence;
 
+extern void qi_spill_init_gucs(void);
 extern bool qi_spill_query_requested(const Query *query);
 extern QiSpillEvidence qi_spill_observe(const PlannedStmt *stmt);
 extern const char *qi_spill_state_name(QiSpillState state);

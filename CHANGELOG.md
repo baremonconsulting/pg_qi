@@ -88,7 +88,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Record estimated DuckDB spill risk for supported fixed-width grouping,
   DISTINCT and sort plans in decision-only shadow mode. Record why the benefit
   model abstains when a memory estimate or spill resources are uncertain.
-  Apply a separate warning threshold to each shape.
+  Expose each shape's warning threshold as a PostgreSQL setting.
 
 ### Fixed
 

@@ -5,6 +5,7 @@
 
 #include "postgres.h"
 
+#include <float.h>
 #include <math.h>
 
 #include "access/htup_details.h"
@@ -27,11 +28,35 @@
 #define QI_SPILL_SORT_OVERHEAD   32U
 #define QI_SPILL_ROW_MARGIN      2U
 
+static double qi_spill_group_threshold;
+static double qi_spill_distinct_threshold;
+static double qi_spill_sort_threshold;
+
 typedef struct QiSpillAggregateSearch
 {
     unsigned int remaining;
     bool found;
 } QiSpillAggregateSearch;
+
+void
+qi_spill_init_gucs(void)
+{
+    DefineCustomRealVariable("pg_qi.spill_group_threshold",
+                             "Sets the budget multiple for grouped count spill warnings.",
+                             NULL, &qi_spill_group_threshold,
+                             4.0, DBL_MIN, DBL_MAX, PGC_SUSET,
+                             0, NULL, NULL, NULL);
+    DefineCustomRealVariable("pg_qi.spill_distinct_threshold",
+                             "Sets the budget multiple for DISTINCT spill warnings.",
+                             NULL, &qi_spill_distinct_threshold,
+                             5.5, DBL_MIN, DBL_MAX, PGC_SUSET,
+                             0, NULL, NULL, NULL);
+    DefineCustomRealVariable("pg_qi.spill_sort_threshold",
+                             "Sets the budget multiple for sort spill warnings.",
+                             NULL, &qi_spill_sort_threshold,
+                             2.5, DBL_MIN, DBL_MAX, PGC_SUSET,
+                             0, NULL, NULL, NULL);
+}
 
 static bool
 qi_spill_find_ordered_aggregate(Node *node, void *arg)
@@ -269,7 +294,7 @@ qi_spill_observe(const PlannedStmt *stmt)
     uint64 result_bytes;
     uint64 rows;
     uint64 bytes;
-    unsigned int twice_threshold;
+    long double calibrated;
     bool grouped = false;
     int depth;
     int memory_mib;
@@ -367,25 +392,25 @@ qi_spill_observe(const PlannedStmt *stmt)
         evidence.reason = QI_SPILL_INVALID_ESTIMATE;
         return evidence;
     }
-    /* Represent the shape thresholds in halves to keep the comparison exact. */
     switch (evidence.shape)
     {
         case QI_SPILL_HASH_AGGREGATE:
-            twice_threshold = 8;
+            evidence.threshold = qi_spill_group_threshold;
             break;
         case QI_SPILL_DISTINCT:
-            twice_threshold = 11;
+            evidence.threshold = qi_spill_distinct_threshold;
             break;
         case QI_SPILL_SORT:
-            twice_threshold = 5;
+            evidence.threshold = qi_spill_sort_threshold;
             break;
         default:
             return evidence;
     }
     evidence.unadjusted_bytes = bytes;
-    /* Divide before doubling so even the largest estimate fits in uint64. */
-    evidence.estimated_bytes = (bytes / twice_threshold) * 2 +
-        (bytes % twice_threshold) * 2 / twice_threshold;
+    calibrated = (long double) bytes / evidence.threshold;
+    /* A small threshold can produce more bytes than the diagnostic can hold. */
+    evidence.estimated_bytes = calibrated < (long double) PG_UINT64_MAX
+        ? (uint64) calibrated : PG_UINT64_MAX;
     if (evidence.estimated_bytes >= evidence.budget_bytes)
     {
         evidence.state = QI_SPILL_LIKELY;

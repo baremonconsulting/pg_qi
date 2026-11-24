@@ -89,9 +89,22 @@ on the tested provider. An automatic memory limit or thread count makes the
 budget unknown.
 
 The diagnostic reports the original sizing estimate in `unadjusted_bytes`.
-It divides that value by 4 for grouped counts, 5.5 for DISTINCT and 2.5 for
-sorts, then records the result rounded down to a whole byte in
-`estimated_bytes`. These shape-specific thresholds come from calibration.
+It divides that value by the configured threshold for the shape and
+records the result in `estimated_bytes`, rounded down to a whole byte and
+capped at the largest representable value. The snapshot records the
+threshold it used.
+
+| Setting | Query shape | Default |
+| --- | --- | ---: |
+| `pg_qi.spill_group_threshold` | Grouped counts | 4 |
+| `pg_qi.spill_distinct_threshold` | DISTINCT | 5.5 |
+| `pg_qi.spill_sort_threshold` | Sorts | 2.5 |
+
+The defaults come from calibration. The settings require positive finite
+numbers. Lower values warn sooner. Set server defaults in PostgreSQL's
+configuration. A superuser or a role with `SET` privilege on the parameter
+can use `SET` for a session or `SET LOCAL` for a transaction.
+
 A calibrated estimate at or above the budget records likely spill. The
 benefit model then requires evidence of filesystem access and available
 space, so the planner records `spill_resources_unverified` while those

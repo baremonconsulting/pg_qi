@@ -548,6 +548,7 @@ _PG_init(void)
     qi_shadow_init_gucs();
     qi_shadow_p0_init_gucs();
     qi_profile_init_gucs();
+    qi_spill_init_gucs();
     qi_count_certificate_init();
     qi_snapshot_init_guc();
 

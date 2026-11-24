@@ -19,6 +19,11 @@ trap cleanup EXIT
 "$pgbin/psql" -XqAt -v ON_ERROR_STOP=1 -v work="$work" postgres \
     >"$work/session.out" 2>"$work/session.err" <<'SQL'
 SHOW pg_qi.spill_evidence;
+\o :work/default_thresholds
+SHOW pg_qi.spill_group_threshold;
+SHOW pg_qi.spill_distinct_threshold;
+SHOW pg_qi.spill_sort_threshold;
+\o
 BEGIN;
 SET LOCAL statement_timeout = '10s';
 SET LOCAL pg_qi.routing_mode = shadow_p0;
@@ -45,6 +50,62 @@ SHOW pg_qi.spill_evidence;
 SELECT key, id FROM spill_fixture ORDER BY key, id;
 \o :work/sort_small.spill
 SHOW pg_qi.spill_evidence;
+
+SET LOCAL pg_qi.spill_group_threshold = 1.75;
+\o /dev/null
+SELECT key, count(*) FROM spill_fixture GROUP BY key;
+\o :work/group_override.spill
+SHOW pg_qi.spill_evidence;
+
+\o /dev/null
+SELECT count(DISTINCT key), count(DISTINCT id) FROM spill_fixture;
+\o :work/distinct_independent.spill
+SHOW pg_qi.spill_evidence;
+
+SET LOCAL pg_qi.spill_distinct_threshold = 3.25;
+\o /dev/null
+SELECT count(DISTINCT key), count(DISTINCT id) FROM spill_fixture;
+\o :work/distinct_override.spill
+SHOW pg_qi.spill_evidence;
+
+\o /dev/null
+SELECT key, id FROM spill_fixture ORDER BY key, id;
+\o :work/sort_independent.spill
+SHOW pg_qi.spill_evidence;
+
+SET LOCAL pg_qi.spill_sort_threshold = 1.25;
+\o /dev/null
+SELECT key, id FROM spill_fixture ORDER BY key, id;
+\o :work/sort_override.spill
+SHOW pg_qi.spill_evidence;
+SET LOCAL pg_qi.spill_sort_threshold = DEFAULT;
+\o :work/sort_saved.spill
+SHOW pg_qi.spill_evidence;
+
+SET LOCAL pg_qi.spill_sort_threshold = '1e-100';
+\o /dev/null
+SELECT key, id FROM spill_fixture ORDER BY key, id;
+\o :work/sort_saturated.spill
+SHOW pg_qi.spill_evidence;
+
+SET LOCAL pg_qi.spill_group_threshold = DEFAULT;
+SET LOCAL pg_qi.spill_distinct_threshold = DEFAULT;
+SET LOCAL pg_qi.spill_sort_threshold = DEFAULT;
+
+SAVEPOINT invalid_threshold;
+\o :work/invalid_thresholds
+\set ON_ERROR_STOP off
+SET LOCAL pg_qi.spill_sort_threshold = 0;
+\qecho :SQLSTATE
+ROLLBACK TO SAVEPOINT invalid_threshold;
+SET LOCAL pg_qi.spill_sort_threshold = 'Infinity';
+\qecho :SQLSTATE
+ROLLBACK TO SAVEPOINT invalid_threshold;
+SET LOCAL pg_qi.spill_sort_threshold = 'NaN';
+\qecho :SQLSTATE
+ROLLBACK TO SAVEPOINT invalid_threshold;
+\set ON_ERROR_STOP on
+\o
 
 SET LOCAL duckdb.memory_limit = 1;
 \o /dev/null
@@ -122,9 +183,14 @@ SELECT id FROM spill_fixture ORDER BY id;
 SHOW pg_qi.spill_evidence;
 \o
 ROLLBACK;
+\o :work/restored_thresholds
+SHOW pg_qi.spill_group_threshold;
+SHOW pg_qi.spill_distinct_threshold;
+SHOW pg_qi.spill_sort_threshold;
 SQL
 
 python3 -I - "$work" <<'PY'
+from fractions import Fraction
 from pathlib import Path
 import sys
 
@@ -141,26 +207,41 @@ def require(values, **expected):
             raise SystemExit(f"Expected {field}={wanted}, got {values}")
 
 
-for case, shape, twice_threshold in (
-    ("group", "hash_aggregate", 8),
-    ("distinct", "distinct", 11),
-    ("sort", "sort", 5),
+assert (work / "default_thresholds").read_text().splitlines() == ["4", "5.5", "2.5"]
+assert (work / "restored_thresholds").read_text().splitlines() == ["4", "5.5", "2.5"]
+assert (work / "invalid_thresholds").read_text().splitlines() == ["22023"] * 3
+
+for case, shape, threshold, override in (
+    ("group", "hash_aggregate", "4", "1.75"),
+    ("distinct", "distinct", "5.5", "3.25"),
+    ("sort", "sort", "2.5", "1.25"),
 ):
     fits = read(f"{case}_small.spill")
     pressure = read(f"{case}_large.spill")
-    require(fits, s="complete", state="within_budget", shape=shape, budget_bytes="2097152")
-    require(pressure, s="complete", state="likely_spill", shape=shape, budget_bytes="1048576")
+    require(fits, s="complete", state="within_budget", shape=shape, budget_bytes="2097152",
+            threshold=threshold)
+    require(pressure, s="complete", state="likely_spill", shape=shape, budget_bytes="1048576",
+            threshold=threshold)
     unadjusted = int(fits["unadjusted_bytes"])
     estimated = int(fits["estimated_bytes"])
     assert unadjusted == int(pressure["unadjusted_bytes"])
     assert estimated == int(pressure["estimated_bytes"])
-    assert estimated == unadjusted * 2 // twice_threshold
+    assert estimated == unadjusted // Fraction(threshold)
     assert int(pressure["budget_bytes"]) <= estimated < int(fits["budget_bytes"]) <= unadjusted
+    require(read(f"{case}_override.spill"), state="likely_spill", shape=shape,
+            budget_bytes="2097152", threshold=override, unadjusted_bytes=str(unadjusted),
+            estimated_bytes=str(unadjusted // Fraction(override)))
     print(f"{case} estimated bytes {estimated}, spill risk rises under the smaller budget")
 
 pressure = read("sort_large.spill")
 benefit = read("sort_large.benefit")
 decision = read("sort_large.decision")
+for case in ("distinct", "sort"):
+    default = read(f"{case}_small.spill")
+    assert all(read(f"{case}_independent.spill")[key] == default[key]
+               for key in ("shape", "state", "threshold", "estimated_bytes"))
+assert read("sort_saved.spill") == read("sort_override.spill")
+require(read("sort_saturated.spill"), state="likely_spill", estimated_bytes=str(2**64 - 1))
 require(benefit, s="complete", state="unknown", reason="spill_resources_unverified")
 require(decision, s="complete", beneficial="unknown", barrier="closed",
         recommendation="insufficient_evidence", policy="pass_through", force="off")

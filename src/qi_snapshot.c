@@ -7,6 +7,7 @@
 
 #include "access/htup_details.h"
 #include "catalog/pg_authid.h"
+#include "common/shortest_dec.h"
 #include "fmgr.h"
 #include "miscadmin.h"
 #include "nodes/parsenodes.h"
@@ -629,6 +630,7 @@ qi_spill_evidence_show(void)
     const QiV2SnapshotEvent *event;
     const QiSpillEvidence *spill;
     char incarnation[QI_SNAPSHOT_INCARNATION_BYTES * 2 + 1] = "";
+    char threshold[DOUBLE_SHORTEST_DECIMAL_LEN] = "unknown";
     int written;
 
     qi_snapshot_initialize();
@@ -652,16 +654,18 @@ qi_spill_evidence_show(void)
         event->candidate.token.session_user != GetSessionUserId())
         return "v=1;s=withheld";
     spill = &event->candidate.spill;
+    if (spill->threshold > 0.0)
+        double_to_shortest_decimal_buf(spill->threshold, threshold);
     written = snprintf(qi_spill_evidence_render_buffer,
         sizeof(qi_spill_evidence_render_buffer),
         "v=1;s=complete;cid=%s;g=" UINT64_FORMAT ";e=" UINT64_FORMAT
         ";state=%s;reason=%s;shape=%s;estimated_bytes=" UINT64_FORMAT
         ";unadjusted_bytes=" UINT64_FORMAT
-        ";budget_bytes=" UINT64_FORMAT,
+        ";budget_bytes=" UINT64_FORMAT ";threshold=%s",
         incarnation, event->candidate.token.generation, event->event_sequence,
         qi_spill_state_name(spill->state), qi_spill_reason_name(spill->reason),
         qi_spill_shape_name(spill->shape), spill->estimated_bytes,
-        spill->unadjusted_bytes, spill->budget_bytes);
+        spill->unadjusted_bytes, spill->budget_bytes, threshold);
     if (written < 0 || (Size) written >= sizeof(qi_spill_evidence_render_buffer))
         return "v=1;s=invalid";
     return qi_spill_evidence_render_buffer;
