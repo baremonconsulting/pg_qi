@@ -265,6 +265,7 @@ qi_spill_observe(const PlannedStmt *stmt)
     uint64 per_row = 0;
     uint64 rows;
     uint64 bytes;
+    unsigned int twice_threshold;
     bool grouped = false;
     int depth;
     int memory_mib;
@@ -357,8 +358,26 @@ qi_spill_observe(const PlannedStmt *stmt)
         evidence.reason = QI_SPILL_INVALID_ESTIMATE;
         return evidence;
     }
-    evidence.estimated_bytes = bytes;
-    if (bytes >= evidence.budget_bytes)
+    /* Represent the shape thresholds in halves to keep the comparison exact. */
+    switch (evidence.shape)
+    {
+        case QI_SPILL_HASH_AGGREGATE:
+            twice_threshold = 8;
+            break;
+        case QI_SPILL_DISTINCT:
+            twice_threshold = 11;
+            break;
+        case QI_SPILL_SORT:
+            twice_threshold = 5;
+            break;
+        default:
+            return evidence;
+    }
+    evidence.unadjusted_bytes = bytes;
+    /* Divide before doubling so even the largest estimate fits in uint64. */
+    evidence.estimated_bytes = (bytes / twice_threshold) * 2 +
+        (bytes % twice_threshold) * 2 / twice_threshold;
+    if (evidence.estimated_bytes >= evidence.budget_bytes)
     {
         evidence.state = QI_SPILL_LIKELY;
         evidence.reason = QI_SPILL_RESOURCES_UNVERIFIED;

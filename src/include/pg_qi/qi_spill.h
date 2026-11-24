@@ -43,6 +43,7 @@ typedef struct QiSpillEvidence
     QiSpillState state;
     QiSpillReason reason;
     QiSpillShape shape;
+    uint64 unadjusted_bytes;
     uint64 estimated_bytes;
     uint64 budget_bytes;
 } QiSpillEvidence;

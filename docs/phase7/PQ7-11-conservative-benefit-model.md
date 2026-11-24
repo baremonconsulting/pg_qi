@@ -84,11 +84,17 @@ estimate and the catalogue's row count can be stale.
 
 A positive `duckdb.memory_limit` provides the comparison budget, in MiB
 on the tested provider. An automatic memory limit or thread count makes the
-budget unknown. A value at or above the budget records likely spill. The
-benefit model then requires evidence of DuckDB's filesystem access and
-available space. The planner has neither proof, so it records
-`spill_resources_unverified`. An unsupported estimate records
-`spill_estimate_unknown`. An estimate below the configured budget leaves
+budget unknown.
+
+The diagnostic reports the original sizing estimate in `unadjusted_bytes`.
+It divides that value by 4 for grouped counts, 5.5 for DISTINCT and 2.5 for
+sorts, then records the result rounded down to a whole byte in
+`estimated_bytes`. These shape-specific thresholds come from calibration.
+A calibrated estimate at or above the budget records likely spill. The
+benefit model then requires evidence of filesystem access and available
+space, so the planner records `spill_resources_unverified` while those
+facts are missing. An unsupported estimate records
+`spill_estimate_unknown`. A calibrated estimate below the budget leaves
 the existing statistics, profile and resource gates in place.
 
 ## Non-interference

@@ -30,7 +30,7 @@ INSERT INTO spill_fixture
 SELECT i, i % 14000, md5(i::text) FROM generate_series(1, 20000) AS series(i);
 ANALYZE spill_fixture;
 
-SET LOCAL duckdb.memory_limit = 32;
+SET LOCAL duckdb.memory_limit = 2;
 \o /dev/null
 SELECT key, count(*) FROM spill_fixture GROUP BY key;
 \o :work/group_small.spill
@@ -46,7 +46,7 @@ SELECT key, id FROM spill_fixture ORDER BY key, id;
 \o :work/sort_small.spill
 SHOW pg_qi.spill_evidence;
 
-SET LOCAL duckdb.memory_limit = 2;
+SET LOCAL duckdb.memory_limit = 1;
 \o /dev/null
 SELECT key, count(*) FROM spill_fixture GROUP BY key;
 \o :work/group_large.spill
@@ -128,18 +128,22 @@ def require(values, **expected):
             raise SystemExit(f"Expected {field}={wanted}, got {values}")
 
 
-for case, shape in (
-    ("group", "hash_aggregate"),
-    ("distinct", "distinct"),
-    ("sort", "sort"),
+for case, shape, twice_threshold in (
+    ("group", "hash_aggregate", 8),
+    ("distinct", "distinct", 11),
+    ("sort", "sort", 5),
 ):
     fits = read(f"{case}_small.spill")
     pressure = read(f"{case}_large.spill")
-    require(fits, s="complete", state="within_budget", shape=shape, budget_bytes="33554432")
-    require(pressure, s="complete", state="likely_spill", shape=shape, budget_bytes="2097152")
-    assert int(fits["estimated_bytes"]) == int(pressure["estimated_bytes"])
-    assert int(pressure["budget_bytes"]) <= int(pressure["estimated_bytes"]) < int(fits["budget_bytes"])
-    print(f"{case} expected bytes {fits['estimated_bytes']}, spill risk rises under the smaller budget")
+    require(fits, s="complete", state="within_budget", shape=shape, budget_bytes="2097152")
+    require(pressure, s="complete", state="likely_spill", shape=shape, budget_bytes="1048576")
+    unadjusted = int(fits["unadjusted_bytes"])
+    estimated = int(fits["estimated_bytes"])
+    assert unadjusted == int(pressure["unadjusted_bytes"])
+    assert estimated == int(pressure["estimated_bytes"])
+    assert estimated == unadjusted * 2 // twice_threshold
+    assert int(pressure["budget_bytes"]) <= estimated < int(fits["budget_bytes"]) <= unadjusted
+    print(f"{case} estimated bytes {estimated}, spill risk rises under the smaller budget")
 
 pressure = read("sort_large.spill")
 benefit = read("sort_large.benefit")

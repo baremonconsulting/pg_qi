@@ -656,11 +656,12 @@ qi_spill_evidence_show(void)
         sizeof(qi_spill_evidence_render_buffer),
         "v=1;s=complete;cid=%s;g=" UINT64_FORMAT ";e=" UINT64_FORMAT
         ";state=%s;reason=%s;shape=%s;estimated_bytes=" UINT64_FORMAT
+        ";unadjusted_bytes=" UINT64_FORMAT
         ";budget_bytes=" UINT64_FORMAT,
         incarnation, event->candidate.token.generation, event->event_sequence,
         qi_spill_state_name(spill->state), qi_spill_reason_name(spill->reason),
         qi_spill_shape_name(spill->shape), spill->estimated_bytes,
-        spill->budget_bytes);
+        spill->unadjusted_bytes, spill->budget_bytes);
     if (written < 0 || (Size) written >= sizeof(qi_spill_evidence_render_buffer))
         return "v=1;s=invalid";
     return qi_spill_evidence_render_buffer;
