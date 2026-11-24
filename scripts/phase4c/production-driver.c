@@ -139,7 +139,8 @@ static void parameter_case(PGconn *c, FILE *out, const char *case_id,
     PQclear(r);
     expect_show(c, "pg_qi.shadow_request_applied", "off");
     snapshot(c, out, case_id);
-    case_pass(out, case_id, "parameterized extended protocol remained conservative");
+    case_pass(out, case_id,
+              "the extended-protocol query with parameters remained conservative");
     { char deallocate[96]; snprintf(deallocate, sizeof(deallocate), "DEALLOCATE %s", case_id); command(c, deallocate); }
 }
 

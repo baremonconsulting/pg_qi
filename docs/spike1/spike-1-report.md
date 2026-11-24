@@ -102,7 +102,7 @@ load or capacity benchmark.
 
 ## 5. Benchmark result
 
-The optimized non-assert matrix completed all **36/36 combinations**, covering
+The optimised non-assert matrix completed all **36/36 combinations**, covering
 PostgreSQL 16.15, 17.11, and 18.6; four modes; and simple, forced-custom, and
 forced-generic paths. It executed 18,000 measured requests with zero failures.
 
@@ -144,7 +144,7 @@ Spike 1 explicitly **accepts decision-at-plan-time semantics for the intended
 4. a one-shot token already consumed during original plan creation is not
    automatically re-armed for invalidation.
 
-This behavior is consistent with PostgreSQL plan caching and with an Observe /
+This behaviour is consistent with PostgreSQL plan caching and with an Observe /
 pre-plan routing architecture. It must be documented for operators. If a future
 requirement demands a fresh policy decision for every execution, that is a
 different architecture and should be evaluated as a separate escalation toward

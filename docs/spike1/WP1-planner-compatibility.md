@@ -1,75 +1,56 @@
-# WP1 — planner compatibility shim
+# WP1 planner compatibility
 
-Datum: 2026-10-14
+14 October 2026
 
-## Cíl
+PostgreSQL 16–18 passed the build with warnings treated as errors, a preload
+smoke test and the existing regression test. The compatibility header also
+covers the new planner signature in the PostgreSQL 19 development branch.
 
-Izolovat rozdíl planner API mezi vydanými PostgreSQL 16–18 a vývojovou řadou
-19+ do jediného headeru a ověřit vydanou matici skutečnou kompilací s warningy
-jako chybami.
+## Implementation
 
-## Implementace
+`src/include/pg_qi/planner_compat.h` selects the signature with
+`PG_VERSION_NUM >= 190000`. The header defines four names.
 
-Přidán `src/include/pg_qi/planner_compat.h`, který vlastní:
+- `qi_planner_fn_type`
+- `QI_PLANNER_PROTO(fn)`
+- `QI_CALL_PLANNER(fn, ...)`, which takes the function being called explicitly
+- `QI_CURRENT_EXPLAIN_STATE`
 
-- `qi_planner_fn_type`;
-- `QI_PLANNER_PROTO(fn)`;
-- `QI_CALL_PLANNER(fn, ...)` s explicitním callee;
-- `QI_CURRENT_EXPLAIN_STATE`;
-- jedinou verzi podmínky `PG_VERSION_NUM >= 190000`.
+`src/pg_qi.c` uses the same macro to call the saved downstream hook and
+`standard_planner`. The affected declaration uses PostgreSQL's own
+`ExplainState` on the development branch. The PostgreSQL 16–18 version omits
+the local `es` argument. The explicit function parameter also supports a
+future synthetic recursion fixture. The hook chain and `_PG_fini()` retain
+their existing semantics.
 
-`src/pg_qi.c` již nezná konkrétní počet argumentů planneru. Stejné makro volá
-jak uložený downstream hook, tak `standard_planner`.
+## Verification
 
-## Bezpečnostní a review požadavky
-
-- Není definován falešný `ExplainState`.
-- PostgreSQL 16–18 neodkazují na lokální proměnnou `es`.
-- Callee je parametr makra; shim je použitelný i pro budoucí syntetickou rekurzi.
-- Hook chain a `_PG_fini()` zůstávají zachované.
-- `-Werror` je zapnutý pro celý extension build nad výchozí sadou warningů
-  poskytovanou PGXS. `-Wextra` se záměrně nepřidává globálně: PostgreSQL 16 má
-  ve veřejném inline headeru nepoužitý parametr a cizí warning by jinak
-  znemožnil čistý extension build.
-
-## Ověřovací matice
-
-| Verze | `pg_config` | Build | `make installcheck` | Výsledek |
+| PostgreSQL | `pg_config` | Build | `make installcheck` | Result |
 |---|---|---|---|---|
-| PostgreSQL 16 | 16.15 | PASS (`-Werror`) | 1/1 PASS | PASS |
-| PostgreSQL 17 | 17.11 | PASS (`-Werror`) | 1/1 PASS | PASS |
-| PostgreSQL 18 | 18.6 | PASS (`-Werror`) | 1/1 PASS | PASS |
+| 16 | 16.15 | PASS (`-Werror`) | 1/1 PASS | PASS |
+| 17 | 17.11 | PASS (`-Werror`) | 1/1 PASS | PASS |
+| 18 | 18.6 | PASS (`-Werror`) | 1/1 PASS | PASS |
 
-Každá verze byla ověřena v novém izolovaném clusteru s
-`shared_preload_libraries = 'pg_qi'`. Samostatný smoke test potvrdil
-`qi.is_preloaded() = true` a `pg_qi.enabled = on`; potom prošel původní
-transparentní regresní test.
+Each test used a fresh cluster with `shared_preload_libraries = 'pg_qi'`. The
+smoke test confirmed `qi.is_preloaded() = true` and `pg_qi.enabled = on` before
+the regression ran. The required pre-GA runtime matrix covered PostgreSQL
+16–18.
 
-## Reprodukovatelnost
+## Reproduce the matrix
 
-Lokální matici spouští `scripts/spike1/wp1-matrix.sh`. Výchozí instalace jsou
-v `/home/adam/.local/pgsql/{16,17,18}` a výstupy vznikají v
+Run `scripts/spike1/wp1-matrix.sh`. The default PostgreSQL installation paths
+are under `$HOME/.local/pgsql/{16,17,18}`. The script writes results to
 `artifacts/spike1/wp1`.
 
-PostgreSQL bylo sestaveno z oficiálních release zdrojů. Na tomto hostu nebyly
-systémově dostupné `bison`, `flex` a `m4`; balíčky byly proto pouze rozbaleny
-do uživatelského adresáře `/home/adam/.local/pg-build-tools`, bez `sudo` a bez
-změny systémové instalace.
+The recorded installations were built from the official PostgreSQL release
+sources. The host lacked system installations of `bison`, `flex` and `m4`.
+The test used copies extracted under the user's `.local/pg-build-tools`.
+The CI definition adds library preload to the existing 16–18 matrix.
+GitHub Actions was not run for this local-only result.
 
-CI už obsahovalo matici 16/17/18. WP1 do něj přidává preload knihovny před
-startem serveru; `Makefile` vynucuje `-Werror`. Cloudový GitHub Actions běh
-nebyl spuštěn, protože změny nebyly pushnuty.
+## Compiler warning policy
 
-## Nález při implementaci
-
-První pokus použil globální `-Wall -Wextra -Werror`. PostgreSQL 16 pak selhal
-na nepoužitém parametru ve vlastním veřejném inline headeru
-`storage/bufpage.h`. Finální profil proto používá PGXS warning set a přidává
-`-Werror`, což drží kód pg_qi přísný a současně neeskaluje nové warningy
-cizích serverových headerů.
-
-## Verdikt
-
-**WP1: PASS.** Povinná matice PostgreSQL 16–18 prošla buildem, preload smoke
-testem i původním regresním testem. Větev pro PostgreSQL 19 zůstává připravená,
-ale podle implementačního plánu není PG19 součástí povinné matice před GA.
+A global `-Wall -Wextra -Werror` build failed on an unused parameter in the
+PostgreSQL 16 public inline header `storage/bufpage.h`. The final Makefile
+adds `-Werror` to the PGXS warning set, which keeps the extension build strict
+and avoids promoting that upstream warning to an error.

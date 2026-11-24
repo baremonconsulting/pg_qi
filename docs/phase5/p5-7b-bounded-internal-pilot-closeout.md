@@ -19,7 +19,7 @@ Before the first window, the bundle must bind all of the following:
   accepted validation byte-for-byte at the document level;
 - one ordered window for every approved concurrency level, starting at level
   one without gaps;
-- the exact per-level authorization and a unique private evidence directory;
+- the exact per-level authorisation and a unique private evidence directory;
 - an external, identity-pinned append-only attempt ledger controlled by a
   records custodian independent from the pilot operator;
 - the retention owner and, when pending, its due date.
@@ -41,7 +41,7 @@ For every approved window, in order:
    the runner verifies the attempt file and exclusively appends a single-use
    dispatch marker. It seals both digests and the dispatch time into its report.
    Closeout requires the window start to equal that recorded dispatch time.
-3. Confirm the same current operation approval and exact level authorization.
+3. Confirm the same current operation approval and exact level authorisation.
 4. Run that single frozen level; never escalate automatically.
 5. Stop admission after the window, including failed and partial windows.
 6. Retire all owned sessions and cached plans.

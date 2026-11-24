@@ -1,78 +1,75 @@
-# Spike 1 — přípravná rozhodnutí a otevřené otázky
+# Spike 1 preparation
 
-Datum: 2026-10-14
+14 October 2026
 
-## Výchozí stav
+Start on PostgreSQL 17 and verify the spike on PostgreSQL 16, 17 and 18. Use
+`spike/1-delegation` in `baremonconsulting/pg_qi`, from `main` at
+`d3529d4e6a7cd71657bbf8279c533a3c5a81e2df`. Pin pg_duckdb to
+`ee38d3b540ecea1d93683ba99bdcec5632a21eaf`.
 
-- Repozitář: `https://github.com/baremonconsulting/pg_qi.git`
-- Výchozí větev a commit: `main` / `d3529d4e6a7cd71657bbf8279c533a3c5a81e2df`
-- Pracovní větev: `spike/1-delegation`
-- Primární vývojová verze: PostgreSQL 17
-- Povinná ověřovací matice: PostgreSQL 16, 17 a 18
-- Pin pg_duckdb: `ee38d3b540ecea1d93683ba99bdcec5632a21eaf`
+## Which source to follow
 
-## Pořadí autority podkladů
+If the documents disagree, use the first applicable source in this order.
 
-Při rozporu se použije toto pořadí:
+1. The pinned pg_duckdb code and the matching PostgreSQL branch.
+2. *Rigorous Review of the Spike 1 Delegation Mechanism Implementation*.
+3. The consolidated v10 specification with the review corrections.
+4. The Czech v8 implementation guide and earlier technical reviews.
 
-1. zdrojový kód pinované verze pg_duckdb a zdrojový kód příslušné větve PostgreSQL;
-2. `Rigorous Review of the Spike 1 Delegation Mechanism Implementation`;
-3. konsolidovaná specifikace v10 po opravách z rigorózního review;
-4. český implementační postup v8 a starší technická review.
+## Decisions before WP0 and WP1
 
-## Rozhodnutí nutná před WP0/WP1
+### R1 — Planner hook signature
 
-### R1 — nepravý typ ExplainState
+Use PostgreSQL's own `ExplainState` type where the hook takes that argument.
+The PostgreSQL 16–18 hook has four arguments. At the recorded PostgreSQL
+`master` revision, it takes an additional argument of type `ExplainState *`.
 
-Rozhodnutí: `typedef void ExplainState;` se nikde nepoužije. PostgreSQL 16–18 ho v
-podpisu planner hooku nepotřebují; PostgreSQL master má skutečný veřejný typ.
+### R2 — Operations that can raise an error
 
-### R2 — failpointy mimo PG_TRY
+Once the delegation frame is on the stack, put every operation that can raise
+`ERROR`, including failpoints, inside the corresponding `PG_TRY`. This
+addresses the blocking issue in v10. The spike uses the existing frame
+ownership model. Ownership by `SubTransactionId` and transaction and
+subtransaction callbacks are outside its scope.
 
-Rozhodnutí pro Spike 1: po vytvoření rámce budou všechny operace schopné vyvolat
-ERROR, včetně failpointů, uvnitř odpovídajícího `PG_TRY`. Neimplementuje se zatím
-složitější vlastnictví rámců podle `SubTransactionId` ani dvojice xact/subxact
-callbacků. Tím se odstraňuje blokující chyba specifikace v10 a drží se minimální
-rozsah experimentu.
+### R3 — Recovery variables
 
-### R3 — volatile disciplína
+Declare a local variable `volatile` if it changes in `PG_TRY` and recovery
+reads it in `PG_CATCH`. In particular, a future `qi_try_local_subxact()` will
+use `volatile bool ok`. Keep backend-local static state under its existing
+declaration rules.
 
-Rozhodnutí: lokální proměnná změněná v `PG_TRY` a použitá po přechodu do
-`PG_CATCH` bude `volatile`. Zejména budoucí `qi_try_local_subxact()` použije
-`volatile bool ok`. Backendový statický stav se `volatile` neoznačuje.
+### R4 — Publishing changes
 
-### R4 — publikace změn
+Work on the local branch. A GitHub push or pull request requires a separate
+instruction.
 
-Rozhodnutí: práce probíhá na lokální větvi. Bez samostatného pokynu se nic
-nepushuje na GitHub a nevytváří se pull request.
+### R5 — Compatibility evidence
 
-### R5 — důkaz kompatibility
+Read the source to establish where the planner API changes. Verify that
+boundary by building against the PostgreSQL 16–18 headers in CI.
 
-Rozhodnutí: verze API se neurčuje pokusem ani odhadem. Zdrojový recon stanoví
-hranici; CI/compile matrix ji pouze ověřuje proti skutečným hlavičkám PG 16–18.
+## Questions for later work packages
 
-## Otevřené otázky, které neblokují WP0/WP1
+- S4 needs a reproducible downstream planner error or a clearly identified
+  test shim. Choose one before implementing S4.
+- S6b-2 needs a known delegatable query. The test must prove delegation or
+  record the specific reason it was declined.
+- S8 uses the benchmark report to decide whether to accept planner-time
+  decisions for generic plan reuse or move to option B.
+- Keep the first upstream API for option B small. Consider it if option A
+  fails.
+- Prepare the PostgreSQL 19 compatibility shim. The required runtime matrix
+  for this spike covers PostgreSQL 16–18.
 
-- S4: zvolit deterministickou downstream planner chybu nebo transparentně
-  označený testovací shim. Řeší se před implementací S4.
-- S6b-2: přesný oracle musí u známého delegovatelného dotazu prokázat delegaci,
-  nebo zachytit konkrétní důvod odmítnutí. Řeší se při testovací matici.
-- S8: zda produkt přijme rozhodnutí pouze při plánování pro generic plan reuse,
-  nebo přejde k variantě B. Rozhoduje závěrečný report podle měření.
-- Varianta B: první upstream API má zůstat minimální; řeší se jen pokud varianta
-  A selže.
-- PostgreSQL 19: compatibility shim se připraví, ale PG19 není součástí povinné
-  běhové matice Spike 1.
+## Build prerequisites
 
-## Přípravné technické zjištění
+The initial host had GCC and GNU Make. Install `pg_config` and the
+PostgreSQL 16, 17 and 18 server development headers, then run the compile matrix
+before closing WP1.
 
-Na výchozím serveru nebyl nainstalován `pg_config` ani PostgreSQL development
-headers. Před uzavřením WP1 je proto nutné připravit hlavičky PG 16, 17 a 18 a
-spustit skutečnou compile matrix. Samotný překladač GCC a GNU Make jsou dostupné.
+## WP0 readiness criteria
 
-## Definition of Ready pro WP0
-
-- pinované commity jsou dostupné;
-- zdrojové soubory lze nezávisle prohledat;
-- R1–R5 jsou uzavřené;
-- otevřené otázky mají vlastní pozdější bránu a nejsou vydávány za vyřešené.
+- The pinned commits are available and the source can be inspected.
+- R1–R5 have recorded decisions.
+- Each open question has a later point at which it must be resolved.

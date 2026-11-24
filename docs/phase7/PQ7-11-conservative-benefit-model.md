@@ -65,4 +65,4 @@ those bounds, so this diagnostic is not a coefficient-secrecy boundary.
 
 The benefit state is supplied to the existing V2 decision contract with the
 activation barrier closed. No force state, plan pointer, execution engine,
-resource setting or V1 behavior is changed.
+resource setting or V1 behaviour is changed.

@@ -369,8 +369,8 @@ qi_semantic_observe_query(const Query *query, const QiShadowP0Facts *p0_facts)
         result.blockers |= QI_SEMANTIC_BLOCKER_SERIALIZABLE;
     if (TransactionIdIsValid(GetTopTransactionIdIfAny()))
         result.blockers |= QI_SEMANTIC_BLOCKER_OWN_XID;
-    /* The qualified provider does not accept FROM ONLY. Check the pre-plan
-     * RTE bit, not the query string or a normalized post-plan RTE. */
+    /* The qualified provider rejects FROM ONLY. Read the inheritance bit
+     * from the analysed RTE before the planner can normalise it. */
     result.count_scope = result.profile == QI_SEMANTIC_PROFILE_COUNT_STAR &&
         rte != NULL && rte->rtekind == RTE_RELATION && rte->inh;
     return result;

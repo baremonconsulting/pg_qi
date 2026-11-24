@@ -8,7 +8,7 @@ decision-only: it does not open the activation barrier or alter routing.
 
 The planner prepares an unpublished candidate. The lifecycle layer records a
 bounded SHA-256 digest of plan topology, planner estimates and statement
-metadata. It visits at most 8192 plan nodes and never serializes expression
+metadata. It visits at most 8192 plan nodes and never serialises expression
 values, SQL text or parameter contents. The fixed eight-entry backend-local
 registry retains only the digest. Each newly planned candidate retires older
 unbound candidates, preventing
@@ -32,7 +32,7 @@ snapshot commit also rejects candidates without the proven
 
 Pending candidates are cleared after a bound executor ends without running,
 on transaction abort or completion, on subtransaction abort, `DISCARD ALL`,
-`RESET ALL`, role changes and session-authorization changes. The registry contains no SQL
+`RESET ALL`, role changes and session-authorisation changes. The registry contains no SQL
 text or parameter values and is never exported.
 
 ## Prepared statements and cached plans

@@ -6,7 +6,7 @@ Status: frozen contract for decision-only shadow development. This document does
 
 V2 records three independent gates. Each gate is one of `NOT_EVALUATED`, `PASS`, `VETO`, or `UNKNOWN`:
 
-- `eligible`: the query is inside the bounded syntactic and catalog capability;
+- `eligible`: the query is inside the bounded syntactic and catalogue capability;
 - `semantically_safe`: exact PostgreSQL semantics are certified for the complete environment identity;
 - `beneficial`: the conservative model has sufficient evidence that delegation would be useful.
 
@@ -47,9 +47,15 @@ The table uses `*` for any state not selected by an earlier row.
 | PASS | PASS | PASS | exact supported versions | CLOSED | INSUFFICIENT_EVIDENCE |
 | PASS | PASS | PASS | exact supported versions | OPEN | WOULD_DELEGATE |
 
-Any serialized combination that contradicts these rules is invalid and must be rejected. A veto has priority over unknown or not-evaluated states. If several gates veto, reason precedence is eligibility, semantic safety, then benefit. Without a veto, unknown reason precedence is eligibility, semantic safety, then benefit; any remaining not-evaluated state precedes version and barrier evaluation. An unrecognized reason code is retained only with `INSUFFICIENT_EVIDENCE`, only when no gate vetoes, and never when the known fields otherwise justify `WOULD_DELEGATE`.
+Reject records that disagree with the table. Check for a veto in eligibility
+first, then semantic safety, then benefit. If there is no veto, choose the
+first unknown state in the same order. Check any remaining `NOT_EVALUATED`
+state before evaluating the versions and barrier.
 
-Unknown reason-code preservation applies only to records that still declare contract version 2. A future producer must not attach an unknown reason to a known veto or positive recommendation and expect a V2 reader to reinterpret it; such a record is invalid and requires an explicit contract/registry revision.
+Keep an unrecognised reason code only for an `INSUFFICIENT_EVIDENCE` record
+that declares contract version 2, has no veto and contains insufficient known
+evidence for `WOULD_DELEGATE`. A future producer needs a contract or registry
+revision to attach a new reason to a veto or a positive recommendation.
 
 ## Stable reason-code registry
 

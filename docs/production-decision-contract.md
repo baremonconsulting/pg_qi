@@ -90,7 +90,7 @@ that can affect execution equivalence. At minimum this includes:
 - volatile or side-effecting expressions; and
 - bound, unbound and parameter-dependent values.
 
-Absence of an explicit safe rule is an ineligible result. A catalog lookup
+Absence of an explicit safe rule is an ineligible result. A catalogue lookup
 failure, unknown AST node or unsupported provider state is also ineligible.
 
 ## Prepared and generic plans

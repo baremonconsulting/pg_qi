@@ -3,7 +3,7 @@
 `shadow_p0` contains an observation-only capability recognizer. It does not
 request delegation and does not open the V2 activation barrier.
 
-## Recognized capabilities
+## Recognised capabilities
 
 The recognizer admits exactly one aggregate target over exactly one local,
 permanent user heap:
@@ -16,7 +16,7 @@ permanent user heap:
 | `max_int4` | `max(int4_column)` |
 
 The argument in the typed forms must be a direct base-table column. The
-aggregate and its signature are identified by PostgreSQL catalog OIDs, not by
+aggregate and its signature are identified by PostgreSQL catalogue OIDs, not by
 names.
 
 The accepted query has no predicate, join, grouping, CTE, subquery, set
@@ -46,15 +46,15 @@ ceilings; structurally unsupported shapes may abstain before a resource limit.
 The test-only contract also runs a deterministic corpus of 2,112
 well-allocated NodeTag, RTE-kind and aggregate-argument mutations. Every
 mutation must abstain without a generic walker dispatch or observer-origin
-ERROR. Focused catalog fixtures additionally cover missing relation and
-attribute OIDs, RTE/catalog relkind disagreement and non-heap/custom access
+ERROR. Focused catalogue fixtures additionally cover missing relation and
+attribute OIDs, RTE/catalogue relkind disagreement and non-heap/custom access
 methods without requiring optional contrib extensions in the CI image.
 
 The internal diagnostics are:
 
 - `pg_qi.shadow_p0_facts_state`: `bounded` or `unknown`;
 - `pg_qi.shadow_p0_facts_reason`: bounded reason code;
-- `pg_qi.shadow_p0_capability`: recognized value or `unknown`.
+- `pg_qi.shadow_p0_capability`: recognised value or `unknown`.
 
 The atomic V2 snapshot retains its existing `p0` and `p0_reason` wire fields.
 Capability recognition leaves eligibility, semantic-safety and benefit gates

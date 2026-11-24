@@ -64,7 +64,7 @@ link. It cannot and does not claim to have inspected hidden raw evidence.
   special files, traversal, oversized/deep values and invalid enums are
   rejected.
 - Credential-like content is rejected even in private raw/debug artifacts.
-  Recognized ZIP, tar, gzip, bzip2, xz, 7z, RAR and zstd containers are
+  Recognised ZIP, tar, gzip, bzip2, xz, 7z, RAR and zstd containers are
   rejected rather than inspected incompletely; evidence inputs must be plain.
 - A destination that already exists is never reused.
 - Export payloads are written with exclusive creation and fsynced before the

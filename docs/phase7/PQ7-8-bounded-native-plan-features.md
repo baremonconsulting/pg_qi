@@ -25,14 +25,14 @@ mismatches, and invalid estimates produce an explicit unknown result.
 
 ## Recorded facts
 
-For a recognized spine, pg_qi records:
+For a recognised spine, pg_qi records:
 
 - aggregate and scan startup cost, total cost, row estimate, and width;
-- relation OID and post-planning catalog observations
+- relation OID and post-planning catalogue observations
   `catalog_relpages`/`catalog_reltuples` (not a claim about the exact values
   consumed by the planner);
 - parallel-safe, parallel-aware, parallel-mode, worker, and limit facts;
-- the recognized spine and bounded traversal counters.
+- the recognised spine and bounded traversal counters.
 
 A validity mask separates an unavailable value from a legitimate zero.
 Unknown `reltuples` is not converted to zero.
@@ -51,14 +51,14 @@ partial replacement. The diagnostic record is separate from the stable V2
 decision wire format.
 
 The state `bounded` only means that the native plan shape and values were
-recognized. It is not a benefit decision and cannot activate delegation.
+recognised. It is not a benefit decision and cannot activate delegation.
 
 ### Diagnostic record
 
 The semicolon-delimited record is versioned with `v=1`. A complete record
 contains the atomic identity keys `cid`, `g`, and `e`, followed by `state`,
-`reason`, `spine`, `known`, the recognized estimates and catalog observations,
-the planner's parallel flags, and `nodes`/`depth`. For the first recognized
+`reason`, `spine`, `known`, the recognised estimates and catalogue observations,
+the planner's parallel flags, and `nodes`/`depth`. For the first recognised
 spine, `parallel_aware=false`, `workers=0`, and `has_limit=false` are known
 facts. Numeric fields absent from the validity mask are rendered as `unknown`.
 
@@ -70,6 +70,6 @@ against `pg_qi.decision_v2` before combining the two records.
 ## Verification
 
 `tests/phase7/verify_plan_features.sh` compares the recorded values with
-`EXPLAIN (FORMAT JSON)` and `pg_class`, verifies an index-optimized negative
-case, checks authorization, and proves that a failed statement preserves the
+`EXPLAIN (FORMAT JSON)` and `pg_class`, verifies an index-optimised negative
+case, checks authorisation, and proves that a failed statement preserves the
 previous completed record. CI runs this check on PostgreSQL 16–19.

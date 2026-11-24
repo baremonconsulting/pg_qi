@@ -360,7 +360,7 @@ done:
         {
             /*
              * Shadow observation is independent of the historical V1
-             * allow-list.  This ordering makes limits and catalog misses
+             * allow-list.  This ordering makes limits and catalogue misses
              * observable even when V1 correctly rejects the query.
              */
             if (pg_qi_routing_mode == QI_ROUTING_SHADOW_P0)

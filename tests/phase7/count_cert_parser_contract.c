@@ -50,7 +50,7 @@ main(void)
     assert_rejected(record, sizeof(record));
     assert_rejected(record, length + 1);
     /* The final decimal field can form a different valid complete record if
-     * truncated exactly at a digit. Its authorization digest must therefore
+     * truncated exactly at a digit. Its authorisation digest must therefore
      * be checked separately, even if the parser accepts it. This fixture
      * makes those abbreviated times strictly earlier than issue. */
     for (i = 0; i < length; i++)

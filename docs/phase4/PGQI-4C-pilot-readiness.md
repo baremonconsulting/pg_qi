@@ -69,4 +69,4 @@ contradiction. A poisoned backend must be disconnected; it is not repaired in
 place.
 
 Completion of automated evidence leaves the branch **Awaiting Human Review**.
-It does not authorize merge, deployment or persistent allow-list enablement.
+It does not authorise merge, deployment or persistent allow-list enablement.

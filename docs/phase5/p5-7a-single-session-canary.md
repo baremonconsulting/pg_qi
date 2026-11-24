@@ -1,23 +1,23 @@
 # P5-7A single-session internal canary
 
 This gate validates one operator-executed internal canary. It does not execute
-SQL, grant `CANARY_ACCEPTED`, authorize production use, or authorize a customer
+SQL, grant `CANARY_ACCEPTED`, authorise production use, or authorise a customer
 pilot. The operator remains responsible for the live session and the independent
 human decision.
 
 ## Required execution order
 
 1. Freeze `canary-plan.json` under a fresh, current `OPERATION_GO`. The plan must
-   bind the measurement plan, level-one authorization, exact positive SQL bytes,
+   bind the measurement plan, level-one authorisation, exact positive SQL bytes,
    expected fresh planning tuple, one direct session and no pool.
 2. In that one dedicated session, prove ambient force-off first, execute the one
    approved positive literal, capture its fresh same-session planning snapshot,
    compare its complete spool with the approved oracle, and execute the
-   unsupported-query and parameterized-query negative controls. Do not retry,
+   unsupported-query and parameterised-query negative controls. Do not retry,
    reconnect, fall back, or replace the SQL after the run starts.
 3. Preserve the truthful result in `canary-run.json`, including failures and
    incomplete runs. A verified plan is not evidence of successful execution.
-4. Retire the owned backend, verify its absence from an authorized observer,
+4. Retire the owned backend, verify its absence from an authorised observer,
    then open a different fresh connection and prove mode `off`, force execution
    `off`, and PostgreSQL execution. Seal that evidence in
    `canary-retirement.json`.
@@ -36,7 +36,7 @@ human decision.
    consumes the `(scope, OPERATION_GO)` identity there. `canary_id` remains in
    the durable record for attribution but cannot create another attempt under
    the same GO. Moving or
-   copying the bundle therefore cannot authorize a retry. The command also
+   copying the bundle therefore cannot authorise a retry. The command also
    exclusively creates `canary-outcome.json` in the bundle on both
    PASS and refusal, then exclusively records its digest beside the consumed
    marker in the external ledger. Closeout requires that immutable ledger
@@ -54,6 +54,6 @@ partial execution, unverified backend exit, or non-default reconnect refuses the
 gate. Preserve the failed evidence and stop. Never turn a failed run into a new
 attempt under the same canary identity or GO.
 
-The canary does not authorize customer access, production routing, publication,
+The canary does not authorise customer access, production routing, publication,
 persistent settings, a broader SQL subset, retry, fallback, or a performance or
 value claim.

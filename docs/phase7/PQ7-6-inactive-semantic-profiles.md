@@ -13,7 +13,7 @@ match always records these unresolved conditions internally:
 - the loaded provider build identity has not been verified;
 - snapshot equivalence has not been proved.
 
-Catalog, permission, role, row-security, isolation, and assigned-transaction
+Catalogue, permission, role, row-security, isolation, and assigned-transaction
 identity checks can add further blockers. The observation does not execute
 SQL, assign a transaction ID, call user code, or request delegation.
 
@@ -32,12 +32,12 @@ COUNT variants return zero on an empty input and report bigint overflow.
 non-null expression values.
 MIN/MAX return a typed null for an empty or all-null input and preserve the
 `int4` domain without an arithmetic overflow rule. The MIN/MAX sort operators
-are aggregate catalog metadata; they do not admit operator expressions.
+are aggregate catalogue metadata; they do not admit operator expressions.
 
 `TABLESAMPLE`, including `REPEATABLE`, remains outside these declarations.
 Aggregate-derived `numeric` results also remain outside them because exact
 type and decimal scale are part of the semantic contract. Neither case is
-normalized into an apparently matching result.
+normalised into an apparently matching result.
 
 Promotion requires a separate reviewed change with runtime build-identity
 evidence, snapshot proof, cross-version differential evidence, and an explicit
