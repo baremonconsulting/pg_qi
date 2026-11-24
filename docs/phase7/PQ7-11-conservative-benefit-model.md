@@ -61,6 +61,57 @@ and session-identity checks. It reports the atomic event identity, state,
 reason and derived bounds. Authorised readers may infer calibrated terms from
 those bounds, so this diagnostic is not a coefficient-secrecy boundary.
 
+## Spill estimates in shadow mode
+
+`SHOW pg_qi.spill_evidence` reports the shape, estimated bytes, budget and
+reason for the same private snapshot as `pg_qi.benefit_evidence`. It covers
+fixed-width integer and Boolean values in grouped counts, COUNT(DISTINCT),
+row DISTINCT and sorts over a simple sequential heap scan. Parallel plans,
+additional scans, variable-width keys and unsupported aggregate states yield
+an unknown estimate.
+
+For ungrouped aggregates, the check looks for DISTINCT or ORDER BY inside
+aggregate calls in the outer query.
+
+The estimate uses the larger of the scan's row estimate and the catalogue's
+row estimate. It charges each observed sort or hash stage for those rows.
+For a hash stage it allows 64 bytes of overhead per row, plus the keys and
+aggregate states. A sort allows 32 bytes in addition to the row payload.
+A factor of two leaves room for row growth and duplicated state, with one
+MiB of reserve per configured DuckDB thread. For a top-level sort the
+estimate also allows one materialised result, sized from the estimated
+output rows and projected column widths. These are conservative sizing
+assumptions for the supported shapes. The resulting value is a planning
+estimate and the catalogue's row count can be stale.
+
+A positive `duckdb.memory_limit` provides the comparison budget, in MiB
+on the tested provider. An automatic memory limit or thread count makes the
+budget unknown.
+
+The diagnostic reports the original sizing estimate in `unadjusted_bytes`.
+It divides that value by the configured threshold for the shape and
+records the result in `estimated_bytes`, rounded down to a whole byte and
+capped at the largest representable value. The snapshot records the
+threshold it used.
+
+| Setting | Query shape | Default |
+| --- | --- | ---: |
+| `pg_qi.spill_group_threshold` | Grouped counts | 4 |
+| `pg_qi.spill_distinct_threshold` | DISTINCT | 5.5 |
+| `pg_qi.spill_sort_threshold` | Sorts | 2.5 |
+
+The defaults come from calibration. The settings require positive finite
+numbers. Lower values warn sooner. Set server defaults in PostgreSQL's
+configuration. A superuser or a role with `SET` privilege on the parameter
+can use `SET` for a session or `SET LOCAL` for a transaction.
+
+A calibrated estimate at or above the budget records likely spill. The
+benefit model then requires evidence of filesystem access and available
+space, so the planner records `spill_resources_unverified` while those
+facts are missing. An unsupported estimate records
+`spill_estimate_unknown`. A calibrated estimate below the budget leaves
+the existing statistics, profile and resource gates in place.
+
 ## Non-interference
 
 The benefit state is supplied to the existing V2 decision contract with the

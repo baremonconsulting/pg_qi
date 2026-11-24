@@ -126,6 +126,18 @@ qi_benefit_observe(const QiNativePlanFeatures *features,
     return qi_benefit_model_evaluate(&input);
 }
 
+QiBenefitResult
+qi_benefit_apply_spill(QiBenefitResult benefit, QiSpillEvidence spill)
+{
+    if (spill.state == QI_SPILL_UNKNOWN)
+        return qi_benefit_result(QI_BENEFIT_UNKNOWN,
+                                 QI_BENEFIT_SPILL_ESTIMATE_UNKNOWN);
+    if (spill.state == QI_SPILL_LIKELY)
+        return qi_benefit_result(QI_BENEFIT_UNKNOWN,
+                                 QI_BENEFIT_SPILL_RESOURCES_UNVERIFIED);
+    return benefit;
+}
+
 QiGateState
 qi_benefit_gate_state(const QiBenefitResult *result)
 {

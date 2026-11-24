@@ -7,6 +7,7 @@
 
 #include "access/htup_details.h"
 #include "catalog/pg_authid.h"
+#include "common/shortest_dec.h"
 #include "fmgr.h"
 #include "miscadmin.h"
 #include "nodes/parsenodes.h"
@@ -23,6 +24,7 @@
 #define QI_STATS_CONFIDENCE_RENDER_BYTES 768
 #define QI_PROFILE_EVIDENCE_RENDER_BYTES 512
 #define QI_BENEFIT_EVIDENCE_RENDER_BYTES 512
+#define QI_SPILL_EVIDENCE_RENDER_BYTES 512
 
 typedef struct QiV2SnapshotEvent
 {
@@ -57,6 +59,8 @@ static char qi_profile_evidence_render_buffer[
 static char *qi_benefit_evidence_placeholder = NULL;
 static char qi_benefit_evidence_render_buffer[
     QI_BENEFIT_EVIDENCE_RENDER_BYTES];
+static char *qi_spill_evidence_placeholder = NULL;
+static char qi_spill_evidence_render_buffer[QI_SPILL_EVIDENCE_RENDER_BYTES];
 
 static void
 qi_snapshot_initialize(void)
@@ -620,6 +624,53 @@ qi_benefit_evidence_show(void)
     return qi_benefit_evidence_render_buffer;
 }
 
+static const char *
+qi_spill_evidence_show(void)
+{
+    const QiV2SnapshotEvent *event;
+    const QiSpillEvidence *spill;
+    char incarnation[QI_SNAPSHOT_INCARNATION_BYTES * 2 + 1] = "";
+    char threshold[DOUBLE_SHORTEST_DECIMAL_LEN] = "unknown";
+    int written;
+
+    qi_snapshot_initialize();
+    if (!qi_snapshot_authorized())
+        return "v=1;s=denied";
+    if (qi_snapshot_store.exhausted)
+        return "v=1;s=exhausted";
+    if (!qi_snapshot_store.available)
+        return "v=1;s=unavailable";
+    qi_snapshot_incarnation_hex(incarnation, sizeof(incarnation));
+    if (!qi_snapshot_store.has_event)
+    {
+        snprintf(qi_spill_evidence_render_buffer,
+                 sizeof(qi_spill_evidence_render_buffer),
+                 "v=1;s=none;cid=%s;g=" UINT64_FORMAT ";e=0",
+                 incarnation, qi_snapshot_store.generation);
+        return qi_spill_evidence_render_buffer;
+    }
+    event = &qi_snapshot_store.slots[qi_snapshot_store.active_slot];
+    if (event->candidate.token.effective_user != GetUserId() ||
+        event->candidate.token.session_user != GetSessionUserId())
+        return "v=1;s=withheld";
+    spill = &event->candidate.spill;
+    if (spill->threshold > 0.0)
+        double_to_shortest_decimal_buf(spill->threshold, threshold);
+    written = snprintf(qi_spill_evidence_render_buffer,
+        sizeof(qi_spill_evidence_render_buffer),
+        "v=1;s=complete;cid=%s;g=" UINT64_FORMAT ";e=" UINT64_FORMAT
+        ";state=%s;reason=%s;shape=%s;estimated_bytes=" UINT64_FORMAT
+        ";unadjusted_bytes=" UINT64_FORMAT
+        ";budget_bytes=" UINT64_FORMAT ";threshold=%s",
+        incarnation, event->candidate.token.generation, event->event_sequence,
+        qi_spill_state_name(spill->state), qi_spill_reason_name(spill->reason),
+        qi_spill_shape_name(spill->shape), spill->estimated_bytes,
+        spill->unadjusted_bytes, spill->budget_bytes, threshold);
+    if (written < 0 || (Size) written >= sizeof(qi_spill_evidence_render_buffer))
+        return "v=1;s=invalid";
+    return qi_spill_evidence_render_buffer;
+}
+
 void
 qi_snapshot_init_guc(void)
 {
@@ -653,6 +704,12 @@ qi_snapshot_init_guc(void)
                                PGC_INTERNAL,
                                GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE,
                                NULL, NULL, qi_benefit_evidence_show);
+    DefineCustomStringVariable("pg_qi.spill_evidence",
+                               "Reports private DuckDB spill estimates.",
+                               NULL, &qi_spill_evidence_placeholder, "",
+                               PGC_INTERNAL,
+                               GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE,
+                               NULL, NULL, qi_spill_evidence_show);
 }
 
 QiV2SnapshotToken
@@ -685,7 +742,8 @@ qi_snapshot_prepare(QiV2SnapshotCandidate *candidate,
                     QiNativePlanFeatures plan_features,
                     QiStatsConfidence stats_confidence,
                     QiProfileEvidence profile_evidence,
-                    QiBenefitResult benefit)
+                    QiBenefitResult benefit,
+                    QiSpillEvidence spill)
 {
     QiV2Decision decision;
 
@@ -723,6 +781,7 @@ qi_snapshot_prepare(QiV2SnapshotCandidate *candidate,
     candidate->stats_confidence = stats_confidence;
     candidate->profile_evidence = profile_evidence;
     candidate->benefit = benefit;
+    candidate->spill = spill;
     candidate->lifecycle = QI_PLAN_LIFECYCLE_UNPROVED;
     candidate->valid = true;
     return true;
@@ -858,7 +917,8 @@ qi_test_v2_snapshot_contract(PG_FUNCTION_ARGS)
         qi_stats_confidence_unknown(QI_STATS_NOT_OBSERVED),
         qi_profile_not_observed(),
         (QiBenefitResult) {QI_BENEFIT_NOT_EVALUATED,
-                           QI_BENEFIT_NOT_OBSERVED, 0, 0, 0});
+                           QI_BENEFIT_NOT_OBSERVED, 0, 0, 0},
+        (QiSpillEvidence) {0});
     unproved_rejected = !qi_snapshot_commit(&candidate);
     candidate.lifecycle = QI_PLAN_LIFECYCLE_FRESH_EXECUTION;
     first_commit = first_commit && qi_snapshot_commit(&candidate);
