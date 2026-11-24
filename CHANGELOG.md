@@ -83,7 +83,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   leakage from the production library and runs regression plus S0–S11 matrices
   across all supported PostgreSQL versions.
 - The production planner hook can make a scoped delegation request only when
-  explicit local policy and every fail-closed gate allow it. Default behavior
+  explicit local policy and every fail-closed gate allow it. Default behaviour
   remains observational pass-through.
 
 ### Fixed
@@ -103,6 +103,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Known limitations
 
+- A plan-only `EXPLAIN` of a DuckDB plan can make pg_duckdb fall back to
+  PostgreSQL for later queries in the same transaction. Inspect the plan in a
+  separate transaction before running the query.
 - Routing is pre-alpha, default-off and limited to a narrow static allow-list;
   external policy management and telemetry export are not implemented.
 - Runtime preload currently requires `pg_duckdb` to provide a real, resettable

@@ -31,6 +31,21 @@ The hook-chain fixture also runs guarded SPI from a downstream `ExecutorRun`
 hook. It verifies hook chaining, nested execution, balanced cleanup after
 errors and cancellation, and the usability of the next statement.
 
+## Inspect the plan in a separate transaction
+
+On the tested pg_duckdb builds, a plan-only `EXPLAIN` of a DuckDB plan calls
+`ExecutorStart` and skips `ExecutorFinish`. The provider's executor nesting
+level stays raised until the transaction ends, so later eligible queries fall
+back to PostgreSQL even with `duckdb.force_execution` enabled.
+
+Run the plan inspection between `BEGIN` and `ROLLBACK`, then execute the
+measured query in a new transaction. For a query that reads a PostgreSQL table
+through DuckDB, set `duckdb.log_pg_explain = on` with `SET LOCAL` and capture the
+`(PGDuckDB/PostgresTableReader)` notice from that execution. In the same
+session, `SHOW pg_qi.decision_v2` with `force=external` and `engine=unknown`
+flags an externally forced query with no verified DuckDB scan. Use the
+execution evidence to confirm the route.
+
 ## Performance gate
 
 The production benchmark records `disabled`, `off`, `shadow_p0`, and
@@ -43,7 +58,7 @@ guards, not product performance claims. The default bound is
 samples are parsed independently and must reproduce the recorded summary.
 The current probe is intentionally an `unsupported_shape` query, so this is a
 planner-path anti-catastrophe guard; it is not a bound for the full bounded-P0
-catalog/statistics evaluation path.
+catalogue/statistics evaluation path.
 
 The production matrix rejects any production scenario recorded as `NOT_RUN`; a local exploratory
 run may retain that state only when the caller has not enabled the strict
