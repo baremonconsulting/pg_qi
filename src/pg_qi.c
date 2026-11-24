@@ -474,14 +474,18 @@ done:
         /* Nested observations never replace the completed outer snapshot. */
         if (pg_qi_shadow_planner_depth == 1)
         {
-            if (shadow_p0_facts_observed)
-                qi_shadow_p0_publish_facts(shadow_p0_facts);
-            else
-                qi_shadow_p0_reset_facts();
-            qi_shadow_publish(context, policy_intent, decision_force_origin,
-                              classifier_status, eligibility, reason,
-                              observed_engine, verification, observation,
-                              request_applied);
+            /* Planning inside an executor hook can also enter at depth one. */
+            if (!qi_context_inside_executor())
+            {
+                if (shadow_p0_facts_observed)
+                    qi_shadow_p0_publish_facts(shadow_p0_facts);
+                else
+                    qi_shadow_p0_reset_facts();
+                qi_shadow_publish(context, policy_intent, decision_force_origin,
+                                  classifier_status, eligibility, reason,
+                                  observed_engine, verification, observation,
+                                  request_applied);
+            }
             if (v2_candidate_ready &&
                 qi_context_proven_for_routing(
                     planner_hook == pg_qi_planner,

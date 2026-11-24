@@ -54,6 +54,13 @@ conninfo="host=$socket port=$port dbname=postgres user=$(id -un) connect_timeout
   -c 'INSERT INTO p5_literal SELECT g, 1 FROM generate_series(1,1000) AS g' \
   -c 'CREATE TABLE p5_revalidation(id integer PRIMARY KEY, value integer NOT NULL)' \
   -c 'INSERT INTO p5_revalidation VALUES (1, 1)' \
+  -c 'CREATE FUNCTION p5_nested_value() RETURNS integer LANGUAGE plpgsql AS $$
+        DECLARE result integer;
+        BEGIN
+          EXECUTE $query$SELECT 1$query$ INTO result;
+          RETURN result;
+        END;
+      $$' \
   -c 'ANALYZE p5_literal' >/dev/null
 
 audited_cases="$lab/audited-cases"
@@ -66,7 +73,7 @@ printf 'SELECT 1 / 0;\n' >"$audited_cases/planning_error_non42.sql"
 printf 'SELECT 1 / value FROM p5_literal WHERE id = 1;\n' >"$audited_cases/execution_error.sql"
 printf "SELECT ('pgqi_absent_' || id::text)::regclass FROM p5_literal WHERE id = 1;\n" >"$audited_cases/execution_error_42.sql"
 printf 'SELECT value FROM p5_revalidation WHERE id = 1;\n' >"$audited_cases/revalidation_error.sql"
-printf "SELECT query_to_xml('SELECT 1', false, false, '');\n" >"$audited_cases/nested_planning.sql"
+printf 'SELECT p5_nested_value();\n' >"$audited_cases/nested_planning.sql"
 printf 'SHOW work_mem;\n' >"$audited_cases/utility_no_plan.sql"
 cp "$repo/tests/phase5/sql/runtime-error.sql" "$audited_cases/partial_error.sql"
 chmod 600 "$audited_cases/case_a.sql" "$audited_cases/case_b.sql"
@@ -144,18 +151,28 @@ session.prepare("A", "case_b")
 session.execute_prepared("A")
 session.deallocate("A")
 after_upper = session.execute_prepared("a")
+
+def check_nested_snapshot(result, reason, decision_delta):
+    if (result["reason"], result["planning_state"], result["snapshot_state"]) != \
+            (reason, "COMPLETE", "COMPLETE"):
+        raise SystemExit(f"Unexpected planning evidence after nested SQL: {result}")
+    snapshot, = output.glob(f"{result['sequence']:020d}-*.snapshot.tsv")
+    evidence = dict(line.split("\t", 1) for line in snapshot.read_text().splitlines()[1:])
+    before = int(evidence["pg_qi.shadow_decision_id_before"])
+    after = int(evidence["pg_qi.shadow_decision_id"])
+    if after - before != decision_delta or evidence["pg_qi.shadow_context"] != "proven_client":
+        raise SystemExit(f"Nested SQL replaced the client statement's evidence: {evidence}")
+    return after
+
+# The client statement owns the decision even when it runs nested SQL.
 fresh_nested = session.dispatch("nested_planning")
-if (fresh_nested["reason"], fresh_nested["planning_state"]) != \
-        ("fresh_plan_activity_unattributed", "UNAVAILABLE"):
-    raise SystemExit(f"fresh nested planning was falsely attributed: {fresh_nested}")
+check_nested_snapshot(fresh_nested, "fresh", 1)
 session.prepare("nested", "nested_planning")
 first_nested = session.execute_prepared("nested")
-if (first_nested["reason"], first_nested["planning_state"]) != \
-        ("prepared_plan_activity_unattributed", "UNAVAILABLE"):
-    raise SystemExit(f"first nested planning was falsely attributed: {first_nested}")
+first_nested_decision = check_nested_snapshot(first_nested, "planned", 1)
 nested_cached_outer = session.execute_prepared("nested")
-if nested_cached_outer["reason"] != "prepared_plan_activity_unattributed":
-    raise SystemExit(f"nested planning was falsely attributed: {nested_cached_outer}")
+if check_nested_snapshot(nested_cached_outer, "cached", 0) != first_nested_decision:
+    raise SystemExit("Cached execution after nested SQL lost its client decision")
 control.controller.stop("USER_STOP")
 try:
     session.dispatch("case_a")
@@ -177,6 +194,9 @@ if (cached_intent is None or
         cached_intent["payload"].get("planning_sequence") != planned_a["sequence"] or
         cached_intent["payload"].get("planning_sequence") == planned_b["sequence"]):
     raise SystemExit("cached A is not bound to A planning evidence")
+nested_intent = next(row for row in rows if row["sequence"] == nested_cached_outer["sequence"])
+if nested_intent["payload"].get("planning_sequence") != first_nested["sequence"]:
+    raise SystemExit("Cached execution after nested SQL lost its planning sequence")
 
 def set_error_value(value):
     subprocess.run([psql, fixture_conninfo, "-X", "-v", "ON_ERROR_STOP=1", "-c",
