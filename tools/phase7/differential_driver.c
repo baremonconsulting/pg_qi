@@ -1,10 +1,20 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include <arpa/inet.h>
 #include <stdbool.h>
 
 #define main phase5_protocol_driver_main
 #include "../phase5/protocol_driver.c"
 #undef main
+
+#define MAX_SUBJECT_PARAMETERS 64
+
+typedef struct SubjectParameters
+{
+    uint32_t count;
+    Oid types[MAX_SUBJECT_PARAMETERS];
+    char *text[MAX_SUBJECT_PARAMETERS];
+} SubjectParameters;
 
 static void
 phase7_usage(const char *program)
@@ -167,11 +177,62 @@ drain_after_cancel(PGconn *connection, int64_t deadline)
     return PQstatus(connection) == CONNECTION_OK;
 }
 
+static bool
+read_parameter_word(FILE *input, uint32_t *word)
+{
+    uint32_t encoded;
+
+    if (fread(&encoded, sizeof(encoded), 1, input) != 1)
+        return false;
+    *word = ntohl(encoded);
+    return true;
+}
+
+static bool
+read_parameters(const char *path, SubjectParameters *parameters)
+{
+    FILE *input = fopen(path, "rb");
+    uint32_t count;
+    bool valid = false;
+
+    if (input == NULL)
+        return false;
+    if (!read_parameter_word(input, &count) || count == 0 || count > MAX_SUBJECT_PARAMETERS)
+        goto done;
+    for (uint32_t i = 0; i < count; ++i)
+    {
+        uint32_t oid;
+        uint32_t length;
+
+        if (!read_parameter_word(input, &oid) || !read_parameter_word(input, &length))
+            goto done;
+        parameters->types[i] = (Oid) oid;
+        if (length == UINT32_MAX)
+            continue;
+        if (length > 1024U * 1024U)
+            goto done;
+        parameters->text[i] = malloc((size_t) length + 1);
+        if (parameters->text[i] == NULL ||
+                fread(parameters->text[i], 1, length, input) != length ||
+                memchr(parameters->text[i], '\0', length) != NULL)
+            goto done;
+        parameters->text[i][length] = '\0';
+    }
+    if (fgetc(input) == EOF && !ferror(input))
+    {
+        parameters->count = count;
+        valid = true;
+    }
+done:
+    fclose(input);
+    return valid;
+}
+
 static int
 run_arm(const char *conninfo, const char *arm, const char *snapshot,
         const char *sql_path, const char *spool_path, uint64_t deadline_ms,
         bool import_snapshot, const char *subject_token, const char *site,
-        Limits *limits)
+        const char *bindings_path, Limits *limits)
 {
     PGconn *connection = NULL;
     FILE *spool = NULL;
@@ -186,10 +247,17 @@ run_arm(const char *conninfo, const char *arm, const char *snapshot,
     const char *reason = "setup";
     char sqlstate[6] = "";
     char witness_configuration[160];
+    SubjectParameters parameters = {0};
+    const char *parameter_values[MAX_SUBJECT_PARAMETERS];
     int controlled_error = 0;
     int complete = 0;
     int64_t deadline = now_ms() + (int64_t) deadline_ms;
 
+    if (bindings_path != NULL && !read_parameters(bindings_path, &parameters))
+    {
+        reason = "bindings";
+        goto done;
+    }
     if (configuration == NULL || (sql = read_file(sql_path)) == NULL || !*sql ||
             (spool = open_exclusive(spool_path)) == NULL)
         goto done;
@@ -236,8 +304,11 @@ run_arm(const char *conninfo, const char *arm, const char *snapshot,
         goto done;
     }
 
+    for (uint32_t i = 0; i < parameters.count; ++i)
+        parameter_values[i] = parameters.text[i];
     interval_start(limits);
-    if (!send_subject(connection, sql, "extended", NULL, deadline) ||
+    if (!PQsendQueryParams(connection, sql, (int) parameters.count, parameters.types,
+                           parameter_values, NULL, NULL, 0) ||
             !flush_bounded(connection, deadline))
     {
         reason = "send_error";
@@ -322,6 +393,8 @@ done:
     free(v2_after);
     free(witness_before);
     free(witness_after);
+    for (uint32_t i = 0; i < MAX_SUBJECT_PARAMETERS; ++i)
+        free(parameters.text[i]);
     return complete ? 0 : 1;
 }
 
@@ -333,6 +406,7 @@ main(int argc, char **argv)
     const char *arm = NULL;
     const char *snapshot = NULL;
     const char *sql_path = NULL;
+    const char *bindings_path = NULL;
     const char *spool_path = NULL;
     const char *subject_token = NULL;
     const char *site = NULL;
@@ -364,6 +438,7 @@ main(int argc, char **argv)
         else if (!strcmp(option, "--arm")) arm = argument;
         else if (!strcmp(option, "--snapshot")) snapshot = argument;
         else if (!strcmp(option, "--sql-file")) sql_path = argument;
+        else if (!strcmp(option, "--bindings-file")) bindings_path = argument;
         else if (!strcmp(option, "--spool")) spool_path = argument;
         else if (!strcmp(option, "--subject-token")) subject_token = argument;
         else if (!strcmp(option, "--site-binding") && *argument) site = argument;
@@ -378,7 +453,7 @@ main(int argc, char **argv)
             return 64;
         }
     }
-    if (mode == NULL || conninfo == NULL)
+    if (mode == NULL || conninfo == NULL || (bindings_path != NULL && strcmp(mode, "arm") != 0))
     {
         phase7_usage(argv[0]);
         return 64;
@@ -390,7 +465,7 @@ main(int argc, char **argv)
     if (!strcmp(mode, "arm") && arm != NULL && snapshot != NULL &&
             sql_path != NULL && spool_path != NULL && subject_token != NULL)
         return run_arm(conninfo, arm, snapshot, sql_path, spool_path,
-                       deadline_ms, import_snapshot, subject_token, site, &limits);
+                       deadline_ms, import_snapshot, subject_token, site, bindings_path, &limits);
     phase7_usage(argv[0]);
     return 64;
 }

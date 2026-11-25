@@ -100,21 +100,31 @@ PY
 python3 tests/phase7/run_live_mutations.py "$output/manifest.json" "$run"
 
 run_case() {
-    name=$1
-    ordered=$2
-    expected=$3
-    case_root=$output/case-$name
+    local name=$1 ordered=$2 expected=$3
+    local case_root=$output/case-$name
+    local digest rc
+    local bindings_args=()
     mkdir -m 0700 "$case_root"
     cat >"$case_root/subject.sql"
     digest=$(sha256sum "$case_root/subject.sql" | cut -d' ' -f1)
+    if [[ $# -eq 4 ]]; then
+        (umask 077; printf '%s\n' "$4" >"$case_root/bindings.json")
+        bindings_args=(--bindings-file "$case_root/bindings.json")
+    fi
     python3 - "$case_root/manifest.json" "$name" "$digest" "$ordered" <<'PY'
+import hashlib
 import json, sys
+from pathlib import Path
 path, name, digest, ordered = sys.argv[1:]
 value = {"schema_version": 1, "document_type": "pq31_differential_run",
          "run_id": "pq31-ci-" + name, "subject_id": name,
          "sql_sha256": digest, "ordered": ordered == "true",
          "authorization_reference": "PQ-31-CI",
          "arms": ["native", "forced", "shadow"]}
+bindings = Path(path).with_name("bindings.json")
+if bindings.is_file():
+    value["schema_version"] = 2
+    value["bindings_sha256"] = hashlib.sha256(bindings.read_bytes()).hexdigest()
 with open(path, "x", encoding="utf-8") as stream:
     json.dump(value, stream, sort_keys=True, separators=(",", ":")); stream.write("\n")
 PY
@@ -124,13 +134,18 @@ PY
         --driver tools/phase7/differential-driver \
         --conninfo "host=$socket port=$port dbname=postgres user=$USER" \
         --manifest "$case_root/manifest.json" --sql-file "$case_root/subject.sql" \
-        --run-root "$case_root" --deadline-ms 30000
+        --run-root "$case_root" --deadline-ms 30000 "${bindings_args[@]}"
     rc=$?
     set -e
     python3 - "$case_root/result.json" "$expected" "$rc" <<'PY'
 import json, sys
 result = json.load(open(sys.argv[1], encoding="utf-8"))
-assert result["result"] == sys.argv[2], result
+expected = sys.argv[2]
+if expected == "PASS_OR_FORCE_DECLINED":
+    assert (result["result"] == "PASS" or
+            (result["result"], result["reason"]) == ("INCONCLUSIVE", "force_declined")), result
+else:
+    assert result["result"] == expected, result
 assert int(sys.argv[3]) == (0 if result["result"] in {"PASS", "ERROR_PARITY"} else 1), result
 PY
 }
@@ -149,6 +164,24 @@ SELECT id::int2 AS i2, id::int4 AS i4, id::int8 AS i8, label::text AS txt,
        (id > 0)::bool AS flag
 FROM witness_fixture ORDER BY id LIMIT 1;
 SQL
+run_case bound-cte-pipeline true PASS '[{"oid":23,"value":"17"}]' <<'SQL'
+WITH "source" AS (
+    SELECT "id", "id" % 7 AS "bucket"
+    FROM "witness_fixture"
+    WHERE "id" >= $1
+), "ranked" AS (
+    SELECT "bucket", row_number() OVER (PARTITION BY "bucket" ORDER BY "id") AS "position"
+    FROM "source"
+), "summary" AS (
+    SELECT "bucket", count(*) AS "members", max("position") AS "last_position"
+    FROM "ranked"
+    GROUP BY "bucket"
+)
+SELECT "bucket", "members", "last_position" FROM "summary" ORDER BY "bucket";
+SQL
+sed 's/WHERE "id" >= \$1/& AND ($2 IS NULL OR "id" <= $2)/' \
+    "$output/case-bound-cte-pipeline/subject.sql" |
+    run_case bound-cte-optional-filter true PASS_OR_FORCE_DECLINED '[{"oid":23,"value":"17"},{"oid":23,"value":null}]'
 run_case character-typmod true FAIL <<'SQL'
 SELECT label::varchar(20) AS vc, label::char(20) AS bp
 FROM witness_fixture ORDER BY id LIMIT 1;
