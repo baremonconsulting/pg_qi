@@ -58,6 +58,29 @@ plan/execution correlation was established. It must not be interpreted as a
 decision about that execution. Consumers must compare the opaque backend
 incarnation, generation and event sequence with their expected correlation.
 
+### Delegation with bound values
+
+During extended-protocol `Bind`, PostgreSQL converts the parameters into
+typed values with NULL flags, then chooses a plan. A custom planning call
+receives those values in `ParamListInfo` before PostgreSQL starts the portal.
+Use this call to assess whether pg_duckdb can execute the generated statement,
+whether it preserves the results and whether it saves time for the current
+bindings, including the time spent planning.
+[PostgreSQL Bind](https://github.com/postgres/postgres/blob/5c839a2a08b9b87a349be97371fac6c5a2873b10/src/backend/tcop/postgres.c#L1849-L1938)
+
+Generic planning receives a null parameter list. Reusing a cached generic
+plan can bypass the planner hook entirely. Abstain when the decision needs
+the current values and PostgreSQL chooses a generic plan. Leave plan cache
+policy under PostgreSQL's control.
+[PostgreSQL plan cache](https://github.com/postgres/postgres/blob/5c839a2a08b9b87a349be97371fac6c5a2873b10/src/backend/utils/cache/plancache.c#L1234-L1296)
+
+In a PostgreSQL 19 trial with pg_duckdb 1.2.1, a test planner hook applied
+the bound integer values to a copy of the analysed query. The same named
+prepared statement ran four times in DuckDB with changing values, including
+NULL. It matched the ordered rows and result types from PostgreSQL on the
+same snapshot. This trial checked the planning boundary and result parity
+for that CTE query on a small synthetic fixture with serial scans.
+
 ## Verification
 
 `tests/phase7/verify_lifecycle.sh` exercises simple execution, SQL generic and
