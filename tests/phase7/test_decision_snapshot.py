@@ -67,6 +67,28 @@ class SnapshotReaderTest(unittest.TestCase):
         with self.assertRaises(SnapshotError):
             parse_v2(value.replace("eligible=not_evaluated", "eligible=veto"))
 
+    def test_bound_route_requires_gate_and_engine_evidence(self):
+        value = (
+            "v=2;sv=2;s=complete;cid=0123456789abcdef0123456789abcdef;g=1;e=1;"
+            "mode=bound;enabled=on;context=proven_client;eligible=pass;"
+            "safe=pass;beneficial=pass;barrier=open;"
+            "recommendation=would_delegate;reason=900;rule=1;model=1;"
+            "certificate=1;policy=request_delegation;force=qi_stack;engine=duckdb;"
+            "verification=verified;observation=duckdb_scan_at_downstream_boundary;"
+            "p0=unknown;p0_reason=no_query;lifecycle=fresh_execution"
+        )
+        self.assertEqual(parse_v2(value)["recommendation"], "would_delegate")
+        declined = value.replace("eligible=pass", "eligible=veto").replace(
+            "recommendation=would_delegate;reason=900",
+            "recommendation=would_pass_through;reason=100").replace(
+            "engine=duckdb;verification=verified;observation=duckdb_scan_at_downstream_boundary",
+            "engine=unknown;verification=unverified;observation=no_authoritative_match")
+        self.assertEqual(parse_v2(declined)["eligible"], "veto")
+        with self.assertRaises(SnapshotError):
+            parse_v2(value.replace("safe=pass", "safe=unknown"))
+        with self.assertRaises(SnapshotError):
+            parse_v2(value.replace("verification=verified", "verification=unverified"))
+
     def test_fail_closed_p0_reasons_are_audit_data(self):
         for reason in ("unsupported_shape", "unsupported_node",
                        "unsupported_relation", "catalog_mismatch"):

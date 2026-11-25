@@ -98,8 +98,11 @@ failure, unknown AST node or unsupported provider state is also ineligible.
 The decision is attached to plan creation. Reusing a cached generic plan does
 not create a fresh policy decision. Replanning after invalidation does.
 
-Until parameter-sensitive equivalence is demonstrated, a decision that
-depends on values unavailable during generic planning must pass through.
+The experimental `bound` mode applies the same procedure during custom
+planning in extended-protocol Bind. A request requires a matching rule for
+the actual typed values, reviewed equivalence and sufficient measured
+savings. Generic planning passes through. See
+[prepared statements and bound routing](phase7/PQ7-12-plan-lifecycle.md#delegation-with-bound-values).
 Disabling `pg_qi` affects future planning; it does not revoke an already cached
 plan. Any requirement for per-execution revocation belongs to a separately
 designed executor control.

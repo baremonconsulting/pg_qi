@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Experimental routing for qualified generated analytical reads during
+  extended-protocol Bind. It checks eligibility, reviewed result equivalence
+  and measured savings for the current typed values, including NULL. Generic
+  plans and missing or expired evidence pass through.
 - Exact-site `COUNT(*)` semantic qualification for decision-only shadow,
   with typed differential evidence and an independently approved, expiring
   certificate. The routing and recommendation activation boundaries are unchanged.

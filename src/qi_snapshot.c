@@ -61,6 +61,7 @@ static char qi_benefit_evidence_render_buffer[
     QI_BENEFIT_EVIDENCE_RENDER_BYTES];
 static char *qi_spill_evidence_placeholder = NULL;
 static char qi_spill_evidence_render_buffer[QI_SPILL_EVIDENCE_RENDER_BYTES];
+static char *qi_bound_key_placeholder = NULL;
 
 static void
 qi_snapshot_initialize(void)
@@ -125,6 +126,7 @@ qi_mode_name(QiRoutingMode mode)
         case QI_ROUTING_OFF: return "off";
         case QI_ROUTING_ALLOWLIST: return "allowlist";
         case QI_ROUTING_SHADOW_P0: return "shadow_p0";
+        case QI_ROUTING_BOUND: return "bound";
     }
     return "invalid";
 }
@@ -671,6 +673,20 @@ qi_spill_evidence_show(void)
     return qi_spill_evidence_render_buffer;
 }
 
+static const char *
+qi_bound_key_show(void)
+{
+    const QiV2SnapshotCandidate *candidate;
+
+    if (!qi_snapshot_authorized() || !qi_snapshot_store.has_event)
+        return "";
+    candidate = &qi_snapshot_store.slots[qi_snapshot_store.active_slot].candidate;
+    if (candidate->token.effective_user != GetUserId() ||
+        candidate->token.session_user != GetSessionUserId())
+        return "";
+    return candidate->bound_key;
+}
+
 void
 qi_snapshot_init_guc(void)
 {
@@ -710,6 +726,11 @@ qi_snapshot_init_guc(void)
                                PGC_INTERNAL,
                                GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE,
                                NULL, NULL, qi_spill_evidence_show);
+    DefineCustomStringVariable("pg_qi.bound_key",
+                               "Reports the qualification key of the last bound routing decision.",
+                               NULL, &qi_bound_key_placeholder, "", PGC_INTERNAL,
+                               GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE,
+                               NULL, NULL, qi_bound_key_show);
 }
 
 QiV2SnapshotToken
@@ -743,20 +764,24 @@ qi_snapshot_prepare(QiV2SnapshotCandidate *candidate,
                     QiStatsConfidence stats_confidence,
                     QiProfileEvidence profile_evidence,
                     QiBenefitResult benefit,
-                    QiSpillEvidence spill)
+                    QiSpillEvidence spill,
+                    const QiBoundAssessment *bound)
 {
     QiV2Decision decision;
 
     if (candidate == NULL || !token.valid ||
         mode_at_decision < QI_ROUTING_OFF ||
-        mode_at_decision > QI_ROUTING_SHADOW_P0 ||
+        mode_at_decision > QI_ROUTING_BOUND ||
         context != QI_SHADOW_CONTEXT_PROVEN_CLIENT)
         return false;
 
-    decision = qi_v2_evaluate(QI_GATE_NOT_EVALUATED,
-                              qi_semantic_gate_state(&semantic),
-                              qi_benefit_gate_state(&benefit),
-                              QI_V2_ACTIVATION_CLOSED,
+    decision = qi_v2_evaluate(bound == NULL ? QI_GATE_NOT_EVALUATED : bound->eligible,
+                              bound == NULL ? qi_semantic_gate_state(&semantic) :
+                                  bound->semantically_safe,
+                              bound == NULL ? qi_benefit_gate_state(&benefit) :
+                                  bound->beneficial,
+                              bound == NULL ? QI_V2_ACTIVATION_CLOSED :
+                                  QI_V2_ACTIVATION_OPEN,
                               QI_DECISION_V2_RULE_VERSION,
                               QI_DECISION_V2_MODEL_VERSION,
                               QI_DECISION_V2_CERTIFICATE_VERSION);
@@ -782,6 +807,8 @@ qi_snapshot_prepare(QiV2SnapshotCandidate *candidate,
     candidate->profile_evidence = profile_evidence;
     candidate->benefit = benefit;
     candidate->spill = spill;
+    if (bound != NULL)
+        memcpy(candidate->bound_key, bound->key, sizeof(candidate->bound_key));
     candidate->lifecycle = QI_PLAN_LIFECYCLE_UNPROVED;
     candidate->valid = true;
     return true;
@@ -918,7 +945,7 @@ qi_test_v2_snapshot_contract(PG_FUNCTION_ARGS)
         qi_profile_not_observed(),
         (QiBenefitResult) {QI_BENEFIT_NOT_EVALUATED,
                            QI_BENEFIT_NOT_OBSERVED, 0, 0, 0},
-        (QiSpillEvidence) {0});
+        (QiSpillEvidence) {0}, NULL);
     unproved_rejected = !qi_snapshot_commit(&candidate);
     candidate.lifecycle = QI_PLAN_LIFECYCLE_FRESH_EXECUTION;
     first_commit = first_commit && qi_snapshot_commit(&candidate);

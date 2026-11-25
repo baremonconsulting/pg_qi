@@ -7,9 +7,8 @@
 
 > [!IMPORTANT]
 > The project is in **pre-alpha development** and must not be used for
-> production routing. PGQI-4B adds an experimental, superuser-controlled
-> `allowlist` mode for a deliberately narrow query subset; it remains `off` by
-> default and is intended only for controlled validation.
+> production routing. The superuser-controlled `allowlist` and `bound`
+> modes are for controlled validation. Routing defaults to `off`.
 
 ## Project goals
 
@@ -149,6 +148,10 @@ Prepared-plan and cache semantics are specified in
 An approved, exact-build/site [`COUNT(*)` certificate](docs/phase7/PQ7-7-count-semantic-certificate.md)
 can qualify the semantic gate in shadow mode. It does not enable routing or
 open the recommendation barrier.
+The experimental `bound` mode routes qualified analytical statements during
+extended-protocol Bind. It uses the current parameter types and values and
+requires reviewed equivalence and measured end-to-end savings. See
+[prepared statements and bound routing](docs/phase7/PQ7-12-plan-lifecycle.md#delegation-with-bound-values).
 The pinned PG16–19 production matrix, non-interference oracle, artifact
 boundary, and engineering overhead gate are documented in
 [`docs/production-compatibility-ci.md`](docs/production-compatibility-ci.md).

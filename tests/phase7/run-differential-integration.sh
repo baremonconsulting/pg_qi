@@ -55,6 +55,11 @@ END
 $$;
 SQL
 
+cc -std=c99 -Wall -Wextra -Werror -I"$("$pgconfig" --includedir)" \
+    tests/phase7/bound_driver.c -L"$("$pgconfig" --libdir)" \
+    -Wl,-rpath,"$("$pgconfig" --libdir)" -lpq -o "$libs/bound-driver"
+"$libs/bound-driver" "host=$socket port=$port dbname=postgres user=$USER"
+
 cat >"$output/subject.sql" <<'SQL'
 SELECT id, label, (id > 0) AS positive
 FROM witness_fixture
