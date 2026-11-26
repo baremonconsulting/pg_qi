@@ -64,33 +64,41 @@ def _regular_private(path: Path, maximum: int) -> os.stat_result:
 
 
 def validate_manifest(value: dict[str, Any]) -> dict[str, Any]:
-    _exact(value, {"schema_version", "document_type", "run_id", "subject_id",
-                   "sql_sha256", "ordered", "authorization_reference", "arms"},
-           "manifest")
-    if type(value["schema_version"]) is not int or value["schema_version"] != 1 or \
+    fields = {"schema_version", "document_type", "run_id", "subject_id",
+              "sql_sha256", "ordered", "authorization_reference", "arms"}
+    if isinstance(value, dict) and value.get("schema_version") == 2:
+        fields.add("bindings_sha256")
+    _exact(value, fields, "manifest")
+    if type(value["schema_version"]) is not int or value["schema_version"] not in (1, 2) or \
             value["document_type"] != "pq31_differential_run":
         raise DifferentialError("unsupported manifest")
     _identifier(value["run_id"], "run_id")
     _identifier(value["subject_id"], "subject_id")
     _identifier(value["authorization_reference"], "authorization_reference")
     _digest(value["sql_sha256"], "sql_sha256")
+    if value["schema_version"] == 2:
+        _digest(value["bindings_sha256"], "bindings_sha256")
     if type(value["ordered"]) is not bool or value["arms"] != list(ARMS):
         raise DifferentialError("invalid manifest arm or order contract")
     return value
 
 
 def validate_receipt(value: dict[str, Any], expected_arm: str) -> dict[str, Any]:
-    _exact(value, {"schema_version", "document_type", "run_id", "subject_id", "arm",
-                   "sql_sha256", "snapshot", "exporter", "backend", "v2_before", "v2_after",
-                   "witness_before", "witness_after", "spool", "acquisition"},
-           f"{expected_arm} receipt")
-    if type(value["schema_version"]) is not int or value["schema_version"] != 1 or \
+    fields = {"schema_version", "document_type", "run_id", "subject_id", "arm",
+              "sql_sha256", "snapshot", "exporter", "backend", "v2_before", "v2_after",
+              "witness_before", "witness_after", "spool", "acquisition"}
+    if isinstance(value, dict) and value.get("schema_version") == 2:
+        fields.add("bindings_sha256")
+    _exact(value, fields, f"{expected_arm} receipt")
+    if type(value["schema_version"]) is not int or value["schema_version"] not in (1, 2) or \
             value["document_type"] != "pq31_arm_receipt" or \
             value["arm"] != expected_arm:
         raise DifferentialError("receipt identity is invalid")
     for name in ("run_id", "subject_id"):
         _identifier(value[name], name)
     _digest(value["sql_sha256"], "sql_sha256")
+    if value["schema_version"] == 2:
+        _digest(value["bindings_sha256"], "bindings_sha256")
     snapshot = _exact(value["snapshot"], {"token_sha256", "imported",
         "import_command_complete", "exporter_snapshot", "arm_snapshot"}, "snapshot")
     _digest(snapshot["token_sha256"], "snapshot token digest")
@@ -240,14 +248,20 @@ def evaluate_qualified_pair(left_name: str, left: dict[str, Any], right_name: st
     return None
 
 
+def execution_subject_token(manifest: dict[str, Any]) -> str:
+    parts = [manifest["run_id"], manifest["subject_id"], manifest["sql_sha256"]]
+    if manifest["schema_version"] == 2:
+        parts.append(manifest["bindings_sha256"])
+    return hashlib.sha256("\0".join(parts).encode()).hexdigest()
+
+
 def validate_cross_bindings(manifest: dict[str, Any],
                             receipts: dict[str, dict[str, Any]]) -> None:
     for arm, receipt in receipts.items():
-        for name in ("run_id", "subject_id", "sql_sha256"):
-            if receipt[name] != manifest[name]:
+        for name in ("schema_version", "run_id", "subject_id", "sql_sha256", "bindings_sha256"):
+            if receipt.get(name) != manifest.get(name):
                 raise DifferentialError(f"{arm} {name} binding mismatch")
-    subject_token = hashlib.sha256((manifest["run_id"] + "\0" + manifest["subject_id"] +
-                                    "\0" + manifest["sql_sha256"]).encode()).hexdigest()
+    subject_token = execution_subject_token(manifest)
     exporters = [receipt["exporter"] for receipt in receipts.values()]
     if any(item != exporters[0] for item in exporters[1:]):
         raise DifferentialError("exporter identity mismatch")

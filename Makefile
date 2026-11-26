@@ -10,7 +10,7 @@ OBJS = src/pg_qi.o src/qi_classify.o src/qi_context.o src/qi_decision.o \
        src/qi_shadow_p0.o src/qi_semantic.o src/qi_plan_features.o \
        src/qi_stats_confidence.o src/qi_profile_parser.o src/qi_profile.o \
        src/qi_count_cert_parser.o src/qi_count_certificate.o \
-       src/qi_benefit_model.o src/qi_benefit.o \
+       src/qi_benefit_model.o src/qi_benefit.o src/qi_spill.o \
        src/qi_snapshot.o src/qi_lifecycle.o src/qi_explain_guard.o
 
 DATA = sql/pg_qi--0.0.1.sql
@@ -21,6 +21,7 @@ OBJS += src/qi_reenter.o src/qi_diag.o
 DATA += sql/pg_qi_spike_test--0.0.1.sql
 REGRESS = pg_qi_basic
 else
+OBJS += src/qi_bound.o
 REGRESS = pg_qi_shadow
 endif
 

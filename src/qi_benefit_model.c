@@ -153,6 +153,8 @@ qi_benefit_reason_name(QiBenefitReason reason)
         case QI_BENEFIT_WITHIN_MARGIN: return "within_margin";
         case QI_BENEFIT_FAVOURABLE: return "favourable";
         case QI_BENEFIT_UNFAVOURABLE: return "unfavourable";
+        case QI_BENEFIT_SPILL_ESTIMATE_UNKNOWN: return "spill_estimate_unknown";
+        case QI_BENEFIT_SPILL_RESOURCES_UNVERIFIED: return "spill_resources_unverified";
     }
     return "invalid";
 }

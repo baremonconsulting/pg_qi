@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Experimental routing for qualified generated analytical reads during
+  extended-protocol Bind. It checks eligibility, reviewed result equivalence
+  and measured savings for the current typed values, including NULL. Generic
+  plans and missing or expired evidence pass through.
 - Exact-site `COUNT(*)` semantic qualification for decision-only shadow,
   with typed differential evidence and an independently approved, expiring
   certificate. The routing and recommendation activation boundaries are unchanged.
@@ -85,6 +89,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The production planner hook can make a scoped delegation request only when
   explicit local policy and every fail-closed gate allow it. Default behaviour
   remains observational pass-through.
+- Record estimated DuckDB spill risk for supported fixed-width grouping,
+  DISTINCT and sort plans in decision-only shadow mode. Record why the benefit
+  model abstains when a memory estimate or spill resources are uncertain.
+  Expose each shape's warning threshold as a PostgreSQL setting.
 
 ### Fixed
 

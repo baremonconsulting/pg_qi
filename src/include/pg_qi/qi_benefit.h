@@ -12,6 +12,7 @@
 #include "pg_qi/qi_decision_v2.h"
 #include "pg_qi/qi_plan_features.h"
 #include "pg_qi/qi_profile.h"
+#include "pg_qi/qi_spill.h"
 #include "pg_qi/qi_stats_confidence.h"
 
 extern QiBenefitResult qi_benefit_observe(
@@ -19,6 +20,8 @@ extern QiBenefitResult qi_benefit_observe(
     const QiStatsConfidence *stats,
     const QiProfileEvidence *profile_evidence,
     const QiProfileModel *profile_model);
+extern QiBenefitResult qi_benefit_apply_spill(QiBenefitResult benefit,
+                                               QiSpillEvidence spill);
 extern QiGateState qi_benefit_gate_state(const QiBenefitResult *result);
 
 #if PG_QI_TESTING

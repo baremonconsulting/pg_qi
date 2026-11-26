@@ -10,6 +10,7 @@ import json
 import os
 import re
 import stat
+import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -20,7 +21,7 @@ sys.path.insert(0, str(ROOT))
 from tools.phase5.corpus_oracle import (MAGIC_V2, OracleError, TypedSpool,
                                         compare_spools, load_json, write_json_exclusive)
 from tools.phase7.differential_oracle import (ARMS, PG_SNAPSHOT, DifferentialError, evaluate,
-                                              evaluate_qualified_pair,
+                                              evaluate_qualified_pair, execution_subject_token,
                                               validate_cross_bindings,
                                               validate_manifest, validate_no_import_control,
                                               validate_receipt)
@@ -103,9 +104,10 @@ def parse_arm(line: str) -> dict[str, object]:
 
 def arm_receipt(manifest: dict, arm: str, result: dict, spool: Path,
                 exporter: dict, snapshot: str, token_digest: str, *, imported: bool) -> dict:
-    return {"schema_version": 1, "document_type": "pq31_arm_receipt",
+    bindings = {"bindings_sha256": manifest["bindings_sha256"]} if manifest["schema_version"] == 2 else {}
+    return {"schema_version": manifest["schema_version"], "document_type": "pq31_arm_receipt",
             "run_id": manifest["run_id"], "subject_id": manifest["subject_id"],
-            "arm": arm, "sql_sha256": manifest["sql_sha256"], "exporter": exporter,
+            "arm": arm, "sql_sha256": manifest["sql_sha256"], "exporter": exporter, **bindings,
             "snapshot": {"token_sha256": token_digest, "imported": imported,
                          "import_command_complete": imported, "exporter_snapshot": snapshot,
                          "arm_snapshot": result["arm_snapshot"]},
@@ -119,12 +121,46 @@ def arm_receipt(manifest: dict, arm: str, result: dict, spool: Path,
             "acquisition": {"complete": result["complete"], "reason": result["reason"]}}
 
 
+def serialize_bindings(path: Path, expected_digest: str) -> bytearray:
+    with path.open("rb") as source:
+        raw = source.read(8 * 1024 * 1024 + 1)
+    if len(raw) > 8 * 1024 * 1024 or hashlib.sha256(raw).hexdigest() != expected_digest:
+        raise RunError("bindings file does not match manifest")
+    try:
+        parameters = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RunError("invalid bindings JSON") from exc
+    if not isinstance(parameters, list) or not 1 <= len(parameters) <= 64:
+        raise RunError("bindings must contain 1 to 64 parameters")
+    binary = bytearray(struct.pack("!I", len(parameters)))
+    for parameter in parameters:
+        if not isinstance(parameter, dict) or set(parameter) != {"oid", "value"}:
+            raise RunError("invalid binding fields")
+        oid, value = parameter["oid"], parameter["value"]
+        if (type(oid) is not int or not 0 <= oid < 2**32 or
+                (value is not None and not isinstance(value, str))):
+            raise RunError("invalid binding type or value")
+        if value is None:
+            binary.extend(struct.pack("!II", oid, 2**32 - 1))
+            continue
+        try:
+            encoded = value.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise RunError("invalid UTF-8 binding") from exc
+        if b"\x00" in encoded or len(encoded) > 1024 * 1024:
+            raise RunError("binding exceeds the text parameter contract")
+        binary.extend(struct.pack("!II", oid, len(encoded)))
+        binary.extend(encoded)
+    return binary
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser()
     result.add_argument("--driver", required=True, type=Path)
     result.add_argument("--conninfo", required=True)
     result.add_argument("--manifest", required=True, type=Path)
     result.add_argument("--sql-file", required=True, type=Path)
+    result.add_argument("--bindings-file", type=Path)
     result.add_argument("--run-root", required=True, type=Path)
     result.add_argument("--concurrent-sql-file", type=Path)
     result.add_argument("--site-binding", help="require this site on every isolated-lab connection")
@@ -143,6 +179,16 @@ def main(argv: list[str] | None = None) -> int:
         sql = args.sql_file.read_bytes()
         if b"\x00" in sql or hashlib.sha256(sql).hexdigest() != manifest["sql_sha256"]:
             raise RunError("SQL file does not match manifest")
+        if (args.bindings_file is not None) != (manifest["schema_version"] == 2):
+            raise RunError("bound runs require a version 2 manifest and a bindings file")
+        binding_args = []
+        if args.bindings_file is not None:
+            encoded = serialize_bindings(args.bindings_file, manifest["bindings_sha256"])
+            path = args.run_root / "validated-bindings"
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(descriptor, "wb") as output:
+                output.write(encoded)
+            binding_args = ["--bindings-file", str(path)]
         subject_copy = args.run_root / "validated-subject.sql"
         descriptor = os.open(subject_copy, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
                              os.O_NOFOLLOW, 0o600)
@@ -164,9 +210,7 @@ def main(argv: list[str] | None = None) -> int:
             exporter_database_oid, exporter_user_oid = parse_export(
             one_line(exporter, "exporter"))
         token_digest = hashlib.sha256(token.encode()).hexdigest()
-        subject_token = hashlib.sha256(
-            (manifest["run_id"] + "\0" + manifest["subject_id"] + "\0" +
-             manifest["sql_sha256"]).encode()).hexdigest()
+        subject_token = execution_subject_token(manifest)
         exporter_identity = {"pid": exporter_pid, "database": exporter_database,
             "user": exporter_user, "database_oid": exporter_database_oid,
             "user_oid": exporter_user_oid}
@@ -189,7 +233,8 @@ def main(argv: list[str] | None = None) -> int:
                 [str(args.driver), "--mode", "arm", "--conninfo", args.conninfo,
                  "--arm", arm, "--snapshot", token, "--sql-file", str(subject_copy),
                  "--subject-token", subject_token,
-                 "--spool", str(spool), "--deadline-ms", str(args.deadline_ms), *site_args],
+                 "--spool", str(spool), "--deadline-ms", str(args.deadline_ms),
+                 *site_args, *binding_args],
                 capture_output=True, text=True, check=False)
             lines = process.stdout.splitlines()
             if not lines:
@@ -419,7 +464,7 @@ def main(argv: list[str] | None = None) -> int:
                  "--arm", "native", "--snapshot", token, "--snapshot-mode", "skip",
                  "--subject-token", subject_token,
                  "--sql-file", str(subject_copy), "--spool", str(negative),
-                 "--deadline-ms", str(args.deadline_ms), *site_args], capture_output=True,
+                 "--deadline-ms", str(args.deadline_ms), *site_args, *binding_args], capture_output=True,
                 text=True, check=False)
             lines = process.stdout.splitlines()
             if len(lines) != 1:

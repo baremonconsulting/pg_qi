@@ -189,6 +189,7 @@ jobs:
             "ci-artifacts/production-shadow-pg$major/pq42-runtime" preloaded
           PGHOST="$pghost" PGUSER="$USER" bash tests/phase7/verify_snapshot.sh "$major"
           PGHOST="$pghost" PGUSER="$USER" bash tests/phase7/verify_plan_features.sh "$major"
+          PGHOST="$pghost" PGUSER="$USER" bash tests/phase7/verify_spill_evidence.sh "$major"
           PGHOST="$pghost" PGUSER="$USER" bash tests/phase7/verify_stats_confidence.sh "$major"
           PGHOST="$pghost" PGUSER="$USER" bash tests/phase7/verify_lifecycle.sh "$major"
           PGHOST="$pghost" PGUSER="$USER" PG_QI_BUILD_ID="$PG_QI_BUILD_ID" PG_QI_POSTGRES_BUILD_ID="$PG_QI_POSTGRES_BUILD_ID" PG_QI_SITE_BUILD_ID="$PG_QI_SITE_BUILD_ID" bash tests/phase7/verify_profile.sh "$major"
