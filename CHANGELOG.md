@@ -75,6 +75,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- Bound routing confirms eligibility from the provider's whole-query plan.
+  It supports bounded built-in Bind values and returns to native planning
+  with the original parameters on a clean decline. Existing rules need a
+  fresh qualification key.
 - Hardened the CI PGDG repository bootstrap against transient TLS failures
   with bounded retries, exact signing-key fingerprint validation and atomic
   keyring installation.

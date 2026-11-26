@@ -214,7 +214,7 @@ def qualify_bound(args: argparse.Namespace, manifest: dict, command: list[str],
         return {**report, "reason": "native_probe_unproved"}
     if decision["eligible"] == "veto":
         return {**report, "result": "FAIL", "eligible": "veto", "reason": "ineligible_binding"}
-    if decision["eligible"] != "pass" or not HEX64.fullmatch(key):
+    if decision["eligible"] != "unknown" or not HEX64.fullmatch(key):
         return {**report, "reason": "qualification_key_unavailable"}
 
     for index in range(args.bound_pairs):

@@ -58,14 +58,16 @@ python3 tools/phase7/run_differential.py \
 ```
 
 The runner exports one read-only repeatable-read snapshot for the whole run.
-An untimed probe gets the key from a fresh `bound` decision with an empty
-policy. It then alternates native and bound executions in separate sessions.
+An untimed native probe gets the key from a fresh `bound` decision with an
+empty policy and `eligible=unknown`. It then alternates native and bound
+executions in separate sessions.
 The bound session uses a short-lived trial rule and zero saving floors within
 its transaction to exercise the route. The execution witness must show a
-completed DuckDB scan, and the result must match PostgreSQL on the imported
-snapshot. A change to the qualification key during acquisition ends the run
-with an inconclusive result. This can happen when catalogue row estimates
-change during the measurements.
+completed DuckDB scan, the decision must confirm eligibility for the whole
+plan, and the result must match PostgreSQL on the imported snapshot. A clean
+decline yields `provider_declined`. A change to the qualification key during
+acquisition ends the run with an inconclusive result. This can happen when
+catalogue row estimates change during the measurements.
 
 The driver times each unnamed extended-protocol request from submission
 through receipt of the result, including Bind and planning. `result.json`

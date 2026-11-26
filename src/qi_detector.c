@@ -78,6 +78,33 @@ qi_plan_has_duckdb_scan(const PlannedStmt *planned_stmt)
            qi_visit_plan_list(planned_stmt->subplans);
 }
 
+bool
+qi_plan_is_whole_duckdb(const PlannedStmt *planned_stmt)
+{
+    const Plan *plan;
+    const CustomScan *scan;
+
+    if (planned_stmt == NULL || planned_stmt->commandType != CMD_SELECT ||
+        planned_stmt->hasModifyingCTE || planned_stmt->rowMarks != NIL ||
+        planned_stmt->subplans != NIL ||
+#if PG_VERSION_NUM >= 190000
+        planned_stmt->resultRelationRelids != NULL)
+#else
+        planned_stmt->resultRelations != NIL)
+#endif
+        return false;
+
+    plan = planned_stmt->planTree;
+    if (plan == NULL || !IsA(plan, CustomScan) || plan->lefttree != NULL ||
+        plan->righttree != NULL || plan->initPlan != NIL || plan->qual != NIL)
+        return false;
+
+    scan = (const CustomScan *) plan;
+    return scan->custom_plans == NIL && scan->custom_exprs == NIL &&
+        scan->methods != NULL &&
+        scan->methods == GetCustomScanMethods(QI_DUCKDB_SCAN_PROVIDER, true);
+}
+
 #if PG_QI_TESTING
 Datum
 qi_test_detector_contract(PG_FUNCTION_ARGS)

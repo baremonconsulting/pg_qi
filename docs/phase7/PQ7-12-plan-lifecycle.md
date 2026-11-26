@@ -75,14 +75,28 @@ PostgreSQL's normal planning policy. The server keeps control of when to
 use generic plans.
 [PostgreSQL plan cache](https://github.com/postgres/postgres/blob/5c839a2a08b9b87a349be97371fac6c5a2873b10/src/backend/utils/cache/plancache.c#L1234-L1296)
 
-The first routing mode accepts read-only analytical statements over ordinary
-heaps with supported integer and Boolean expressions. This includes
-aggregates, windows and non-recursive CTEs. It checks permissions and passes
-through queries involving row security, row locks, writes, unsupported
-expressions or types. When all three gates pass, it applies the values as
-typed constants to a copy of the analysed query and makes one scoped
-pg_duckdb planning request. The client keeps sending the same SQL and binds.
-If the provider declines, the downstream plan remains authoritative.
+Bound routing checks the full analysed statement, including its subqueries
+and CTEs. It checks table, column, function and provider-role permissions
+and permits read-only access to ordinary permanent heap tables.
+Statements with row security, locks, mutable functions, native function
+access hooks or unsupported transaction state follow the normal path.
+Routing is available for standalone statements and supported read-only
+transactions. Read-write transaction blocks and savepoints follow the
+normal path.
+Bound values must have built-in base types and a bounded, self-contained
+representation.
+
+An exact rule with reviewed parity and sufficient measured savings lets
+pg_qi copy the statement, substitute the typed constants and make a scoped
+pg_duckdb planning request. Eligibility starts as unknown. It passes when
+the registered DuckDB scan covers the whole plan and preserves the result
+column names, types, modifiers, collations and origins. On a clean decline,
+pg_qi restores the routing setting and plans the original statement with its
+original parameters. pg_duckdb may emit a warning on refusal. Planning
+errors and cancellation reach the client through PostgreSQL's normal
+error handling. In an explicit transaction,
+pg_duckdb can open its own transaction during preparation. A later
+`SAVEPOINT` can fail even when pg_qi falls back to a PostgreSQL plan.
 
 #### Qualify and install a rule
 
@@ -102,7 +116,9 @@ If the provider declines, the downstream plan remains authoritative.
    Use a custom plan for this capture. The key is local to the postmaster
    lifetime and covers the resolved query, typed values, database and
    role identities, transaction mode, relation estimates and key execution
-   settings. Keep the key private with the qualification evidence.
+   settings, including non-default planner options. Keep the key private
+   with the qualification evidence. Capture and qualify bindings again
+   when upgrading from the earlier key format.
 3. Install the reviewed rules in the superuser setting `pg_qi.bound_policy`.
    Each entry has the form below. Separate multiple entries with a comma.
    Expiry is a Unix timestamp in seconds.
@@ -111,9 +127,12 @@ If the provider declines, the downstream plan remains authoritative.
    key:postgres_lower_ms:duckdb_upper_ms:expires_at
    ```
 
-A rule attests that the exact query and bindings preserve semantics on the
-recorded build and environment. Use conservative observed timings and an
-expiry suitable for the workload. The rule must clear both thresholds,
+A rule records typed parity for the exact query and bindings on the test
+snapshot. Use conservative timings for the intended environment and an
+expiry suitable for the workload. Qualify again if the data changes in ways
+that matter to the query. Keep changes to DuckDB's session state through
+`duckdb.raw_query` outside the connections that use reviewed rules.
+The rule must clear both thresholds,
 `pg_qi.bound_min_saving_ms` and `pg_qi.bound_min_saving_percent`, which
 default to 5,000 ms and 10%. Settings changes covered by the key and
 unqualified bindings pass through. Clear `pg_qi.bound_policy` to withdraw
@@ -128,9 +147,10 @@ execution. The strict V2 reader requires
 `lifecycle=fresh_execution` on every complete record. CI runs this suite on
 every supported PostgreSQL major.
 
-The differential integration also executes a named CTE pipeline with
-aggregation and a window function. It checks changing text and binary
-bindings, SQL NULL, actual DuckDB execution, same-snapshot typed parity, benefit veto,
-unsupported types, rule expiry and generic-plan reuse. Its fixed timing
-inputs test the policy decision. Performance qualification uses measured
-inputs from the intended workload.
+The differential integration runs a prepared CTE pipeline with a left join,
+aggregation and a window function. It checks text and binary Bind formats,
+SQL NULL, actual DuckDB execution, typed parity, column origins, clean
+declines, a revoked provider role, settings changes, volatile expressions,
+a benefit veto, rule expiry and generic-plan reuse. Its fixed timing inputs
+test the policy decision. Performance qualification uses measurements from
+the intended workload.
