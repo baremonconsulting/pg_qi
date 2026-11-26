@@ -41,7 +41,7 @@ for major in $majors; do
     data_dir="$version_dir/data"
     socket_dir="$version_dir/socket"
     mkdir -p "$version_dir" "$socket_dir"
-    case "$artifact_root" in ""|/) echo "Unsafe WP11 artifact root" >&2; exit 1;; esac
+    case "$artifact_root" in ""|/) echo "Unsafe WP11 artefact root" >&2; exit 1;; esac
     case "$data_dir" in "$artifact_root"/pg*/data) ;; *) exit 1;; esac
     rm -rf "$data_dir"
 

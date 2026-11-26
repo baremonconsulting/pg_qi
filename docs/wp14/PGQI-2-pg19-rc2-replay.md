@@ -7,7 +7,7 @@ Status: **COMPLETE — PASS**
 ## Purpose
 
 Replay the existing WP14.2 gate against PostgreSQL 19 RC2 without changing
-the pg_qi product scope, classifier allow-list, routing behavior or public SQL
+the pg_qi product scope, classifier allow-list, routing behaviour or public SQL
 surface.
 
 ## Immutable identities
@@ -27,7 +27,7 @@ surface.
 - differential semantics corpus and known-issue exclusions;
 - PostgreSQL 17 assertion-enabled concurrency smoke remains green;
 - PostgreSQL 16–18 target and baseline jobs remain green;
-- no source-code, SQL API, classifier or routing behavior change.
+- no source-code, SQL API, classifier or routing behaviour change.
 
 ## Acceptance
 

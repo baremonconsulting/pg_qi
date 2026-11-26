@@ -3,7 +3,7 @@
 set -euo pipefail
 
 major=${1:?PostgreSQL major version is required}
-artifact_dir=${2:?artifact directory is required}
+artifact_dir=${2:?artefact directory is required}
 pg_config=${PG_CONFIG:-/usr/lib/postgresql/$major/bin/pg_config}
 built=${PG_QI_BUILT_PATH:-pg_qi.so}
 libdir=$($pg_config --pkglibdir)
@@ -69,7 +69,7 @@ for pattern in \
     "$sharedir/extension"/pg_qi_outer_test* "$sharedir/extension"/pg_qi_witness* \
     "$sharedir/extension"/pg_qi_execution_witness*; do
     if test -e "$pattern" || test -L "$pattern"; then
-        echo "test-only pg_qi artifact is installed in the production prefix: $pattern" >&2
+        echo "test-only pg_qi artefact is installed in the production prefix: $pattern" >&2
         exit 1
     fi
 done

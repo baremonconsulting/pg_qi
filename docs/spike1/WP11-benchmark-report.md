@@ -5,7 +5,7 @@ Result: **PASS (36/36 benchmark combinations)**
 
 ## Scope and method
 
-The benchmark used optimized, non-assert PostgreSQL builds independently for
+The benchmark used optimised, non-assert PostgreSQL builds independently for
 16.15, 17.11, and 18.6. pg_duckdb was pinned at
 `ee38d3b540ecea1d93683ba99bdcec5632a21eaf`.
 
@@ -16,7 +16,7 @@ measured requests against a 10,000-row table. The environment fixed
 Paths:
 
 - `simple`: fresh planning through the simple query protocol;
-- `custom`: a parameterized prepared statement with `force_custom_plan`;
+- `custom`: a parameterised prepared statement with `force_custom_plan`;
 - `generic`: the same prepared statement with `force_generic_plan`.
 
 Modes:
@@ -69,7 +69,7 @@ Actual delegation was also asserted, not inferred:
 - delegate/generic: 1 completed DuckDB plan followed by cached reuse for 500
   executions.
 
-This confirms decision-at-plan-time behavior: a generic cached plan does not
+This confirms decision-at-plan-time behaviour: a generic cached plan does not
 re-enter the policy decision for each execution.
 
 ## Interpretation

@@ -6,12 +6,12 @@ to execute a customer workload.
 
 ## Approval closure
 
-Before `OPERATION_GO`, the scope contains the exact measurement-plan artifact.
+Before `OPERATION_GO`, the scope contains the exact measurement-plan artefact.
 The plan freezes the workload and qualification identities, baseline manifest,
 resource policy, release, target, dataset and toolkit digests; exact scenarios;
 protocol and cache states; deterministic seed and balanced block order; warm-up
 count; allowed concurrency levels; statistical rules; and any value weights.
-Changing any byte changes the plan artifact, scope digest, and therefore
+Changing any byte changes the plan artefact, scope digest, and therefore
 invalidates an earlier operation approval.
 
 The plan itself deliberately has no `scope_sha256`, avoiding a circular hash.

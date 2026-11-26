@@ -29,7 +29,7 @@ removal of a non-portable runtime dependency on `rg`.
 
 Five independent final reviews were performed. Their blocking findings were
 iteratively corrected, including scenario completeness, full unordered result
-validation, cleanup ownership, path/connection safety, installed-artifact
+validation, cleanup ownership, path/connection safety, installed-artefact
 identity, cached-plan rollback, external force provenance, diagnostic
 retention, classifier security coverage and portable tooling.
 
@@ -46,7 +46,7 @@ retention, classifier security coverage and portable tooling.
 ## Human Review and disposition
 
 Human Review was granted on 2026-11-17 after confirmation of the exact
-revision, required artifact cells, open findings, cookbook commands and the
+revision, required artefact cells, open findings, cookbook commands and the
 default-off policy. Pull request #14 was subsequently merged into `main`, and
 the post-merge CI run passed on the resulting merge revision.
 

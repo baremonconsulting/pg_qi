@@ -73,14 +73,14 @@ scratch root and merged externally. Source spools must be regular,
 non-symlink, caller-owned files with no group or other permissions. Configured
 limits bound spool bytes, rows, columns, field bytes and in-memory rows.
 
-SHA-256 values protect artifact identity but are never the sole correctness
+SHA-256 values protect artefact identity but are never the sole correctness
 proof. The comparator reopens and parses both spools and verifies that their
 file identities remain stable. PASS means the complete supported typed
 multisets match; a difference is FAIL; malformed or unsupported evidence is
 invalid rather than a measured FAIL.
 
 Within a sealed private bundle, each observed spool must also be the exact
-artifact bound by the corresponding successful request contract. A missing
+artefact bound by the corresponding successful request contract. A missing
 request or acquisition binding makes the result incomplete and cannot yield
 aggregate PASS. Oracle scratch files are created only below the scope-frozen,
 caller-owned `0700` scratch root.
@@ -88,7 +88,7 @@ caller-owned `0700` scratch root.
 The controlled v1 bundle has exactly one executed request per corpus query.
 Repeated attempts require distinct versioned corpus case identifiers; they
 cannot overwrite or ambiguously share a query identity. Baseline and observed
-artifacts must have distinct paths.
+artefacts must have distinct paths.
 
 ## Non-go scope
 

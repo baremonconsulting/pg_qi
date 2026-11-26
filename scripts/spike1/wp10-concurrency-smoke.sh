@@ -27,7 +27,7 @@ data_dir="$artifact_root/data"
 socket_dir="$artifact_root/socket"
 case "$artifact_root" in
     ''|'/'|'/tmp'|'/var/tmp')
-        echo "Refusing unsafe artifact directory: $artifact_root" >&2
+        echo "Refusing unsafe artefact directory: $artifact_root" >&2
         exit 1
         ;;
 esac

@@ -23,13 +23,13 @@ before planning.
   `PlannedStmt *` it receives.
 - Planner arguments, including PostgreSQL 19 `ExplainState *`, are forwarded
   unchanged by the compatibility wrapper.
-- Existing nested force masking and poisoned-state abort behavior are shared by
+- Existing nested force masking and poisoned-state abort behaviour are shared by
   all modes and remain unchanged.
 - An external force is observed but is never attributed to pg_qi.
 - `shadow_p0` publishes the V1 audit reason `decision_only`; it does not claim
   that any V2 gate has passed.
 - The skeleton collects only bounded relation-table facts across the complete
-  query tree before downstream planning. A missing catalog row or more than 16
+  query tree before downstream planning. A missing catalogue row or more than 16
   combined range-table entries, or more than 256 visited query-tree nodes,
   produces an
   internal `UNKNOWN` fact state and never requests delegation. PQ7-5 extends

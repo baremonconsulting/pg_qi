@@ -240,7 +240,7 @@ class ProductionBoundaryMutationTests(unittest.TestCase):
                                     env={**os.environ, "PG_CONFIG": str(pg_config),
                                          "PG_QI_BUILT_PATH": str(built)},
                                     text=True, capture_output=True, check=False)
-            self.assertIn("test-only pg_qi artifact", result.stderr)
+            self.assertIn("test-only pg_qi artefact", result.stderr)
 
     def test_mapped_file_identity_accepts_current_python_mapping(self):
         result = subprocess.run(

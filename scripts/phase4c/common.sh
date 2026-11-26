@@ -27,10 +27,10 @@ pgqi4c_require_safe_root() {
 
 pgqi4c_require_private_parent() {
     local parent=$1 mode
-    test -d "$parent" && test ! -L "$parent" || { echo "invalid artifact parent: $parent" >&2; return 1; }
-    test "$(stat -c %u "$parent")" = "$(id -u)" || { echo "artifact parent is not owned by current user" >&2; return 1; }
+    test -d "$parent" && test ! -L "$parent" || { echo "invalid artefact parent: $parent" >&2; return 1; }
+    test "$(stat -c %u "$parent")" = "$(id -u)" || { echo "artefact parent is not owned by current user" >&2; return 1; }
     mode=$(stat -c %a "$parent")
-    if (( (8#$mode & 8#022) != 0 )); then echo "artifact parent is group/world writable" >&2; return 1; fi
+    if (( (8#$mode & 8#022) != 0 )); then echo "artefact parent is group/world writable" >&2; return 1; fi
 }
 
 pgqi4c_start() {

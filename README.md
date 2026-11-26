@@ -1,7 +1,7 @@
 # pg_qi — PostgreSQL Query Intelligence
 
 [![CI](https://github.com/baremonconsulting/pg_qi/actions/workflows/ci.yml/badge.svg)](https://github.com/baremonconsulting/pg_qi/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Licence](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 `pg_qi` is a PostgreSQL execution-policy extension for safe and explainable query-engine selection, initially targeting [`pg_duckdb`](https://github.com/duckdb/pg_duckdb).
 
@@ -152,8 +152,8 @@ The experimental `bound` mode routes qualified analytical statements during
 extended-protocol Bind. It uses the current parameter types and values and
 requires reviewed equivalence and measured end-to-end savings. See
 [prepared statements and bound routing](docs/phase7/PQ7-12-plan-lifecycle.md#delegation-with-bound-values).
-The pinned PG16–19 production matrix, non-interference oracle, artifact
-boundary, and engineering overhead gate are documented in
+The pinned PG16–19 production matrix, non-interference oracle, checks on what
+the production build installs and engineering overhead gate are documented in
 [`docs/production-compatibility-ci.md`](docs/production-compatibility-ci.md).
 
 The PQ-31 differential oracle is a CI and controlled-lab qualification tool,

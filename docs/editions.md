@@ -35,7 +35,7 @@ The complete single-instance router will be open source in this repository, incl
 | Admission control | Planned |
 | Execution watchdog | Planned |
 | Quarantine | Planned |
-| Manual whitelist and blacklist | Planned |
+| Manual allow-lists and block-lists | Planned |
 | Explain reason codes | Versioned backend-local shadow and routing reasons implemented |
 | Local decision telemetry | Backend-local read-only shadow snapshot implemented; export and durable telemetry planned |
 

@@ -43,6 +43,18 @@ A pull request should:
 - Avoid undefined behaviour and implicit ownership rules.
 - Add comments for invariants and non-obvious PostgreSQL lifecycle constraints.
 
+## Writing
+
+Use plain British English in documentation, code comments, user-facing
+messages, commits and pull requests. Use spellings such as `behaviour`,
+`optimise` and `organisation`. Use `program` for software.
+Keep the original spelling in official names, identifiers, paths and quoted
+output.
+
+Start with the result or the action the reader needs to take. Name the
+setting, command or observation that supports your point. Include any
+condition that changes how the reader should use the result.
+
 ## Licence and provenance
 
 All contributions accepted into this repository are licensed under Apache License 2.0.

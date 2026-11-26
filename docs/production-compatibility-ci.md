@@ -13,7 +13,7 @@ and binary identities is rejected.
 The job builds pg_qi with `PG_QI_TESTING=0`. It rejects a mismatch between the
 built and installed libraries, test-only strings or exported symbols, and
 test-only pg_qi files in the PostgreSQL installation. The external hook fixture
-is test infrastructure and is not part of the pg_qi production artifact. CI
+is test infrastructure and is not part of the pg_qi production artefact. CI
 removes it after the probes and repeats the production-boundary check before
 retaining final evidence.
 
@@ -91,5 +91,5 @@ python3 -m unittest tests.phase7.test_pq42_ci
 Keep both build-identity variables exported: the benchmark deliberately
 rebuilds `pg_qi` and refuses to continue if that output differs from the
 installed production library. The exact source-output/provider manifest is a
-hosted CI artifact; a local run without the retained PostgreSQL and pg_duckdb
+hosted CI artefact; a local run without the retained PostgreSQL and pg_duckdb
 source build trees is exploratory evidence, not a substitute for that gate.
