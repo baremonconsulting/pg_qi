@@ -20,7 +20,7 @@ static void
 phase7_usage(const char *program)
 {
     fprintf(stderr,
-            "usage: %s --mode exporter|arm --conninfo STR [arm options]\n",
+            "usage: %s --mode exporter|arm|bound-arm --conninfo STR [arm options]\n",
             program);
 }
 
@@ -138,8 +138,17 @@ snapshot_import_sql(PGconn *connection, const char *snapshot)
 }
 
 static const char *
-arm_configuration(const char *arm)
+arm_configuration(const char *arm, bool qualify_bound)
 {
+    if (qualify_bound)
+    {
+        if (strcmp(arm, "native") == 0)
+            return "SET LOCAL pg_qi.enabled=on; SET LOCAL pg_qi.routing_mode=off";
+        if (strcmp(arm, "bound_probe") == 0 || strcmp(arm, "bound") == 0)
+            return "SET LOCAL pg_qi.enabled=on; SET LOCAL pg_qi.routing_mode=bound; "
+                   "SET LOCAL pg_qi.bound_policy=''";
+        return NULL;
+    }
     if (strcmp(arm, "native") == 0)
         return "SET LOCAL max_parallel_workers_per_gather=0; "
                "SET LOCAL pg_qi.enabled=on; SET LOCAL pg_qi.routing_mode=off; "
@@ -153,6 +162,33 @@ arm_configuration(const char *arm)
                "SET LOCAL pg_qi.enabled=on; SET LOCAL pg_qi.routing_mode=shadow_p0; "
                "SET LOCAL duckdb.force_execution=off";
     return NULL;
+}
+
+static bool
+install_trial_rule(PGconn *connection, uint64_t deadline_ms, int64_t deadline)
+{
+    char key[66];
+    char sql[384];
+    char *rule;
+
+    if (fgets(key, sizeof(key), stdin) == NULL ||
+            strspn(key, "0123456789abcdef") != 64 || key[64] != '\n')
+        return false;
+    key[64] = '\0';
+    /* The trial exercises routing. Compare the measured bounds against the
+     * original session thresholds after acquisition. */
+    if (!commands_bounded(connection, "SET LOCAL pg_qi.bound_min_saving_ms=0; "
+                         "SET LOCAL pg_qi.bound_min_saving_percent=0", deadline))
+        return false;
+    snprintf(sql, sizeof(sql),
+             "SELECT pg_catalog.set_config('pg_qi.bound_policy', '%s:2:1:' || "
+             "(pg_catalog.floor(extract(epoch FROM pg_catalog.clock_timestamp()))::bigint + %llu)::text, true)",
+             key, (unsigned long long) ((deadline_ms + 999U) / 1000U + 1U));
+    rule = query_scalar(connection, sql, deadline);
+    if (rule == NULL)
+        return false;
+    free(rule);
+    return true;
 }
 
 static int
@@ -232,7 +268,7 @@ static int
 run_arm(const char *conninfo, const char *arm, const char *snapshot,
         const char *sql_path, const char *spool_path, uint64_t deadline_ms,
         bool import_snapshot, const char *subject_token, const char *site,
-        const char *bindings_path, Limits *limits)
+        const char *bindings_path, bool qualify_bound, Limits *limits)
 {
     PGconn *connection = NULL;
     FILE *spool = NULL;
@@ -243,7 +279,9 @@ run_arm(const char *conninfo, const char *arm, const char *snapshot,
     char *v2_after = NULL;
     char *witness_before = NULL;
     char *witness_after = NULL;
-    const char *configuration = arm_configuration(arm);
+    char *saving_floors = NULL;
+    char *bound_key = NULL;
+    const char *configuration = arm_configuration(arm, qualify_bound);
     const char *reason = "setup";
     char sqlstate[6] = "";
     char witness_configuration[160];
@@ -288,6 +326,16 @@ run_arm(const char *conninfo, const char *arm, const char *snapshot,
     reason = "configuration";
     if (!commands_bounded(connection, configuration, deadline))
         goto done;
+    if (qualify_bound)
+    {
+        saving_floors = query_scalar(connection,
+            "SELECT pg_catalog.current_setting('pg_qi.bound_min_saving_ms') || ':' || "
+            "pg_catalog.current_setting('pg_qi.bound_min_saving_percent')", deadline);
+        if (!safe_field(saving_floors) ||
+                (strcmp(arm, "bound") == 0 &&
+                 !install_trial_rule(connection, deadline_ms, deadline)))
+            goto done;
+    }
     reason = "before_readback";
     v2_before = show_scalar(connection, "pg_qi.decision_v2", deadline);
     witness_before = show_scalar(connection, "pg_qi_witness.last_record", deadline);
@@ -366,13 +414,24 @@ rollback:
         reason = "readback";
         goto done;
     }
+    if (qualify_bound && complete)
+    {
+        bound_key = show_scalar(connection, "pg_qi.bound_key",
+                                now_ms() + (int64_t) deadline_ms);
+        if (!safe_field(bound_key))
+        {
+            complete = 0;
+            reason = "key_readback";
+            goto done;
+        }
+    }
     if (complete)
         reason = "ok";
     else if (controlled_error)
         complete = 1;
 
 done:
-    printf("ARM\t%s\t%s\t%s\t%llu\t%s\t%s\t%s\t%s\t%s\t%s\n",
+    printf("ARM\t%s\t%s\t%s\t%llu\t%s\t%s\t%s\t%s\t%s\t%s",
            complete ? "complete" : "incomplete", reason, sqlstate,
            (unsigned long long) limits->rows,
            identity != NULL ? identity : "\t\t\t\t\t",
@@ -381,6 +440,11 @@ done:
            witness_before != NULL ? witness_before : "",
            witness_after != NULL ? witness_after : "",
            controlled_error ? "error" : (complete ? "complete" : "incomplete"));
+    if (qualify_bound)
+        printf("\t%llu\t%s\t%s", (unsigned long long) limits->request_duration_ns,
+               saving_floors != NULL ? saving_floors : "",
+               bound_key != NULL ? bound_key : "");
+    putchar('\n');
     fflush(stdout);
     if (connection != NULL)
         PQfinish(connection);
@@ -393,6 +457,8 @@ done:
     free(v2_after);
     free(witness_before);
     free(witness_after);
+    free(saving_floors);
+    free(bound_key);
     for (uint32_t i = 0; i < MAX_SUBJECT_PARAMETERS; ++i)
         free(parameters.text[i]);
     return complete ? 0 : 1;
@@ -411,6 +477,7 @@ main(int argc, char **argv)
     const char *subject_token = NULL;
     const char *site = NULL;
     bool import_snapshot = true;
+    bool qualify_bound;
     uint64_t deadline_ms = 30000;
     uint64_t value;
     Limits limits = {0};
@@ -453,7 +520,10 @@ main(int argc, char **argv)
             return 64;
         }
     }
-    if (mode == NULL || conninfo == NULL || (bindings_path != NULL && strcmp(mode, "arm") != 0))
+    qualify_bound = mode != NULL && strcmp(mode, "bound-arm") == 0;
+    if (mode == NULL || conninfo == NULL ||
+            (bindings_path != NULL && !qualify_bound && strcmp(mode, "arm") != 0) ||
+            (qualify_bound && (bindings_path == NULL || !import_snapshot)))
     {
         phase7_usage(argv[0]);
         return 64;
@@ -462,10 +532,11 @@ main(int argc, char **argv)
         return run_exporter(conninfo, deadline_ms, site);
     if (!strcmp(mode, "command") && sql_path != NULL)
         return run_command(conninfo, sql_path, deadline_ms, site);
-    if (!strcmp(mode, "arm") && arm != NULL && snapshot != NULL &&
+    if ((qualify_bound || !strcmp(mode, "arm")) && arm != NULL && snapshot != NULL &&
             sql_path != NULL && spool_path != NULL && subject_token != NULL)
         return run_arm(conninfo, arm, snapshot, sql_path, spool_path,
-                       deadline_ms, import_snapshot, subject_token, site, bindings_path, &limits);
+                       deadline_ms, import_snapshot, subject_token, site, bindings_path,
+                       qualify_bound, &limits);
     phase7_usage(argv[0]);
     return 64;
 }

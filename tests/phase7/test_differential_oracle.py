@@ -17,6 +17,7 @@ from tools.phase5.corpus_oracle import MAGIC_V2, TRAILER_MARKER
 from tools.phase7.differential_oracle import (DifferentialError, evaluate, execution_subject_token,
                                               main as oracle_main,
                                               validate_no_import_control)
+from tools.phase7.run_differential import measured_bounds
 
 
 V2 = ("v=2;sv=2;s=complete;cid=0123456789abcdef0123456789abcdef;g=1;e=1;"
@@ -408,6 +409,23 @@ class DifferentialOracleTest(unittest.TestCase):
             receipts[arm] = receipt
         self.assertEqual(evaluate(self.manifest, receipts, self.scratch)["reason"],
                          "unsupported_result_type")
+
+
+class BoundTimingTests(unittest.TestCase):
+    def test_observed_bounds_clear_both_saving_floors(self) -> None:
+        samples = [{"native_ns": 50_000_999_999, "bound_ns": 44_999_999_999},
+                   {"native_ns": 51_000_000_000, "bound_ns": 45_000_000_000}]
+        bounds = measured_bounds(samples, 5000, 10)
+        self.assertEqual(bounds["postgres_lower_ms"], 50_000)
+        self.assertEqual(bounds["duckdb_upper_ms"], 45_000)
+        self.assertEqual(bounds["beneficial"], "pass")
+        self.assertEqual(measured_bounds(samples, 5001, 10)["beneficial"], "veto")
+        self.assertEqual(measured_bounds(samples, 5000, 11)["beneficial"], "veto")
+
+        samples[1]["bound_ns"] += 1
+        bounds = measured_bounds(samples, 5000, 10)
+        self.assertEqual(bounds["duckdb_upper_ms"], 45_001)
+        self.assertEqual(bounds["beneficial"], "veto")
 
 
 if __name__ == "__main__":
