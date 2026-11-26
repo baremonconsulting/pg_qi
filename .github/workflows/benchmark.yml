@@ -21,7 +21,7 @@ jobs:
       matrix:
         postgresql: ["16", "17", "18", "19"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install PostgreSQL and dependencies
         run: bash .github/scripts/ci-install-postgresql.sh "${{ matrix.postgresql }}"
       - name: Build target pg_duckdb
@@ -41,7 +41,7 @@ jobs:
             | tee "ci-artifacts/benchmark-pg${{ matrix.postgresql }}/pgqi4c-path.txt"
       - name: Upload benchmark evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: benchmark-pg${{ matrix.postgresql }}
           path: |

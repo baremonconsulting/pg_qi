@@ -29,7 +29,7 @@ jobs:
       matrix:
         postgresql: ["16", "17", "18", "19"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install PostgreSQL headers
         run: bash .github/scripts/ci-install-postgresql.sh "${{ matrix.postgresql }}"
       - name: Compile production and test variants
@@ -49,7 +49,7 @@ jobs:
           test -f pg_qi.so
       - name: Upload compile logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: compile-pg${{ matrix.postgresql }}
           path: ci-artifacts/compile-pg${{ matrix.postgresql }}
@@ -58,7 +58,7 @@ jobs:
     name: Phase 5 protocol and memory spike PG16
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install PostgreSQL 16 and dependencies
         run: bash .github/scripts/ci-install-postgresql.sh 16
       - name: Build pinned pg_duckdb
@@ -94,7 +94,7 @@ jobs:
             tests/phase5/run-protocol-spike.sh "${RUNNER_TEMP}/phase5-protocol-spike"
       - name: Upload phase 5 evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: phase5-protocol-spike-pg16
           path: |
@@ -111,7 +111,7 @@ jobs:
       matrix:
         postgresql: ["16", "17", "18", "19"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install PostgreSQL and dependencies
         env:
           PG_SOURCE_PINNED: "1"
@@ -292,7 +292,7 @@ jobs:
           cp -a "${RUNNER_TEMP}/pgqi4c-pg${{ matrix.postgresql }}" "ci-artifacts/production-shadow-pg${{ matrix.postgresql }}/pgqi4c" 2>/dev/null || true
       - name: Upload production shadow evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: production-shadow-pg${{ matrix.postgresql }}
           path: ci-artifacts/production-shadow-pg${{ matrix.postgresql }}
@@ -305,7 +305,7 @@ jobs:
       matrix:
         postgresql: ["16", "17", "18", "19"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install PostgreSQL and dependencies
         run: bash .github/scripts/ci-install-postgresql.sh "${{ matrix.postgresql }}"
       - name: Build pinned pg_duckdb
@@ -338,7 +338,7 @@ jobs:
           cp "${RUNNER_TEMP}/regression-pg${{ matrix.postgresql }}.log" "ci-artifacts/regression-pg${{ matrix.postgresql }}/diagnostics/postgresql.log" 2>/dev/null || true
       - name: Upload regression evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: regression-pg${{ matrix.postgresql }}
           path: ci-artifacts/regression-pg${{ matrix.postgresql }}
@@ -351,7 +351,7 @@ jobs:
       matrix:
         postgresql: ["16", "17", "18", "19"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install PostgreSQL and dependencies
         run: bash .github/scripts/ci-install-postgresql.sh "${{ matrix.postgresql }}"
       - name: Build pinned pg_duckdb
@@ -367,7 +367,7 @@ jobs:
         run: bash scripts/spike1/wp9-matrix.sh
       - name: Upload S0-S11 evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: integration-s0-s11-pg${{ matrix.postgresql }}
           path: |
@@ -389,7 +389,7 @@ jobs:
       DUCKDB_ARCHIVE_SHA256: 838d98a85e697bab9935010c88a8c67d3312ccedcab4cb4a0ba01da65113bb70
       PG_DUCKDB_BUILD_MODE: prebuilt
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install PostgreSQL and dependencies
         run: bash .github/scripts/ci-install-postgresql.sh "${{ matrix.postgresql }}"
       - name: Build baseline pg_duckdb
@@ -405,7 +405,7 @@ jobs:
         run: bash scripts/spike1/wp9-matrix.sh
       - name: Upload baseline evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: baseline-s0-s11-pg${{ matrix.postgresql }}
           path: |
@@ -421,7 +421,7 @@ jobs:
       matrix:
         postgresql: ["16", "19"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install PostgreSQL and dependencies
         run: bash .github/scripts/ci-install-postgresql.sh "${{ matrix.postgresql }}"
       - name: Build target pg_duckdb
@@ -455,7 +455,7 @@ jobs:
           trap - EXIT
       - name: Upload differential evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: differential-pg${{ matrix.postgresql }}
           path: |
@@ -466,7 +466,7 @@ jobs:
     name: Reentrancy and failpoints PG17
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install PostgreSQL and dependencies
         run: bash .github/scripts/ci-install-postgresql.sh 17
       - name: Build pinned pg_duckdb
@@ -482,7 +482,7 @@ jobs:
           done
       - name: Upload reentrancy evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: reentrancy-focus-pg17
           path: |
@@ -497,7 +497,7 @@ jobs:
       PG17_ASSERT_SHA: 083ac033419f690758508e08c1736089384bbee8
       PG_ASSERT_ROOT: /opt/postgresql/17-assert
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install build dependencies
         run: bash .github/scripts/ci-install-postgresql.sh 17
       - name: Build PostgreSQL 17.11 with assertions
@@ -529,7 +529,7 @@ jobs:
         run: bash scripts/spike1/wp10-concurrency-smoke.sh
       - name: Upload concurrency evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: concurrency-smoke-pg17
           path: |
@@ -541,7 +541,7 @@ jobs:
     name: Parallel worker isolation S11 PG17
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install PostgreSQL and dependencies
         run: bash .github/scripts/ci-install-postgresql.sh 17
       - name: Build pinned pg_duckdb
@@ -559,7 +559,7 @@ jobs:
         run: grep -Eq '^[0-9]+\|t\|0\|f\|f\|' "${RUNNER_TEMP}/parallel-s11/pg17/S11.log"
       - name: Upload parallel evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: parallel-isolation-pg17
           path: |
