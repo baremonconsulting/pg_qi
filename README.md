@@ -209,9 +209,25 @@ There is a single production PostgreSQL extension, `pg_qi`, and it is fully open
 
 The planned Baremon Query Intelligence Platform will run outside the database and consume `pg_qi` telemetry through a public, versioned contract that is not yet defined. Baremon may also provide certified builds, assessments, support and professional services. Certified builds use the same extension name and provide identical functionality. See [docs/editions.md](docs/editions.md) for the status of each component.
 
+## Known issues
+
+### Disk spill with pg_duckdb 1.2.1
+
+A query delegated through stock pg_duckdb 1.2.1 can fail when DuckDB needs
+to spill to disk. For non-superusers missing either PostgreSQL server file
+role, the error can include
+`File system LocalFileSystem has been disabled by configuration`.
+[Upstream issue #864](https://github.com/duckdb/pg_duckdb/issues/864)
+
+For workarounds and their security implications, see
+[file privileges for disk spill](SECURITY.md#file-privileges-for-disk-spill).
+
 ## Security
 
 Do not report security vulnerabilities through public issues. Follow [SECURITY.md](SECURITY.md).
+
+Check the scope of any file-role grant in [file privileges for disk
+spill](SECURITY.md#file-privileges-for-disk-spill).
 
 ## Licence
 

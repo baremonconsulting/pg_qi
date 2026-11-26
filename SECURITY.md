@@ -42,3 +42,22 @@ implemented boundary and the controls required before routing can be enabled.
 Reports about planner-hook ordering, GUC restoration, fail-closed
 classification, plan-provider verification or leakage of test-only controls
 are security-relevant and should use the private reporting channel above.
+
+## File privileges for disk spill
+
+For a non-superuser, stock pg_duckdb 1.2.1 requires the effective PostgreSQL
+role to belong to both `pg_read_server_files` and `pg_write_server_files`
+to keep `LocalFileSystem` available. The provider's filesystem settings
+and the operating system's file permissions still apply.
+[pg_duckdb role check](https://github.com/duckdb/pg_duckdb/blob/v1.2.1/src/pg/permissions.cpp#L11-L15)
+
+These grants cover files that PostgreSQL can read or write through its
+operating system account. PostgreSQL warns that the roles bypass
+database-level checks for direct file access and can lead to
+superuser-level access. Reserve them for a dedicated execution role you
+already trust with server files.
+[PostgreSQL predefined roles](https://www.postgresql.org/docs/current/predefined-roles.html)
+
+An upstream fix or a reviewed local pg_duckdb patch should let DuckDB write
+its own spill files while preserving the usual file access checks for
+application roles. [Upstream issue #864](https://github.com/duckdb/pg_duckdb/issues/864)
