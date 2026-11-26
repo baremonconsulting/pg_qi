@@ -92,7 +92,9 @@ If the provider declines, the downstream plan remains authoritative.
    the DuckDB arm. For each binding, verify actual engine execution and
    compare types, rows, NULLs and required ordering against PostgreSQL on
    the same snapshot. Measure paired end-to-end times including Bind,
-   planning and execution.
+   planning and execution. The
+   [differential runner](PQ7-4-differential-oracle.md#measure-the-bound-route)
+   collects this evidence for an exact binding.
 2. In the target environment, leave `pg_qi.bound_policy` empty, select
    `bound` and execute the same binding on the intended connection
    identity. Read `SHOW pg_qi.bound_key` immediately after the execution.

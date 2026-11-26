@@ -137,11 +137,13 @@ def validate_receipt(value: dict[str, Any], expected_arm: str) -> dict[str, Any]
     else:
         value["_v2_advanced"] = int(v2_after["e"]) == int(v2_before["e"]) + 1
     expected_v2 = {
-        "native": ("off", "off"),
-        "forced": ("off", "external"),
-        "shadow": ("shadow_p0", "off"),
+        "native": {("off", "off")},
+        "forced": {("off", "external")},
+        "shadow": {("shadow_p0", "off")},
+        "bound_probe": {("bound", "off")},
+        "bound": {("bound", "off"), ("bound", "qi_stack")},
     }[expected_arm]
-    if value["_v2_advanced"] and (v2_after.get("mode"), v2_after.get("force")) != expected_v2:
+    if value["_v2_advanced"] and (v2_after.get("mode"), v2_after.get("force")) not in expected_v2:
         raise DifferentialError("V2 arm mode or force origin mismatch")
     if value["_v2_advanced"] and v2_after.get("enabled") != "on":
         raise DifferentialError("pg_qi is not enabled for the arm")
@@ -224,6 +226,14 @@ def evaluate_qualified_pair(left_name: str, left: dict[str, Any], right_name: st
                           item["spool"]["rows"] > 0) for item in pair))
     if not qualified:
         return None
+    return compare_receipt_results(left_name, left, right_name, right, manifest, scratch_root)
+
+
+def compare_receipt_results(left_name: str, left: dict[str, Any], right_name: str,
+                            right: dict[str, Any], manifest: dict[str, Any],
+                            scratch_root: Path) -> dict[str, Any] | None:
+    """Compare the descriptors and values of two already qualified executions."""
+    pair = (left, right)
     descriptors = {tuple((column.oid, column.typmod)
                           for column in item["_witness"].columns) for item in pair}
     if len(descriptors) != 1:

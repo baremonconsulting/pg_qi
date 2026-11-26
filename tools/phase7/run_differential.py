@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the bounded PQ-31 exporter and three isolated arm sessions."""
+"""Run typed differential checks and qualify bound routing in a lab."""
 
 from __future__ import annotations
 
@@ -20,7 +20,8 @@ sys.path.insert(0, str(ROOT))
 
 from tools.phase5.corpus_oracle import (MAGIC_V2, OracleError, TypedSpool,
                                         compare_spools, load_json, write_json_exclusive)
-from tools.phase7.differential_oracle import (ARMS, PG_SNAPSHOT, DifferentialError, evaluate,
+from tools.phase7.differential_oracle import (ARMS, HEX64, PG_SNAPSHOT, DifferentialError,
+                                              compare_receipt_results, evaluate,
                                               evaluate_qualified_pair, execution_subject_token,
                                               validate_cross_bindings,
                                               validate_manifest, validate_no_import_control,
@@ -154,6 +155,108 @@ def serialize_bindings(path: Path, expected_digest: str) -> bytearray:
     return binary
 
 
+def measured_bounds(samples: list[dict], saving_ms: int, saving_percent: int) -> dict:
+    postgres_low = min(sample["native_ns"] for sample in samples) // 1_000_000
+    duckdb_high = (max(sample["bound_ns"] for sample in samples) + 999_999) // 1_000_000
+    saving = postgres_low - duckdb_high
+    clears_floors = (saving > 0 and saving >= saving_ms and
+                     saving * 100 >= postgres_low * saving_percent)
+    return {"postgres_lower_ms": postgres_low, "duckdb_upper_ms": duckdb_high,
+            "min_saving_ms": saving_ms, "min_saving_percent": saving_percent,
+            "beneficial": "pass" if clears_floors else "veto"}
+
+
+def qualify_bound(args: argparse.Namespace, manifest: dict, command: list[str],
+                  exporter: dict, snapshot: str, token_digest: str) -> dict:
+    report = {"schema_version": 1, "document_type": "pq54_bound_qualification",
+              "eligible": "unknown", "safe": "unknown", "beneficial": "unknown",
+              "result": "INCONCLUSIVE", "samples": []}
+    if args.site_binding:
+        report["site_binding"] = args.site_binding
+    receipts = {}
+
+    def acquire(label: str, arm: str, trial_key: str = "") -> tuple[dict, int, tuple[int, int], str]:
+        spool = args.run_root / f"{label}.spool"
+        process = subprocess.run(
+            [*command, "--mode", "bound-arm", "--arm", arm, "--spool", str(spool)],
+            input=trial_key + "\n", capture_output=True, text=True, check=False)
+        lines = process.stdout.splitlines()
+        if len(lines) != 1:
+            raise RunError(f"{label} did not produce one result")
+        fields = lines[0].rsplit("\t", 3)
+        if len(fields) != 4:
+            raise DifferentialError("bound arm timing fields are missing")
+        result = parse_arm(fields[0])
+        if process.returncode != 0 or not result["complete"]:
+            raise RunError(f"{label} did not complete ({result['reason']})")
+        raw = arm_receipt(manifest, arm, result, spool, exporter, snapshot,
+                          token_digest, imported=True)
+        write_json_exclusive(args.run_root / f"{label}.receipt.json", raw)
+        receipt = validate_receipt(copy.deepcopy(raw), arm)
+        receipts[label] = receipt
+        validate_cross_bindings(manifest, receipts)
+        if receipt["spool"]["terminal_status"] != "complete":
+            raise RunError(f"{label} returned SQLSTATE {receipt['spool']['sqlstate']}")
+        if not (receipt["_v2_advanced"] and receipt["_witness_advanced"] and
+                receipt["_witness_sufficient"] and not receipt["_unsupported"] and
+                receipt["snapshot"]["arm_snapshot"] == snapshot):
+            raise RunError(f"{label} lacks a complete execution, decision or snapshot")
+        if not re.fullmatch(r"[1-9][0-9]*", fields[1]) or not re.fullmatch(r"[0-9]+:[0-9]+", fields[2]):
+            raise DifferentialError("invalid bound arm timing or saving floors")
+        milliseconds, percent = map(int, fields[2].split(":"))
+        if milliseconds > 2**31 - 1 or percent > 100:
+            raise DifferentialError("saving floors are outside the policy range")
+        return receipt, int(fields[1]), (milliseconds, percent), fields[3]
+
+    probe, _, floors, key = acquire("probe", "bound_probe")
+    decision = parse_v2(probe["v2_after"])
+    if probe["_witness"].engine != "postgres" or decision["policy"] != "pass_through":
+        return {**report, "reason": "native_probe_unproved"}
+    if decision["eligible"] == "veto":
+        return {**report, "result": "FAIL", "eligible": "veto", "reason": "ineligible_binding"}
+    if decision["eligible"] != "pass" or not HEX64.fullmatch(key):
+        return {**report, "reason": "qualification_key_unavailable"}
+
+    for index in range(args.bound_pairs):
+        order = ("native", "bound") if index % 2 == 0 else ("bound", "native")
+        pair = {}
+        durations = {}
+        for arm in order:
+            receipt, duration, observed_floors, observed_key = acquire(
+                f"pair-{index + 1}-{arm}", arm, key if arm == "bound" else "")
+            if observed_floors != floors:
+                return {**report, "reason": "saving_floors_changed"}
+            if arm == "native" and receipt["_witness"].engine != "postgres":
+                return {**report, "reason": "native_execution_unproved"}
+            if arm == "bound":
+                decision = parse_v2(receipt["v2_after"])
+                if observed_key and observed_key != key:
+                    return {**report, "reason": "qualification_key_changed"}
+                if (observed_key != key or decision["force"] != "qi_stack" or
+                        decision["policy"] != "request_delegation"):
+                    return {**report, "reason": "bound_rule_not_applied"}
+                if receipt["_witness"].engine != "duckdb":
+                    if receipt["_witness"].engine == "postgres" and decision["eligible"] == "veto":
+                        return {**report, "result": "FAIL", "eligible": "veto",
+                                "reason": "provider_declined"}
+                    return {**report, "reason": "bound_execution_unproved"}
+                if (decision["eligible"], decision["safe"], decision["beneficial"]) != ("pass", "pass", "pass"):
+                    return {**report, "reason": "bound_decision_unproved"}
+            pair[arm] = receipt
+            durations[f"{arm}_ns"] = duration
+        failure = compare_receipt_results("native", pair["native"], "bound", pair["bound"],
+                                          manifest, args.run_root)
+        if failure is not None:
+            return {**report, **failure, "eligible": "pass", "safe": "veto"}
+        report["samples"].append({"order": list(order), **durations})
+
+    bounds = measured_bounds(report["samples"], *floors)
+    report.update(bounds, eligible="pass", safe="pass")
+    if bounds["beneficial"] == "pass":
+        return {**report, "result": "PASS", "reason": "measured_saving", "bound_key": key}
+    return {**report, "result": "FAIL", "reason": "saving_below_floor"}
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser()
     result.add_argument("--driver", required=True, type=Path)
@@ -161,6 +264,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--manifest", required=True, type=Path)
     result.add_argument("--sql-file", required=True, type=Path)
     result.add_argument("--bindings-file", type=Path)
+    result.add_argument("--bound-pairs", type=int, help="measure this many native and bound pairs")
     result.add_argument("--run-root", required=True, type=Path)
     result.add_argument("--concurrent-sql-file", type=Path)
     result.add_argument("--site-binding", help="require this site on every isolated-lab connection")
@@ -170,6 +274,8 @@ def parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
+    document_type = ("pq54_bound_qualification" if args.bound_pairs is not None
+                     else "pq31_differential_result")
     site_args = ["--site-binding", args.site_binding] if args.site_binding else []
     exporter: subprocess.Popen[str] | None = None
     proven_failure: dict[str, object] | None = None
@@ -181,6 +287,9 @@ def main(argv: list[str] | None = None) -> int:
             raise RunError("SQL file does not match manifest")
         if (args.bindings_file is not None) != (manifest["schema_version"] == 2):
             raise RunError("bound runs require a version 2 manifest and a bindings file")
+        if args.bound_pairs is not None and (args.bound_pairs < 2 or
+                args.bindings_file is None or args.concurrent_sql_file is not None):
+            raise RunError("paired qualification needs at least two pairs, bindings and a fixed snapshot")
         binding_args = []
         if args.bindings_file is not None:
             encoded = serialize_bindings(args.bindings_file, manifest["bindings_sha256"])
@@ -214,6 +323,14 @@ def main(argv: list[str] | None = None) -> int:
         exporter_identity = {"pid": exporter_pid, "database": exporter_database,
             "user": exporter_user, "database_oid": exporter_database_oid,
             "user_oid": exporter_user_oid}
+        arm_command = [str(args.driver), "--conninfo", args.conninfo, "--snapshot", token,
+                       "--sql-file", str(subject_copy), "--subject-token", subject_token,
+                       "--deadline-ms", str(args.deadline_ms), *site_args, *binding_args]
+        if args.bound_pairs is not None:
+            report = qualify_bound(args, manifest, arm_command, exporter_identity,
+                                   exported_snapshot, token_digest)
+            write_json_exclusive(args.run_root / "result.json", report)
+            return 0 if report["result"] == "PASS" else 1
         if args.concurrent_sql_file is not None:
             mutation = subprocess.run(
                 [str(args.driver), "--mode", "command", "--conninfo", args.conninfo,
@@ -230,11 +347,7 @@ def main(argv: list[str] | None = None) -> int:
         for arm in ARMS:
             spool = args.run_root / f"{arm}.spool"
             process = subprocess.run(
-                [str(args.driver), "--mode", "arm", "--conninfo", args.conninfo,
-                 "--arm", arm, "--snapshot", token, "--sql-file", str(subject_copy),
-                 "--subject-token", subject_token,
-                 "--spool", str(spool), "--deadline-ms", str(args.deadline_ms),
-                 *site_args, *binding_args],
+                [*arm_command, "--mode", "arm", "--arm", arm, "--spool", str(spool)],
                 capture_output=True, text=True, check=False)
             lines = process.stdout.splitlines()
             if not lines:
@@ -460,11 +573,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.concurrent_sql_file is not None:
             negative = args.run_root / "missing-import.spool"
             process = subprocess.run(
-                [str(args.driver), "--mode", "arm", "--conninfo", args.conninfo,
-                 "--arm", "native", "--snapshot", token, "--snapshot-mode", "skip",
-                 "--subject-token", subject_token,
-                 "--sql-file", str(subject_copy), "--spool", str(negative),
-                 "--deadline-ms", str(args.deadline_ms), *site_args, *binding_args], capture_output=True,
+                [*arm_command, "--mode", "arm", "--arm", "native",
+                 "--snapshot-mode", "skip", "--spool", str(negative)], capture_output=True,
                 text=True, check=False)
             lines = process.stdout.splitlines()
             if len(lines) != 1:
@@ -500,7 +610,7 @@ def main(argv: list[str] | None = None) -> int:
             result_path = args.run_root / "result.json"
             if args.run_root.is_absolute() and args.run_root.is_dir() and not result_path.exists():
                 write_json_exclusive(result_path, {"schema_version": 1,
-                    "document_type": "pq31_differential_result",
+                    "document_type": document_type,
                     "result": "INVALID", "reason": str(exc)[:512],
                     "missing_import_control": {"result": "NOT_RUN"}})
         except OSError:
@@ -512,7 +622,7 @@ def main(argv: list[str] | None = None) -> int:
             result_path = args.run_root / "result.json"
             if args.run_root.is_absolute() and args.run_root.is_dir() and not result_path.exists():
                 write_json_exclusive(result_path, {"schema_version": 1,
-                    "document_type": "pq31_differential_result",
+                    "document_type": document_type,
                     "result": "FAIL" if proven_failure else "INCONCLUSIVE",
                     "reason": str(proven_failure["reason"]) if proven_failure else
                               "acquisition_failure",

@@ -47,6 +47,13 @@ CREATE EXTENSION pg_duckdb;
 CREATE TABLE witness_fixture(id integer PRIMARY KEY, label text NOT NULL);
 INSERT INTO witness_fixture
 SELECT g, 'v-' || g FROM generate_series(1, 1000) AS g;
+CREATE TABLE distinct_report_fixture(
+    id integer PRIMARY KEY, bucket integer NOT NULL, item_key integer, account_key integer
+);
+INSERT INTO distinct_report_fixture
+SELECT g, g % 7, NULLIF(g % 113, 0), NULLIF(g % 43, 0)
+FROM generate_series(1, 5000) AS g;
+ANALYZE distinct_report_fixture;
 CREATE FUNCTION witness_nested_spi() RETURNS integer LANGUAGE plpgsql AS $$
 BEGIN
   PERFORM count(*) FROM witness_fixture;
@@ -109,12 +116,19 @@ run_case() {
     local case_root=$output/case-$name
     local digest rc
     local bindings_args=()
+    local bound_args=()
+    local subject_pgoptions=${PGOPTIONS:-}
     mkdir -m 0700 "$case_root"
     cat >"$case_root/subject.sql"
     digest=$(sha256sum "$case_root/subject.sql" | cut -d' ' -f1)
-    if [[ $# -eq 4 ]]; then
+    if [[ $# -ge 4 ]]; then
         (umask 077; printf '%s\n' "$4" >"$case_root/bindings.json")
         bindings_args=(--bindings-file "$case_root/bindings.json")
+    fi
+    if [[ $# -eq 5 ]]; then
+        bound_args=(--bound-pairs "$5")
+        # Match the prepared Bind fixture's serial PostgreSQL table reader.
+        subject_pgoptions+=" -c duckdb.max_workers_per_postgres_scan=0"
     fi
     python3 - "$case_root/manifest.json" "$name" "$digest" "$ordered" <<'PY'
 import hashlib
@@ -135,11 +149,11 @@ with open(path, "x", encoding="utf-8") as stream:
 PY
     chmod 0600 "$case_root/subject.sql" "$case_root/manifest.json"
     set +e
-    python3 tools/phase7/run_differential.py \
+    PGOPTIONS="$subject_pgoptions" python3 tools/phase7/run_differential.py \
         --driver tools/phase7/differential-driver \
         --conninfo "host=$socket port=$port dbname=postgres user=$USER" \
         --manifest "$case_root/manifest.json" --sql-file "$case_root/subject.sql" \
-        --run-root "$case_root" --deadline-ms 30000 "${bindings_args[@]}"
+        --run-root "$case_root" --deadline-ms 30000 "${bindings_args[@]}" "${bound_args[@]}"
     rc=$?
     set -e
     python3 - "$case_root/result.json" "$expected" "$rc" <<'PY'
@@ -149,6 +163,20 @@ expected = sys.argv[2]
 if expected == "PASS_OR_FORCE_DECLINED":
     assert (result["result"] == "PASS" or
             (result["result"], result["reason"]) == ("INCONCLUSIVE", "force_declined")), result
+elif expected == "SAVING_BELOW_FLOOR":
+    assert (result["result"], result["reason"]) == ("FAIL", "saving_below_floor"), result
+    assert (result["eligible"], result["safe"], result["beneficial"]) == ("pass", "pass", "veto"), result
+    assert result["min_saving_ms"] == 5000 and result["min_saving_percent"] == 10, result
+    assert [sample["order"] for sample in result["samples"]] == [
+        ["native", "bound"], ["bound", "native"], ["native", "bound"]
+    ], result
+    assert all(sample["native_ns"] > 0 and sample["bound_ns"] > 0
+               for sample in result["samples"]), result
+    assert "bound_key" not in result, result
+elif expected == "INELIGIBLE_BINDING":
+    assert (result["result"], result["reason"]) == ("FAIL", "ineligible_binding"), result
+    assert (result["eligible"], result["safe"], result["beneficial"]) == ("veto", "unknown", "unknown"), result
+    assert result["samples"] == [] and "bound_key" not in result, result
 else:
     assert result["result"] == expected, result
 assert int(sys.argv[3]) == (0 if result["result"] in {"PASS", "ERROR_PARITY"} else 1), result
@@ -187,6 +215,13 @@ SQL
 sed 's/WHERE "id" >= \$1/& AND ($2 IS NULL OR "id" <= $2)/' \
     "$output/case-bound-cte-pipeline/subject.sql" |
     run_case bound-cte-optional-filter true PASS_OR_FORCE_DECLINED '[{"oid":23,"value":"17"},{"oid":23,"value":null}]'
+python3 tests/phase7/paired_distinct_report.py |
+    run_case paired-distinct-range true SAVING_BELOW_FLOOR '[{"oid":23,"value":"17"},{"oid":23,"value":"2011"}]' 3
+python3 tests/phase7/paired_distinct_report.py |
+    run_case paired-distinct-null true SAVING_BELOW_FLOOR '[{"oid":23,"value":"17"},{"oid":23,"value":null}]' 3
+run_case paired-distinct-ineligible true INELIGIBLE_BINDING '[{"oid":25,"value":"v-17"}]' 3 <<'SQL'
+SELECT count(DISTINCT id) FROM witness_fixture WHERE label = $1;
+SQL
 run_case character-typmod true FAIL <<'SQL'
 SELECT label::varchar(20) AS vc, label::char(20) AS bp
 FROM witness_fixture ORDER BY id LIMIT 1;

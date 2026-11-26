@@ -9,10 +9,9 @@ has the same typed result under three execution policies:
 2. externally forced pg_duckdb execution (`duckdb.force_execution=on`);
 3. inert `pg_qi` `shadow_p0` evaluation with external force off.
 
-It does not activate routing, open the activation barrier, change production
-policy or make a release claim. The forced arm deliberately bypasses the
-active pg_qi classifier: the foundation tests execution and equivalence, not a
-future classifier decision.
+The three-arm check keeps pg_qi in `off` or `shadow_p0`. The forced arm
+invokes pg_duckdb directly to establish provider execution and equivalence
+independently of the routing decision.
 
 ## Bound statements
 
@@ -40,6 +39,48 @@ The CTE pipeline in the integration suite combines a window with a grouped
 aggregate. It also tests an optional filter with a bound NULL. A provider
 that falls back for that variant yields `force_declined`. A provider that
 executes it must pass the same typed comparison as the single-bound case.
+
+### Measure the bound route
+
+Use `--bound-pairs` with a version 2 manifest and bindings file to qualify one
+binding in a disposable cluster that preloads the execution witness. Give
+each binding a new private output directory. The command uses the same
+manifest and parameter format as the three-arm check.
+
+```sh
+python3 tools/phase7/run_differential.py \
+  --driver tools/phase7/differential-driver \
+  --conninfo 'service=pgqi_lab' \
+  --manifest "$run/manifest.json" \
+  --sql-file "$run/subject.sql" \
+  --bindings-file "$run/bindings.json" \
+  --run-root "$run" --bound-pairs 3 --deadline-ms 300000
+```
+
+The runner exports one read-only repeatable-read snapshot for the whole run.
+An untimed probe gets the key from a fresh `bound` decision with an empty
+policy. It then alternates native and bound executions in separate sessions.
+The bound session uses a short-lived trial rule and zero saving floors within
+its transaction to exercise the route. The execution witness must show a
+completed DuckDB scan, and the result must match PostgreSQL on the imported
+snapshot. A change to the qualification key during acquisition ends the run
+with an inconclusive result. This can happen when catalogue row estimates
+change during the measurements.
+
+The driver times each unnamed extended-protocol request from submission
+through receipt of the result, including Bind and planning. `result.json`
+records the timings and session saving floors used in the assessment. For the
+benefit decision it rounds the fastest native sample down and the slowest
+bound sample up, both to milliseconds. A pass requires actual DuckDB
+execution, typed parity and a saving that clears both floors. The default
+floors are five seconds and ten per cent.
+
+Use representative data and bindings for timing. The integration fixture
+generates a CTE report with paired `COUNT(DISTINCT)`, grouping and a window,
+and checks both a range and a NULL upper bound. The small fixture exercises
+the route, typed parity and the expected saving veto. Review passing evidence
+and capture the key for the intended environment before installing a rule
+according to the [bound routing procedure](PQ7-12-plan-lifecycle.md#qualify-and-install-a-rule).
 
 ## Components and trust boundary
 
