@@ -4,7 +4,7 @@ This document defines the human-readable TSV contract used by the inexpensive
 qualification gate. Later machine contracts may encode the same semantics in a
 different format; they must not weaken these denominator or authority rules.
 
-## TSV serialization
+## TSV serialisation
 
 `templates/natural-workload-inventory.tsv` is UTF-8 with one header and zero
 or more records. It has exactly 21 tab-separated columns in the published

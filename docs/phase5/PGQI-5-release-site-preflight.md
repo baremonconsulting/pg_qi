@@ -61,7 +61,7 @@ the approved owner UID and rejects group/world-writable directories.
 ## Fixed online checks
 
 The compiled manifest begins with routing and ambient-force `SHOW` checks and
-then uses only fixed, catalog-qualified read-only identity queries. The
+then uses only fixed, catalogue-qualified read-only identity queries. The
 connection adapter must execute the exact ordered manifest with bounded
 protocol limits. A fresh cryptographic nonce plus the observed backend PID and
 backend start bind each result to one connection. The observed system

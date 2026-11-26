@@ -10,18 +10,18 @@ semantic validator.
 All documents are strict UTF-8 JSON objects. Duplicate keys, non-finite
 numbers, Boolean values used as integers, unknown controlling fields,
 oversized or excessively nested documents, path traversal and symbolic links
-are rejected. Referenced artifacts carry a relative path, exact byte length
+are rejected. Referenced artefacts carry a relative path, exact byte length
 and SHA-256 of their exact bytes. Canonical JSON is used only for digests of
 contract objects themselves.
 
 `scope` closes the workload definition, release definition, target, limits,
 evidence policy, recovery plan, export policy, toolkit, role bindings and
-window inputs. These are immutable input artifacts, not the later workload,
+window inputs. These are immutable input artefacts, not the later workload,
 release or recovery evidence contracts that refer back to the scope; this
 separation prevents a digest cycle. An operation approval receipt
 contains the canonical scope digest. It is deliberately not part of the scope,
 so no digest cycle exists. Any byte change in a scope input invalidates its
-artifact reference; updating that reference changes the scope digest and makes
+artefact reference; updating that reference changes the scope digest and makes
 the old approval inapplicable.
 
 Approval receipts bind both the scope digest and a fresh preflight digest.
@@ -64,12 +64,12 @@ a later, separate gate.
 
 Private evidence that claims a workload result also includes an exact
 `corpus_qualification` input, a `baseline_manifest` payload and both typed
-spool artifacts for every oracle case. The frozen qualification bytes define
+spool artefacts for every oracle case. The frozen qualification bytes define
 the workload inventory identity. Baseline case identifiers must equal the
 execution corpus; unsupported and unexecuted natural items remain in the
 coverage denominator.
 
-Oracle PASS is recomputed from complete typed result multisets. Artifact
+Oracle PASS is recomputed from complete typed result multisets. Artefact
 digests bind bytes but cannot substitute for parsing and comparison. Provider
 off/disabled executions are controls, not provider-free baselines. The exact
 format and limits are defined in [PGQI-5 corpus and oracle](PGQI-5-corpus-oracle.md).

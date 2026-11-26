@@ -19,7 +19,7 @@ The workflow pins pg_duckdb to
 `ee38d3b540ecea1d93683ba99bdcec5632a21eaf` and pins the downloaded DuckDB
 archive by SHA-256. No job follows moving pg_duckdb `main`.
 
-## Diagnostics and artifacts
+## Diagnostics and artefacts
 
 Every job uploads bounded evidence with `if: always()`:
 
@@ -30,7 +30,7 @@ Every job uploads bounded evidence with `if: always()`:
 - S11 log with explicit parallel worker rows;
 - benchmark CSV, server logs, latency files, and plan-cache metadata.
 
-Database clusters and WAL are intentionally excluded from uploaded artifacts.
+Database clusters and WAL are intentionally excluded from uploaded artefacts.
 This preserves the evidence required for diagnosis without uploading large,
 reconstructible binary state.
 

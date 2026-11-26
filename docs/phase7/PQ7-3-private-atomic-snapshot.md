@@ -34,7 +34,7 @@ until reconnect. The routing
 mode and enabled state are captured at decision entry and cannot be relabelled
 by a later `SET`.
 
-Successful `DISCARD ALL`, `SET/RESET ROLE`, and session-authorization changes
+Successful `DISCARD ALL`, `SET/RESET ROLE`, and session-authorisation changes
 invalidate the record and advance the generation. A pool must use `DISCARD
 ALL` or reconnect before handing a physical connection to another client.
 Two logical clients that reuse the same backend and role without a handoff
@@ -48,14 +48,14 @@ planner. The setting is hidden from `SHOW ALL`, is not reportable, and stores
 only an inert placeholder; its show hook renders the private fixed-size record
 on demand.
 
-Every read checks authorization again. Superusers and members of a provisioned
+Every read checks authorisation again. Superusers and members of a provisioned
 `NOLOGIN` role named `pgqi_diagnostic` may read the
 record. A role with that name is rejected if it has `LOGIN`. The producing
-effective and session users must still match the current principal. Unauthorized
+effective and session users must still match the current principal. Unauthorised
 reads return a constant denied envelope without identity or payload.
 
 The record contains no SQL text, literals, parameters, fingerprints, relation
-or column names, catalog OIDs, MCVs, histograms, estimates, or arbitrary
+or column names, catalogue OIDs, MCVs, histograms, estimates, or arbitrary
 strings. It contains only fixed enums, versions, bounded counters, coarse P0
 state, and opaque correlation identity.
 

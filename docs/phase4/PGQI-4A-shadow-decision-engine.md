@@ -77,7 +77,7 @@ default build and checks:
 
 - a plain candidate and policy-missing pass-through;
 - aggregate, ordering, parameter, inheritance, RLS and TABLESAMPLE rejection;
-- disabled behavior;
+- disabled behaviour;
 - external-force provenance;
 - `pass_through`, `unverified` and request-not-applied invariants; and
 - absence of test-only symbols from the production library.

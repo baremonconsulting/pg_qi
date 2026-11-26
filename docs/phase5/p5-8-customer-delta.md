@@ -31,13 +31,13 @@ the affected gates. Production scope is fixed to `NONE`.
 Role bindings and the charter window are typed customer-scope inputs and must
 match the dossier exactly. The customer GO is bound to the dossier and mandate
 digests. The mandate is granted before any customer-site preflight or recovery
-rehearsal; those fresh artifacts are carried by the closeout and bound by the
+rehearsal; those fresh artefacts are carried by the closeout and bound by the
 later GO. Each rerun uses gate-specific, customer-scope evidence; site and
 recovery gates use their dedicated contracts. Generic gate evidence binds a
 digest closure over every scope input relevant to that gate.
 
 The validator loads both complete scope contracts, compares every one of their
-thirteen input artifact digests and derives the delta and affected-gate table.
+thirteen input artefact digests and derives the delta and affected-gate table.
 The declared delta must match that result exactly, and workload, dataset and
 target must all be customer revisions. Workload, dataset, release, target,
 limits and any other changed scope input repeat their mapped qualification,

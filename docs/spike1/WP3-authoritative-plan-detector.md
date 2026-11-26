@@ -1,66 +1,50 @@
-# WP3 — autoritativní detektor plánů
+# WP3 DuckDB plan detection
 
-Datum: 2026-10-14
+14 October 2026
 
-## Cíl
+The same C plan walker recognised `DuckDBScan` in the required synthetic
+plans and in plans produced by pg_duckdb on PostgreSQL 16–18. The walker
+matches the exact provider name through
+`CustomScanMethods.CustomName == "DuckDBScan"`.
 
-Implementovat jediný C visitor nad `PlannedStmt`, který ve tvarech plánů
-požadovaných Spike 1 spolehlivě rozpozná přesný provider `DuckDBScan`.
+## Plan walker
 
-## Implementace
+`src/qi_detector.c` walks each `PlannedStmt` from the top-level plan through
+its child links.
 
-`src/qi_detector.c` obsahuje centralizovanou rekurzi:
+- `lefttree` and `righttree` on each plan node
+- `Append.appendplans` and `MergeAppend.mergeplans`
+- `BitmapAnd.bitmapplans` and `BitmapOr.bitmapplans`
+- `SubqueryScan.subplan`
+- `CustomScan.custom_plans`
+- `PlannedStmt.subplans`
 
-- `lefttree` a `righttree` pro každý plánový uzel;
-- `Append.appendplans`;
-- `MergeAppend.mergeplans`;
-- `BitmapAnd.bitmapplans` a `BitmapOr.bitmapplans`;
-- `SubqueryScan.subplan`;
-- `CustomScan.custom_plans`;
-- `PlannedStmt.subplans`.
+The normal `lefttree` traversal reaches children of `Material`. After the
+downstream planner returns, the hook records the match in the read-only
+setting `pg_qi.spike_last_plan_has_duckdb_scan`. The test determines its result
+from the setting and the plan nodes. Use JSON `EXPLAIN` for diagnostics.
 
-Shoda je pouze přes přesné
-`CustomScanMethods.CustomName == "DuckDBScan"`. `Material` nemá zvláštní
-výjimku; jeho potomek je nalezen obecnou rekurzí přes `lefttree`.
-
-Planner po dokončení downstream volání nastavuje read-only diagnostiku
-`pg_qi.spike_last_plan_has_duckdb_scan`. JSON EXPLAIN se pro PASS/FAIL
-nepoužívá.
-
-## Povinné fixtures
+## Verification
 
 | Fixture | PG16 | PG17 | PG18 |
 |---|---:|---:|---:|
-| Provider v kořeni | PASS | PASS | PASS |
-| Provider pod `Material` | PASS | PASS | PASS |
-| Provider v `PlannedStmt.subplans` | PASS | PASS | PASS |
-| Provider není přítomen | PASS | PASS | PASS |
+| Provider at the root | PASS | PASS | PASS |
+| Provider below `Material` | PASS | PASS | PASS |
+| Provider in `PlannedStmt.subplans` | PASS | PASS | PASS |
+| Provider absent | PASS | PASS | PASS |
 
-Fixtures vytváří skutečné PostgreSQL plan node struktury v C a volají stejný
-visitor jako planner hook; nejde o textový nebo JSON test.
+The fixtures construct PostgreSQL plan nodes in C and call the planner
+hook's walker. To verify a real plan on each version, the test created a
+100-row table and ran `SET duckdb.force_execution = on`.
+`SELECT count(*) FROM spike_small` returned 100, and
+`SHOW pg_qi.spike_last_plan_has_duckdb_scan` returned `on`. The extended
+regression test also passed on all three versions.
 
-## Reálný pg_duckdb plán
+The evidence covers the plan shapes listed for Spike 1. A new plan node
+that owns additional child plans needs its own coverage.
 
-Na každé verzi vznikla tabulka se 100 řádky. Po
-`SET duckdb.force_execution = on` vrátil dotaz
-`SELECT count(*) FROM spike_small` hodnotu 100 a následné
-`SHOW pg_qi.spike_last_plan_has_duckdb_scan` hodnotu `on`.
+## Build findings
 
-Tím je potvrzeno, že detektor rozpoznal skutečný `DuckDBScan` vytvořený
-pinovaným pg_duckdb, nikoli pouze syntetické fixtures.
-
-## Omezení tvrzení
-
-Visitor garantuje pokrytí tvarů vyjmenovaných ve Spike 1. Dokument ani kód
-netvrdí automatickou úplnost pro všechny budoucí typy PostgreSQL plánů.
-
-## Nálezy při implementaci
-
-První compile probe odhalil, že `CustomScanMethods` vyžaduje veřejný header
-`nodes/extensible.h` a `NodeSetTag` přijímá hodnoty `T_*`. Po opravě prošel
-build s `-Werror` na všech třech verzích.
-
-## Verdikt
-
-**WP3: PASS.** Čtyři povinné fixtures, negativní případ, reálný provider a
-původní rozšířený regresní test prošly na PostgreSQL 16, 17 a 18.
+`CustomScanMethods` needs the public header `nodes/extensible.h`.
+`NodeSetTag` takes a `T_*` value. With these fixes, all three builds passed
+with `-Werror`.

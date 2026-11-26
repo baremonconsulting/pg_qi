@@ -169,7 +169,7 @@ def _capture_files(root: Path, files: set[str]) -> dict[str, bytes]:
         try:
             before = os.fstat(descriptor)
             if not stat.S_ISREG(before.st_mode) or before.st_size > MAX_ARTIFACT_BYTES:
-                raise EvidenceError("artifact bound exceeded")
+                raise EvidenceError("artefact bound exceeded")
             total += before.st_size
             if total > MAX_BUNDLE_BYTES:
                 raise EvidenceError("bundle byte bound exceeded")
@@ -178,14 +178,14 @@ def _capture_files(root: Path, files: set[str]) -> dict[str, bytes]:
             while remaining:
                 chunk = os.read(descriptor, min(65536, remaining))
                 if not chunk:
-                    raise EvidenceError("artifact truncated during capture")
+                    raise EvidenceError("artefact truncated during capture")
                 chunks.append(chunk); remaining -= len(chunk)
             if os.read(descriptor, 1):
-                raise EvidenceError("artifact grew during capture")
+                raise EvidenceError("artefact grew during capture")
             after = os.fstat(descriptor)
             if ((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) !=
                     (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)):
-                raise EvidenceError("artifact changed during capture")
+                raise EvidenceError("artefact changed during capture")
             captured[relative] = b"".join(chunks)
         finally:
             os.close(descriptor)
@@ -196,7 +196,7 @@ def _verify_captured(artifact: dict[str, Any], captured: dict[str, bytes]) -> No
     payload = captured.get(artifact["path"])
     if (payload is None or len(payload) != artifact["bytes"] or
             hashlib.sha256(payload).hexdigest() != artifact["sha256"]):
-        raise EvidenceError("captured artifact identity mismatch")
+        raise EvidenceError("captured artefact identity mismatch")
 
 
 def _plain_bytes(payload: bytes) -> dict[str, Any]:
@@ -234,7 +234,7 @@ def _assert_no_credentials(payload: bytes, name: str) -> None:
             payload.startswith((b"PK\x03\x04", b"PK\x05\x06", b"\x1f\x8b", b"BZh", b"\xfd7zXZ\x00",
                                 b"7z\xbc\xaf'\x1c", b"Rar!\x1a\x07", b"\x28\xb5\x2f\xfd")) or
             (len(payload) > 262 and payload[257:262] == b"ustar")):
-        raise EvidenceError("archive containers are not accepted as evidence artifacts")
+        raise EvidenceError("archive containers are not accepted as evidence artefacts")
     text = payload.decode("latin-1")
     if any(pattern.search(text) for pattern in SECRET_PATTERNS):
         raise EvidenceError(f"credential-like content in {name}")
@@ -285,7 +285,7 @@ def _validate_oracle(value: dict[str, Any], workload_ids: set[str],
                 baseline_spool["bytes"] != frozen_baseline["spool_bytes"]):
             raise EvidenceError("oracle baseline differs from baseline manifest")
         if observed_spool["path"] == baseline_spool["path"]:
-            raise EvidenceError("observed spool cannot alias the baseline artifact")
+            raise EvidenceError("observed spool cannot alias the baseline artefact")
         result = _enum(case["result"], {"PASS", "FAIL", "NOT_RUN"}, "oracle result")
         request = requests_by_query.get(query_id)
         request_bound = bool(request and request["execution_status"] == "SUCCEEDED" and
@@ -934,7 +934,7 @@ def validate_private(root: Path, trusted_scope_sha256: str) -> dict[str, Any]:
             if baseline_manifest[name] != approved[name]:
                 raise EvidenceError("baseline manifest differs from approved baseline identity")
         if baseline_manifest["cases"] != approved["cases"]:
-            raise EvidenceError("baseline cases differ from scope-approved artifact identities")
+            raise EvidenceError("baseline cases differ from scope-approved artefact identities")
     requests_by_query: dict[str, dict[str, Any]] = {}
     for request in contracts.get("request", []):
         if request["query_id"] in requests_by_query:
@@ -965,7 +965,7 @@ def validate_private(root: Path, trusted_scope_sha256: str) -> dict[str, Any]:
     for workload in contracts.get("workload", []):
         for entry in workload["entries"]:
             if entry["sql"]["path"] not in indexed:
-                raise EvidenceError("workload SQL artifact is not indexed")
+                raise EvidenceError("workload SQL artefact is not indexed")
             _verify_captured(entry["sql"], captured)
     if contracts.get("approval_receipt") and contracts.get("preflight"):
         approval = contracts["approval_receipt"][0]

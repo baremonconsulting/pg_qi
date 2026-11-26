@@ -65,7 +65,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - A conservative shadow eligibility classifier covering security context,
   sampling, inheritance, parameters, grouping, ordering, aggregates, casts
   and functions with deny-by-default outcomes.
-- Production-artifact shadow regression jobs for PostgreSQL 16–19 RC2.
+- Shadow regression jobs for the production build on PostgreSQL 16–19 RC2.
 - An experimental `pg_qi.routing_mode = allowlist` policy, disabled by
   default and restricted to superusers.
 - Production context tracking for executor, utility, nested and outer-hook

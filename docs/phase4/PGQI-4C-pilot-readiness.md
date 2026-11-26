@@ -20,7 +20,7 @@ unexamined final build.
 | C4 | Same-session diagnostics | Each post-query snapshot is collected with individual `SHOW` commands on the subject connection. Diagnostics are outside measured intervals. Errors and cached reuse are documented as retaining the last completed snapshot. |
 | C5 | Rollback drill | Only a newly created marker-owned cluster is touched. The drill proves future-planning disablement and a default-off reconnect. Cached plans, external force and binary rollback are not misrepresented. |
 | C6 | PostgreSQL matrix | Deterministic production smoke and rollback pass for all four pinned majors. Evidence uploads even after failure; a missing terminal status is incomplete. |
-| C7 | Closeout | Every claim maps to an artifact or is marked not run. Limitations and Human Review are explicit and documentation is consistent. |
+| C7 | Closeout | Every claim maps to an artefact or is marked not run. Limitations and Human Review are explicit and documentation is consistent. |
 
 ## Evidence rules
 
@@ -69,4 +69,4 @@ contradiction. A poisoned backend must be disconnected; it is not repaired in
 place.
 
 Completion of automated evidence leaves the branch **Awaiting Human Review**.
-It does not authorize merge, deployment or persistent allow-list enablement.
+It does not authorise merge, deployment or persistent allow-list enablement.

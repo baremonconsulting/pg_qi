@@ -28,7 +28,7 @@ An invalid profile value that reaches the assign hook replaces prior evidence
 with an explicit unknown reason. A syntactically broken PostgreSQL
 configuration file is rejected by PostgreSQL before any extension hook runs;
 PostgreSQL then retains the previous configuration. Per-observation expiry is
-the bounded fail-closed backstop for that server-level behavior.
+the bounded fail-closed backstop for that server-level behaviour.
 
 ## Format and bounds
 
@@ -72,7 +72,7 @@ binding and is currently within its validity interval.
 `limits_verified=false` is hard-wired in PQ7-10. The envelope is hypothetical;
 the extension does not change memory, temp, thread or concurrency settings and
 does not reserve resources. Consequently PQ7-10 cannot make the benefit gate
-pass. Existing V2 reason precedence and recommendation behavior are unchanged.
+pass. Existing V2 reason precedence and recommendation behaviour are unchanged.
 
 Missing, stale, not-yet-valid, wrong-build, oversized and malformed profiles
 remain explicit profile `UNKNOWN` observations.
@@ -95,6 +95,6 @@ build/site identifiers.
   profile still cannot set `limits_verified`.
 - Live PostgreSQL 16–19 tests cover missing, valid A/B reload, wrong
   PostgreSQL, pg_qi and site builds, expired, malformed and oversized values,
-  authorization, event identity and monotonic backend-local install sequence.
+  authorisation, event identity and monotonic backend-local install sequence.
 - Production builds continue to use the existing outer-hook and regression
   suites; routing and the activation barrier remain unchanged.

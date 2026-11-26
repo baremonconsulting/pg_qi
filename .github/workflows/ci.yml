@@ -129,7 +129,7 @@ jobs:
         env:
           PG_QI_TESTING: "0"
         run: bash .github/scripts/ci-build-install-pg-qi.sh "${{ matrix.postgresql }}" "ci-artifacts/production-shadow-pg${{ matrix.postgresql }}"
-      - name: Verify production artifact boundary
+      - name: Verify production artefact boundary
         shell: bash
         run: |
           set -euo pipefail

@@ -11,7 +11,7 @@ three recorded approvals, distinct primary operator, second operator and
 implementer, and a verified recoverable-copy identity distinct from its source
 environment. Its recovery plan, source target, candidate release identity and
 approved baseline identity are frozen into the measurement scope. Candidate
-and baseline artifacts use the same `PGQI_STACK_SHA256_V1` composite over the
+and baseline artefacts use the same `PGQI_STACK_SHA256_V1` composite over the
 PostgreSQL build, `pg_qi` and `pg_duckdb` digests; configuration has its own
 digest. The mandate
 fixes the recovery plan, runbook, allowed strategies
@@ -22,7 +22,7 @@ The validator has no interface to stop or start PostgreSQL, change libraries or
 configuration, administer a pool, cancel a backend, deallocate a prepared
 statement, or activate routing. Operators perform those steps through the
 separately authorised site procedure and retain the observations as private
-artifacts.
+artefacts.
 
 ## R1 — session, cached-plan and pool retirement
 
@@ -49,14 +49,14 @@ The recovery plan chooses one or both acceptable strategies:
 
 - `EXACT_BINARY_CONFIG_DOWNGRADE` is the task's `binary_downgrade`. It keeps
   the same cluster/data continuity, uses a new server-start identity, restores
-  the approved prior artifact and configuration identities and cannot carry a
+  the approved prior artefact and configuration identities and cannot carry a
   restore-source identity.
 - `VERIFIED_ENVIRONMENT_RESTORE` is the task's `environment_restore`. It binds
   the exact approved restore source and is never reported as a downgrade.
 
 Both strategies require R1 PASS first, an operator stop, application of the
-approved recovery, observed before-and-after artifact/configuration identities,
-a new server start, identity verification and a fresh
+approved recovery, recorded artefact and configuration identities before and
+after recovery, a new server start, identity verification and a fresh
 default-off/force-off PostgreSQL control. R1 and R2 have separate terminal
 digests and cannot reuse one control as both proofs.
 
@@ -87,7 +87,7 @@ and every validation carries:
 ## Validation and incident flow
 
 The private bundle contains `mandate.json`, `r1-terminal.json`,
-`r2-terminal.json`, `walkthrough.json`, `incident.json` and every artifact they
+`r2-terminal.json`, `walkthrough.json`, `incident.json` and every artefact they
 reference. The offline validator rechecks exact bytes, graph digests, ordered
 steps, scope and rehearsal identity, role separation, strategy semantics,
 fresh controls and the mandate window. A successful result is only

@@ -1,41 +1,29 @@
-# Spike 1 — zdrojový recon
+# Spike 1 source review
 
-Datum ověření: 2026-10-14
+14 October 2026
 
-Tento dokument zachycuje fakta ověřená přímo ve zdrojovém kódu. Nejde o běhové
-výsledky Spike 1. Běhové scénáře začnou až v pozdějších pracovních balíčcích.
+The source establishes the planner API boundary at PostgreSQL 19 and the
+pg_duckdb hooks and settings that Spike 1 relies on. The runtime checks
+from S0 onwards verify how these pieces work together.
 
-## Pinované zdroje
+## Source revisions
 
-### pg_qi
+| Repository | Branch or revision | Commit |
+|---|---|---|
+| `baremonconsulting/pg_qi` | Starting revision | `d3529d4e6a7cd71657bbf8279c533a3c5a81e2df` |
+| `duckdb/pg_duckdb` | Support INSERT ... INTO ... SELECT ... for Postgres table (#688) | `ee38d3b540ecea1d93683ba99bdcec5632a21eaf` |
+| PostgreSQL | `REL_16_STABLE` | `333d566c4f51f1b8b002175032586423c581d3d6` |
+| PostgreSQL | `REL_17_STABLE` | `9e8f4ce286bf03306fc0ad29374095782b2a8136` |
+| PostgreSQL | `REL_18_STABLE` | `70ffc30e12b1de43d6160682fc44c78b8de00f24` |
+| PostgreSQL | `master` | `2246c04e7b99519010cd47be636273a5700b0b0d` |
 
-- repozitář: `baremonconsulting/pg_qi`
-- výchozí commit: `d3529d4e6a7cd71657bbf8279c533a3c5a81e2df`
+The commits identify the exact source reviewed. Record any different minor
+release used in a later build matrix.
 
-### pg_duckdb
+## G1 — Planner API
 
-- repozitář: `duckdb/pg_duckdb`
-- commit: `ee38d3b540ecea1d93683ba99bdcec5632a21eaf`
-- commit message: `Support INSERT ... INTO ... SELECT ... for Postgres table (#688)`
-
-### PostgreSQL
-
-Commity stabilních větví použité při reconu:
-
-- `REL_16_STABLE`: `333d566c4f51f1b8b002175032586423c581d3d6`
-- `REL_17_STABLE`: `9e8f4ce286bf03306fc0ad29374095782b2a8136`
-- `REL_18_STABLE`: `70ffc30e12b1de43d6160682fc44c78b8de00f24`
-- `master`: `2246c04e7b99519010cd47be636273a5700b0b0d`
-
-Tyto SHA jsou důkazním snapshotem tohoto reconu. Pozdější compile matrix může
-použít aktuální minor release packages, ale odchylku musí zaznamenat.
-
-## G1 — planner API a kompatibilita
-
-### Ověřené tvrzení G1.1
-
-PostgreSQL 16, 17 a 18 mají čtyřargumentové `planner_hook_type` a
-`standard_planner`:
+**G1.1.** PostgreSQL 16, 17 and 18 use four arguments for
+`planner_hook_type` and `standard_planner`.
 
 ```text
 Query *parse,
@@ -44,197 +32,140 @@ int cursorOptions,
 ParamListInfo boundParams
 ```
 
-Zdroj: `src/include/optimizer/planner.h` ve větvích `REL_16_STABLE`,
-`REL_17_STABLE` a `REL_18_STABLE`.
+See `src/include/optimizer/planner.h` in the three stable branches.
 
-### Ověřené tvrzení G1.2
+**G1.2.** At the recorded PostgreSQL `master` revision, the same header adds a
+fifth argument, `ExplainState *es`.
 
-PostgreSQL `master` má pět argumentů a přidává `ExplainState *es`.
-
-Zdroj: `src/include/optimizer/planner.h` na výše uvedeném master SHA.
-
-### Ověřené tvrzení G1.3
-
-Pinovaný pg_duckdb používá stejnou hranici:
+**G1.3.** The pinned pg_duckdb source selects the new signature with this
+version check.
 
 ```c
 #if PG_VERSION_NUM >= 190000
 ```
 
-Zdroj: `src/pgduckdb_hooks.cpp:257-310`.
+See `src/pgduckdb_hooks.cpp:257-310`.
 
-### Závěr G1
+Use the same version check in pg_qi and use the four-argument signature on
+PostgreSQL 16–18. The compile matrix verifies the boundary found in the source.
 
-Compatibility shim pg_qi použije hranici `PG_VERSION_NUM >= 190000`.
-Pro PG 16–18 nesmí definovat falešný `ExplainState`. Compile matrix je regresní
-kontrola, ne mechanismus pro objevování podpisu.
+## G2 — pg_duckdb integration
 
-## G2 — pg_duckdb integrační fakta
+### G2.1 — Force setting
 
-### Ověřené tvrzení G2.1 — force GUC
+`duckdb.force_execution` is a Boolean GUC registered as `PGC_USERSET` with
+the `GUC_REPORT` flag. See `src/pgduckdb_guc.cpp:147-154`.
 
-`duckdb.force_execution` je bool GUC registrovaný s kontextem `PGC_USERSET` a
-flag `GUC_REPORT`.
+### G2.2 — Execution inside functions
 
-Zdroj: `src/pgduckdb_guc.cpp:147-154`.
+`duckdb.unsafe_allow_execution_inside_functions` is a Boolean `PGC_SUSET`
+setting. When it is false and `executor_nest_level > 0`,
+`IsAllowedStatement()` declines DuckDB execution. See
+`src/pgduckdb_guc.cpp:153-154` and `src/pgduckdb_hooks.cpp:237-240`.
 
-### Ověřené tvrzení G2.2 — funkce a bezpečnostní GUC
+### G2.3 — A FROM clause is required to force execution
 
-`duckdb.unsafe_allow_execution_inside_functions` je bool GUC s kontextem
-`PGC_SUSET`. Pokud `executor_nest_level > 0` a tento GUC je false,
-`IsAllowedStatement()` odmítne DuckDB execution.
+The force branch returns true when `duckdb_force_execution` is true,
+the statement is allowed and `ContainsFromClause(query)` is true. See
+`src/pgduckdb_hooks.cpp:116-200`.
 
-Zdroje:
+Use a query such as `SELECT count(*) FROM qi_bench_t` for the delegation test.
+A bare `SELECT 1` lacks the required `FROM` clause.
 
-- `src/pgduckdb_guc.cpp:153-154`
-- `src/pgduckdb_hooks.cpp:237-240`
+### G2.4 — When pg_duckdb reads the force setting
 
-### Ověřené tvrzení G2.3 — dotaz musí mít FROM
+The pinned source references `duckdb_force_execution` in the GUC declaration
+and registration, the planner's `ShouldTryToUseDuckdbExecution()` check and
+the `COPY` utility path. The executor hooks use `IsDuckdbPlan()` to identify
+the completed plan. See `src/pgduckdb_hooks.cpp:178-200`,
+`src/utility/copy.cpp:377` and `src/pgduckdb_hooks.cpp:313-337`.
 
-Force cesta vrací true pouze pokud současně platí:
+### G2.5 — Fallback
 
-- `duckdb_force_execution` je true;
-- statement je povolený;
-- `ContainsFromClause(query)` je true.
+The force branch calls `DuckdbPlanNode(..., false)` and calls the previous
+planner hook if pg_duckdb produces no plan. A statement that requires DuckDB
+calls `DuckdbPlanNode(..., true)`. See `src/pgduckdb_hooks.cpp:264-297`.
 
-Zdroj: `src/pgduckdb_hooks.cpp:116-200`.
+### G2.6 — Planner hook order
 
-Důsledek: `SELECT 1` není validní důkaz delegace. Testovací dotazy používají
-například `SELECT count(*) FROM qi_bench_t`.
-
-### Ověřené tvrzení G2.4 — force se nečte v executor hooku
-
-Výskyty `duckdb_force_execution` na pinovaném SHA jsou omezené na:
-
-- deklaraci/registraci GUC;
-- planner rozhodnutí v `ShouldTryToUseDuckdbExecution()`;
-- COPY utility cestu.
-
-Executor hooky určují druh už hotového plánu přes `IsDuckdbPlan()`; force GUC
-znovu nečtou.
-
-Zdroje:
-
-- `src/pgduckdb_hooks.cpp:178-200`
-- `src/utility/copy.cpp:377`
-- `src/pgduckdb_hooks.cpp:313-337`
-
-### Ověřené tvrzení G2.5 — fallback
-
-Force větev volá `DuckdbPlanNode(..., false)`. Pokud nevznikne DuckDB plán,
-pokračuje se fallbackem na předchozí planner hook. Naproti tomu dotaz, který
-DuckDB vyžaduje, volá `DuckdbPlanNode(..., true)`.
-
-Zdroj: `src/pgduckdb_hooks.cpp:264-297`.
-
-### Ověřené tvrzení G2.6 — hook chaining
-
-Při inicializaci pg_duckdb:
+pg_duckdb installs its planner hook as follows.
 
 ```c
 prev_planner_hook = planner_hook ? planner_hook : standard_planner;
 planner_hook = DuckdbPlannerHook;
 ```
 
-Zdroj: `src/pgduckdb_hooks.cpp:506-510`.
+See `src/pgduckdb_hooks.cpp:506-510`. Set
+`shared_preload_libraries = 'pg_duckdb,pg_qi'` so pg_qi loads after pg_duckdb
+and saves its hook as the downstream planner. S0 tests this order at runtime.
 
-Při preload pořadí `shared_preload_libraries='pg_duckdb,pg_qi'` se pg_qi načte
-po pg_duckdb a uloží jeho hook jako downstream. Toto musí ještě potvrdit S0 za
-běhu; recon sám běhový důkaz nenahrazuje.
+### G2.7 — Provider name and Material node
 
-### Ověřené tvrzení G2.7 — provider a Material wrapper
+Both the scan and executor methods use `DuckDBScan` as the provider name.
+`IsDuckdbPlan()` looks below a root `Material` node before checking the
+`CustomScan`. A walk that checks the root alone would miss a wrapped scan.
+See `src/pgduckdb_node.cpp:437-446` and
+`src/pgduckdb_hooks.cpp:313-337`.
 
-Provider name je přesně `DuckDBScan` pro scan i executor methods.
+### G2.8 — EXPLAIN property
 
-Zdroj: `src/pgduckdb_node.cpp:437-446`.
+The supplementary property is named `DuckDB Execution Plan`. The C plan
+walker is the authority for the Spike 1 checks. See
+`src/pgduckdb_node.cpp:411-414` and
+`test/pycheck/explain_test.py:63-81`.
 
-`IsDuckdbPlan()` výslovně rozbaluje kořenový `Material`, než kontroluje
-`CustomScan`. Root-only detector je proto nedostatečný.
+### G2.9 — Versions in the provider's build matrix
 
-Zdroj: `src/pgduckdb_hooks.cpp:313-337`.
+The pinned pg_duckdb Docker matrix covers PostgreSQL 14, 15, 16, 17 and 18.
+See `.github/workflows/docker.yaml:23-24` and
+`.github/workflows/docker.yaml:105-106`.
 
-### Ověřené tvrzení G2.8 — EXPLAIN property
+## PostgreSQL GUC API
 
-Přesný název doplňkové EXPLAIN vlastnosti je `DuckDB Execution Plan`.
+**GUC.1.** `GetConfigOptionFlags(name, true)` returns zero for a missing
+setting, so zero alone cannot establish that the setting exists. With
+`missing_ok=false`, the function raises `ERROR`. See the comments and
+implementation in `src/backend/utils/misc/guc.c` in PostgreSQL 16–18.
 
-Zdroje:
+**GUC.2.** The public `guc.h` in PostgreSQL 17 and 18 declares
+`get_config_handle()` and `set_config_with_handle()`. PostgreSQL 16 uses
+the older name-based API. See `src/include/utils/guc.h` in these branches.
 
-- `src/pgduckdb_node.cpp:411-414`
-- `test/pycheck/explain_test.py:63-81`
+**GUC.3.** `get_config_handle()` returns a handle for an existing setting
+that is not a placeholder and NULL otherwise. See
+`src/backend/utils/misc/guc.c` in PostgreSQL 17 and 18.
 
-Tato vlastnost je pouze podpůrná. Autoritativním oraclem Spike 1 bude C detector.
+**GUC.4.** `GUC_NO_RESET` prohibits RESET and SAVE. The
+`GUC_CUSTOM_PLACEHOLDER` flag identifies a placeholder. The public
+`src/include/utils/guc.h` declares both flags on PostgreSQL 16–18.
 
-### Ověřené tvrzení G2.9 — podporované řady
+## PostgreSQL error handling
 
-Pinovaný pg_duckdb má Docker build matrix pro PostgreSQL 14, 15, 16, 17 a 18.
+**ERR.1.** Declare a local variable `volatile` if it changes in `PG_TRY` and
+recovery reads it in `PG_CATCH`. PostgreSQL also advises keeping recovery
+small because a second `ERROR` can make it unsafe. See
+`src/include/utils/elog.h:317-382` in `REL_17_STABLE`. The rule applies
+to all supported branches.
 
-Zdroj: `.github/workflows/docker.yaml:23-24` a `:105-106`.
+Keep delegation frame cleanup free of allocations and errors. Place every
+failpoint that can raise `ERROR` after a frame push inside `PG_TRY`. Use
+`volatile bool ok` in the proposed local subtransaction helper.
 
-## GUC API fakta PostgreSQL
+## WP0 exit criteria
 
-### Ověřené tvrzení GUC.1
-
-`GetConfigOptionFlags(name, true)` vrací při chybějícím GUC nulu. Nula tedy
-není důkaz existence. S `missing_ok=false` funkce vyvolá ERROR.
-
-Zdroj: `src/backend/utils/misc/guc.c`, komentář a implementace
-`GetConfigOptionFlags()` ve větvích PG 16, 17 a 18.
-
-### Ověřené tvrzení GUC.2
-
-`get_config_handle()` a `set_config_with_handle()` jsou ve veřejném `guc.h` v
-PG 17 a PG 18, ale nejsou v PG 16.
-
-Zdroj: `src/include/utils/guc.h` v příslušných větvích.
-
-### Ověřené tvrzení GUC.3
-
-`get_config_handle()` vrací handle pouze pro nalezený ne-placeholder GUC;
-jinak vrací NULL.
-
-Zdroj: `src/backend/utils/misc/guc.c`, implementace `get_config_handle()` v
-PG 17 a PG 18.
-
-### Ověřené tvrzení GUC.4
-
-`GUC_NO_RESET` znamená zákaz RESET/SAVE a `GUC_CUSTOM_PLACEHOLDER` identifikuje
-placeholder. Oba flagy jsou veřejné ve všech třech podporovaných řadách.
-
-Zdroj: `src/include/utils/guc.h` v PG 16, 17 a 18.
-
-## Error handling fakta PostgreSQL
-
-### Ověřené tvrzení ERR.1
-
-PostgreSQL výslovně požaduje `volatile` pro lokální proměnnou, která je změněna
-v `PG_TRY` a použita v `PG_CATCH`. Dokumentace zároveň varuje, že recovery kód
-má zůstat malý a nový ERROR v něm má omezenou bezpečnost.
-
-Zdroj: `src/include/utils/elog.h:317-382` v `REL_17_STABLE`; pravidlo je
-součástí podporovaných větví.
-
-### Návrhový důsledek
-
-- cleanup vlastního rámce nebude alokovat ani vyhazovat chybu;
-- po push nebude failpoint schopný ERROR umístěn mimo `PG_TRY`;
-- budoucí lokální subtransaction helper použije `volatile bool ok`.
-
-## WP0 exit gate
-
-| Kontrola | Stav |
+| Check | Status |
 |---|---|
-| Pin pg_qi zaznamenán | PASS |
-| Pin pg_duckdb zaznamenán a dostupný | PASS |
-| PG 16/17/18 planner podpis ověřen | PASS |
-| PG19 hranice ověřena proti master a pg_duckdb | PASS |
-| GUC názvy, kontexty a API rozdíly ověřeny | PASS |
-| Provider name a Material wrapper ověřeny | PASS |
-| Force read window ověřeno | PASS |
-| EXPLAIN property přesně identifikována | PASS |
-| Známé P0 rozpory mají závazné rozhodnutí | PASS |
-| Běhový hook order | OPEN — patří do S0, neblokuje WP1 |
-| GUC_NO_RESET na reálném běžícím clusteru | OPEN — patří do S0, neblokuje WP1 |
+| pg_qi revision recorded | PASS |
+| pg_duckdb revision recorded and available | PASS |
+| PostgreSQL 16–18 planner signature verified | PASS |
+| PostgreSQL 19 boundary checked against PostgreSQL and pg_duckdb source | PASS |
+| GUC names, contexts and API differences verified | PASS |
+| Provider name and `Material` wrapper verified | PASS |
+| Force setting read locations verified | PASS |
+| Exact `EXPLAIN` property identified | PASS |
+| Decisions recorded for known P0 conflicts | PASS |
+| Hook order at runtime | OPEN — assigned to S0 |
+| `GUC_NO_RESET` on a running cluster | OPEN — assigned to S0 |
 
-**Verdikt WP0: PASS pro zahájení WP1.**
-
-WP0 uzavírá zdrojový recon. Neprohlašuje delegační mechanismus za validovaný.
+WP0 passed the source review and WP1 can begin. S0 will verify the open
+runtime checks.

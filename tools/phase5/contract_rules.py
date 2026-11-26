@@ -828,7 +828,7 @@ def _validate_rehearsal_mandate(value: dict[str, Any], catalog: dict[str, Any]) 
     _string(value["target_cluster_id"], "target_cluster_id")
     _string(value["target_initial_start_id"], "target_initial_start_id")
     if value["artifact_identity_scheme"] != "PGQI_STACK_SHA256_V1":
-        raise ContractError("unknown recovery artifact identity scheme")
+        raise ContractError("unknown recovery artefact identity scheme")
     _enum(value["pool_profile"], "pool_profile",
           {"DIRECT", "SESSION_POOL", "TRANSACTION_POOL"})
     for name in ("target_copy_identity_sha256", "source_environment_identity_sha256",
@@ -909,7 +909,7 @@ def _validate_recovery_r2(value: dict[str, Any], catalog: dict[str, Any]) -> Non
         raise ContractError("environment restore lacks its approved source")
     if (value["source_artifact_sha256"] == value["result_artifact_sha256"] and
             value["source_configuration_sha256"] == value["result_configuration_sha256"]):
-        raise ContractError("R2 recovery must change artifact or configuration identity")
+        raise ContractError("R2 recovery must change artefact or configuration identity")
     _exact_sequence(value["steps"], R2_STEPS, "R2 steps")
     _artifact(value["source_identity_proof"], "source_identity_proof")
     _artifact(value["identity_proof"], "identity_proof")
@@ -1601,7 +1601,7 @@ def verify_artifact(bundle_root: Path, artifact: dict[str, Any]) -> None:
     try:
         info = os.fstat(descriptor)
         if not stat.S_ISREG(info.st_mode):
-            raise ContractError("artifact is not a regular file")
+            raise ContractError("artefact is not a regular file")
         while True:
             chunk = os.read(descriptor, 65536)
             if not chunk:
@@ -1611,7 +1611,7 @@ def verify_artifact(bundle_root: Path, artifact: dict[str, Any]) -> None:
     finally:
         os.close(descriptor)
     if size != artifact["bytes"] or digest.hexdigest() != artifact["sha256"]:
-        raise ContractError("artifact exact-byte identity mismatch")
+        raise ContractError("artefact exact-byte identity mismatch")
 
 
 def verify_scope_inputs(bundle_root: Path, scope: dict[str, Any]) -> None:

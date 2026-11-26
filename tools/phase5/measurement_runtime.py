@@ -894,7 +894,7 @@ class MeasurementRunner:
 
     @property
     def _active_level(self) -> int:
-        # Set by the validated authorization immediately before dispatch.
+        # The validated authorisation sets this immediately before dispatch.
         return self.__active_level
 
     @_active_level.setter

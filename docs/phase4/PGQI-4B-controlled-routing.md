@@ -69,7 +69,7 @@ pinned PostgreSQL 19 build, including:
 - executor, utility, nested and later-outer-hook context rejection;
 - nested masking and restoration of parent-owned force;
 - success, propagated-error and poisoned-state cleanup;
-- custom, generic, reused and invalidated plan behavior; and
+- custom, generic, reused and invalidated plan behaviour; and
 - absence of test controls and network operations from production hook paths.
 
 PGQI-4C defines the bounded pilot evidence and operator gate. Completion does

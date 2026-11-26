@@ -3,12 +3,12 @@
 The certificate allows the V2 `safe` gate to report `pass` for one narrowly
 qualified case. It is not a delegation rule. It does not change the plan or
 the engine that runs a query, open the recommendation barrier, or enable
-shadow mode. With no approved certificate, the behavior is unchanged.
+shadow mode. With no approved certificate, the behaviour is unchanged.
 
 ## Qualified scope
 
 - One built-in `COUNT(*)` over one ordinary, permanent PostgreSQL heap with
-  the existing P0 catalog, permissions and row-security checks. `FROM ONLY`
+  the existing P0 catalogue, permissions and row-security checks. `FROM ONLY`
   is excluded: the pinned provider declines its generated DuckDB SQL.
 - One exact PostgreSQL release/build, `pg_qi`, `pg_duckdb` and DuckDB binary
   tuple and deployment site. The PostgreSQL cluster identifier and a unique
@@ -74,9 +74,9 @@ configuration opts in with `pg_qi.count_certificate_attestation`, preloading
 lab evidence cannot approve a different site. Do not run the synthetic
 fixture acquisition on a production system. The attestation reads the binaries mapped by the
 Linux postmaster once, binding the checked file to its mapped device and
-inode. Keep mapped artifacts immutable and restart the site to replace them.
+inode. Keep mapped artefacts immutable and restart the site to replace them.
 The qualified layout uses `pg_duckdb.so` and a separate `libduckdb.so`.
-Unrecognized, ambiguous or unreadable mappings, recovery and test builds do
+Unrecognised, ambiguous or unreadable mappings, recovery and test builds do
 not certify. No file or
 network access is performed in a planner or executor callback for a
 certificate check.
@@ -88,10 +88,10 @@ different-build, different-site or expired record cannot publish a semantic
 pass. Removing either setting, then successfully reloading, revokes new
 observations. Confirm the effective settings after a reload; an unrelated
 configuration error can prevent the reload from being applied. A previously captured decision remains historical and is not
-an authorization for another query. The approval is a trust decision by the
+an authorisation for another query. The approval is a trust decision by the
 deployment operator, not a cryptographic signature by the test harness.
 
-Publication uses the existing authorized V2 diagnostics. A topology
+Publication uses the existing authorised V2 diagnostics. A topology
 fingerprint alone does not qualify copied plans. The certificate and snapshot
 are checked again on the first execution callback rather than inferred from
 planning; this does not claim that execution subsequently completed.

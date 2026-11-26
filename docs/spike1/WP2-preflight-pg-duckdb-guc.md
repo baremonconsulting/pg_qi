@@ -1,69 +1,59 @@
-# WP2 — preflight pg_duckdb GUC
+# WP2 preflight for duckdb.force_execution
 
-Datum: 2026-10-14
+14 October 2026
 
-## Cíl
+The preflight verified a real, resettable `duckdb.force_execution` setting on
+PostgreSQL 16–18. The test also checked that `GUC_ACTION_SAVE` sets and
+restores the value in both directions.
 
-Ověřit při preloadu, že `duckdb.force_execution` je skutečný, resetovatelný GUC
-registrovaný pg_duckdb, a připravit verzově správný zápis přes
-`GUC_ACTION_SAVE`.
+## Implementation
 
-## Implementace
+- `src/include/pg_qi/qi_delegation.h` declares the internal interface.
+  `src/qi_delegation.c` implements the preflight and setting update.
+- PostgreSQL 17 and 18 use `get_config_handle()` to verify the setting and
+  `set_config_with_handle()` to write it.
+- PostgreSQL 16 checks `GetConfigOptionFlags(name, false)` and
+  `GUC_CUSTOM_PLACEHOLDER`, then writes through `set_config_option()` by name.
+- All three versions reject `GUC_NO_RESET`.
+- The preflight runs only through `shared_preload_libraries`. A subsequent
+  `CREATE EXTENSION` uses the installed hook.
+- `qi.test_force_meta()` supplies preflight metadata for S0.
+  `qi.test_force_save_roundtrip()` checks both directions at a new GUC nesting
+  level.
 
-- `src/include/pg_qi/qi_delegation.h` publikuje malé interní rozhraní.
-- `src/qi_delegation.c` implementuje preflight a save setter.
-- PostgreSQL 17/18 používá `get_config_handle()` jako důkaz existence a
-  `set_config_with_handle()` pro zápis.
-- PostgreSQL 16 používá `GetConfigOptionFlags(name, false)`, kontrolu
-  `GUC_CUSTOM_PLACEHOLDER` a name-based `set_config_option()`.
-- Všechny verze odmítají `GUC_NO_RESET`.
-- Preflight běží pouze při `shared_preload_libraries`; běžné `CREATE EXTENSION`
-  znovu neinstaluje hook.
-- `qi.test_force_meta()` vrací preflight metadata pro S0.
-- `qi.test_force_save_roundtrip()` přímo ověřuje změnu a obnovu GUC v novém
-  GUC nest levelu pro oba směry.
+## Verification
 
-## Výsledky
-
-| Verze | Preflight | Handle | Placeholder | GUC_NO_RESET | SAVE roundtrip | Regrese |
+| PostgreSQL | Preflight | Handle | Placeholder | `GUC_NO_RESET` | SAVE round trip | Regression |
 |---|---:|---:|---:|---:|---:|---:|
-| PostgreSQL 16.15 | PASS | N/A | false | false | PASS | 1/1 PASS |
-| PostgreSQL 17.11 | PASS | přítomen | false | false | PASS | 1/1 PASS |
-| PostgreSQL 18.6 | PASS | přítomen | false | false | PASS | 1/1 PASS |
+| 16.15 | PASS | N/A | false | false | PASS | 1/1 PASS |
+| 17.11 | PASS | Present | false | false | PASS | 1/1 PASS |
+| 18.6 | PASS | Present | false | false | PASS | 1/1 PASS |
 
-Pozorované flags byly ve všech verzích `64`; flags jsou pouze diagnostika,
-nikoli důkaz existence.
+All versions reported flags of `64`. The flag value is diagnostic. The
+preflight uses the setting lookup to establish existence.
 
-## Negativní testy
+## Rejected configurations
 
-- Bez pg_duckdb server ve všech verzích správně odmítl start.
-- Při pořadí `pg_qi,pg_duckdb` server ve všech verzích správně odmítl start.
-- PG17/18 vrací vlastní chybu s hintem k pořadí preloadu.
-- PG16 vrací core chybu `unrecognized configuration parameter`, protože
-  požadovaný `GetConfigOptionFlags(name, false)` vyhodí ERROR ještě před
-  následnou kontrolou placeholder flagu. Toto je očekávaný verzový rozdíl,
-  nikoli tiché přijetí chybné konfigurace.
+All three versions rejected startup with pg_duckdb missing and with the
+preload order `pg_qi,pg_duckdb`. PostgreSQL 17 and 18 returned a pg_qi error
+with a hint about the preload order. On PostgreSQL 16,
+`GetConfigOptionFlags(name, false)` raised the core error
+`unrecognized configuration parameter` before the placeholder check.
 
-## Reprodukovatelnost
+## Reproduce the build
 
-Pin pg_duckdb: `ee38d3b540ecea1d93683ba99bdcec5632a21eaf`.
+Build pg_duckdb at `ee38d3b540ecea1d93683ba99bdcec5632a21eaf` separately for
+PostgreSQL 16, 17 and 18. Its DuckDB submodule is v1.5.4 at `08e34c447b`. The
+host had 3.8 GB of RAM, so the run used the official DuckDB v1.5.4 binary.
+The archive SHA-256 is
+`838d98a85e697bab9935010c88a8c67d3312ccedcab4cb4a0ba01da65113bb70`.
 
-Jeho DuckDB submodule je release `v1.5.4` na `08e34c447b`. Kvůli 3,8 GB RAM
-hosta byla použita oficiální binární knihovna DuckDB v1.5.4; archiv má
-SHA-256 `838d98a85e697bab9935010c88a8c67d3312ccedcab4cb4a0ba01da65113bb70`.
-Integrační vrstva pg_duckdb byla sestavena z pinovaného zdroje samostatně pro
-PG16/17/18.
+## Build findings
 
-## Nálezy při implementaci
-
-1. SQL entry pointy v odděleném C modulu vyžadují explicitní `PGDLLEXPORT`,
-   protože PGXS používá skrytou viditelnost symbolů.
-2. `set_config_*` může vrátit `-1`, pokud hodnota nebyla aplikována; setter
-   proto považuje každý výsledek `<= 0` za chybu.
-3. Při přepínání PGXS verzí je povinné pořadí `clean → build → install`, jinak
-   lze omylem zkopírovat knihovnu sestavenou proti jiné major verzi.
-
-## Verdikt
-
-**WP2: PASS.** Pozitivní i negativní preload kontrakt a obě varianty
-`GUC_ACTION_SAVE` byly prokázány na PostgreSQL 16, 17 a 18.
+1. Declare SQL entry points in separate C modules with `PGDLLEXPORT`. PGXS
+   builds with hidden symbol visibility.
+2. Treat each `set_config_*` result `<= 0` as an error. The function can return
+   `-1` when it leaves the value unapplied.
+3. Run `clean`, `build` and `install` in that order when switching PGXS
+   versions. A stale build can otherwise install a library for a different
+   PostgreSQL major.

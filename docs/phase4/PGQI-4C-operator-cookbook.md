@@ -83,7 +83,7 @@ not attempt to repair it in place.
 5. Open a new session and repeat the default-off preflight and a safe control.
 
 `DROP EXTENSION` does not unload a preloaded hook. The executable PGQI-4C
-drill deliberately proves session disable/reconnect behavior only; it never
+drill deliberately proves session disable/reconnect behaviour only; it never
 targets an existing customer cluster and does not claim to rehearse a binary
 downgrade.
 
@@ -101,5 +101,5 @@ scripts/phase4c/run-benchmark.sh 17 25 250
 ```
 
 The runner refuses arbitrary data directories, inherited connection targets,
-reused run roots and test-only production artifacts. Preserve the whole run
+reused run roots and test-only production artefacts. Preserve the whole run
 directory for review, especially on failure.
