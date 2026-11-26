@@ -10,6 +10,7 @@
 
 #include "nodes/nodes.h"
 #include "pg_qi/qi_benefit.h"
+#include "pg_qi/qi_bound.h"
 #include "pg_qi/qi_decision_v2.h"
 #include "pg_qi/qi_plan_features.h"
 #include "pg_qi/qi_profile.h"
@@ -24,7 +25,8 @@ typedef enum QiRoutingMode
 {
     QI_ROUTING_OFF = 0,
     QI_ROUTING_ALLOWLIST,
-    QI_ROUTING_SHADOW_P0
+    QI_ROUTING_SHADOW_P0,
+    QI_ROUTING_BOUND
 } QiRoutingMode;
 
 typedef enum QiPlanLifecycle
@@ -58,6 +60,7 @@ typedef struct QiV2SnapshotCandidate
     QiProfileEvidence profile_evidence;
     QiBenefitResult benefit;
     QiSpillEvidence spill;
+    char bound_key[QI_BOUND_KEY_LENGTH + 1];
     QiPlanLifecycle lifecycle;
     bool valid;
 } QiV2SnapshotCandidate;
@@ -81,7 +84,8 @@ extern bool qi_snapshot_prepare(QiV2SnapshotCandidate *candidate,
                                 QiStatsConfidence stats_confidence,
                                 QiProfileEvidence profile_evidence,
                                 QiBenefitResult benefit,
-                                QiSpillEvidence spill);
+                                QiSpillEvidence spill,
+                                const QiBoundAssessment *bound);
 extern bool qi_snapshot_commit(const QiV2SnapshotCandidate *candidate);
 extern void qi_snapshot_confirm_count(QiV2SnapshotCandidate *candidate,
                                       const QueryDesc *query_desc);

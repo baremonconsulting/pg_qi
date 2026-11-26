@@ -14,6 +14,33 @@ policy or make a release claim. The forced arm deliberately bypasses the
 active pg_qi classifier: the foundation tests execution and equivalence, not a
 future classifier decision.
 
+## Bound statements
+
+Pass `--bindings-file` to `run_differential.py` for a query with libpq text
+parameters. Supply a JSON array in placeholder order. Each entry has an
+`oid` and a `value`. OID zero asks PostgreSQL to infer the parameter type.
+Use a JSON string for a text parameter or JSON null for SQL NULL. For
+example, a query with a numeric bound and an optional numeric filter can
+use these parameters.
+
+```json
+[{"oid": 23, "value": "17"}, {"oid": 23, "value": null}]
+```
+
+Use a version 2 run manifest with the SHA-256 of the bindings file in
+`bindings_sha256`. Each arm uses the same validated bindings through the
+extended protocol. The arm receipts include the bindings digest and the
+witness token binds it to that execution. Version 1 manifests cover queries
+without bindings.
+
+A passing trial establishes provider execution and typed parity for that
+statement, its bindings and the recorded test environment. Repeated timings
+on representative data establish the benefit of delegation.
+The CTE pipeline in the integration suite combines a window with a grouped
+aggregate. It also tests an optional filter with a bound NULL. A provider
+that falls back for that variant yields `force_declined`. A provider that
+executes it must pass the same typed comparison as the single-bound case.
+
 ## Components and trust boundary
 
 - `tools/phase5/protocol_driver.c` writes the typed spool. PGQSP001 remains the

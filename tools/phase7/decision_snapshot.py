@@ -256,7 +256,7 @@ def parse_v2(text: str) -> dict[str, str | int]:
         raise SnapshotError("invalid V2 incarnation")
     _u64(values["g"], "generation", 1)
     _u64(values["e"], "event sequence", 1)
-    _one_of(values["mode"], "mode", {"off", "allowlist", "shadow_p0"})
+    _one_of(values["mode"], "mode", {"off", "allowlist", "shadow_p0", "bound"})
     _one_of(values["enabled"], "enabled", {"on", "off"})
     if values["context"] != "proven_client":
         raise SnapshotError("V2 event context is not proven")
@@ -285,9 +285,15 @@ def parse_v2(text: str) -> dict[str, str | int]:
     if ((values["p0"] == "bounded") != (values["p0_reason"] == "ok")):
         raise SnapshotError("V2 P0 state and reason contradict each other")
     if values["policy"] == "request_delegation" and not (
-            values["enabled"] == "on" and values["mode"] == "allowlist" and
+            values["enabled"] == "on" and values["mode"] in {"allowlist", "bound"} and
             values["force"] == "qi_stack"):
         raise SnapshotError("V2 delegation request is contradictory")
+    if values["mode"] == "bound" and values["policy"] == "request_delegation":
+        if not (values["safe"] == "pass" and values["beneficial"] == "pass" and
+                values["barrier"] == "open" and
+                (values["eligible"], values["verification"]) in {
+                    ("pass", "verified"), ("veto", "unverified")}):
+            raise SnapshotError("V2 bound delegation request lacks gate evidence")
     if values["force"] == "qi_stack" and values["policy"] != "request_delegation":
         raise SnapshotError("V2 owned force lacks a delegation request")
     _validate_decision(values)

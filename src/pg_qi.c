@@ -17,6 +17,7 @@
 #include "pg_qi/planner_compat.h"
 #include "pg_qi/qi_classify.h"
 #include "pg_qi/qi_benefit.h"
+#include "pg_qi/qi_bound.h"
 #include "pg_qi/qi_context.h"
 #include "pg_qi/qi_count_certificate.h"
 #include "pg_qi/qi_decision.h"
@@ -64,6 +65,9 @@ static const struct config_enum_entry pg_qi_routing_mode_options[] = {
     {"off", QI_ROUTING_OFF, false},
     {"allowlist", QI_ROUTING_ALLOWLIST, false},
     {"shadow_p0", QI_ROUTING_SHADOW_P0, false},
+#if !PG_QI_TESTING
+    {"bound", QI_ROUTING_BOUND, false},
+#endif
     {NULL, 0, false}
 };
 
@@ -281,6 +285,9 @@ done:
     bool request_applied = false;
     bool shadow_p0_facts_observed = false;
     bool inspect_spill = false;
+    Query *provider_query = parse;
+    QiBoundAssessment bound = {0};
+    bool bound_assessed = false;
     QiRoutingMode mode_at_decision = (QiRoutingMode) pg_qi_routing_mode;
     bool enabled_at_decision = pg_qi_enabled;
     QiV2SnapshotToken v2_token;
@@ -365,7 +372,7 @@ done:
              * allow-list.  This ordering makes limits and catalog misses
              * observable even when V1 correctly rejects the query.
              */
-            if (pg_qi_routing_mode == QI_ROUTING_SHADOW_P0)
+            if (mode_at_decision == QI_ROUTING_SHADOW_P0)
             {
                 shadow_p0_facts = qi_shadow_p0_observe_query(parse);
                 semantic_facts = qi_semantic_observe_query(
@@ -374,7 +381,19 @@ done:
                 inspect_spill = qi_spill_query_requested(parse);
             }
 
-            eligibility = qi_eligibility_query(parse);
+            if (mode_at_decision == QI_ROUTING_BOUND &&
+                qi_context_policy_request_allowed())
+            {
+                bound = qi_bound_assess(parse, query_string, bound_params);
+                bound_assessed = true;
+                eligibility.candidate = bound.eligible == QI_GATE_PASS;
+                if (!eligibility.candidate)
+                    eligibility.reason = bound_params == NULL
+                        ? QI_ELIGIBILITY_UNSUPPORTED_PARAMETER
+                        : QI_ELIGIBILITY_UNSUPPORTED_EXPRESSION;
+            }
+            else
+                eligibility = qi_eligibility_query(parse);
             classifier_status = eligibility.candidate
                 ? QI_SHADOW_CLASSIFIER_CANDIDATE
                 : QI_SHADOW_CLASSIFIER_REJECTED;
@@ -382,17 +401,22 @@ done:
                 reason = QI_SHADOW_CLASSIFIER_REJECTED_REASON;
             else
             {
-                switch ((QiRoutingMode) pg_qi_routing_mode)
+                switch (mode_at_decision)
                 {
                     case QI_ROUTING_OFF:
                         reason = QI_SHADOW_POLICY_MISSING;
                         break;
                     case QI_ROUTING_ALLOWLIST:
-                        if (!qi_context_policy_request_allowed())
+                    case QI_ROUTING_BOUND:
+                        if (!qi_context_policy_request_allowed() ||
+                            (mode_at_decision == QI_ROUTING_BOUND &&
+                             bound.provider_query == NULL))
                         {
                             reason = QI_SHADOW_DECISION_ONLY;
                             break;
                         }
+                        if (mode_at_decision == QI_ROUTING_BOUND)
+                            provider_query = bound.provider_query;
                         policy_intent = QI_POLICY_REQUEST_DELEGATION;
                         reason = QI_SHADOW_DELEGATION_REQUESTED;
                         decision_force_origin = QI_FORCE_QI_STACK;
@@ -420,7 +444,7 @@ done:
             }
         }
 
-        planned_stmt = pg_qi_call_downstream(parse, query_string,
+        planned_stmt = pg_qi_call_downstream(provider_query, query_string,
                                               cursor_options, bound_params
 #if QI_HAVE_PLANNER_ES
                                               , es
@@ -452,10 +476,14 @@ done:
         }
 
         if (request_applied)
+        {
             reason = verification == QI_VERIFICATION_VERIFIED &&
                 observed_engine == QI_SHADOW_ENGINE_DUCKDB
                 ? QI_SHADOW_DELEGATION_VERIFIED
                 : QI_SHADOW_DELEGATION_DECLINED;
+            if (bound_assessed && reason == QI_SHADOW_DELEGATION_DECLINED)
+                bound.eligible = QI_GATE_VETO;
+        }
 
         if (context_proven && pg_qi_shadow_planner_depth == 1)
             v2_candidate_ready = qi_snapshot_prepare(
@@ -467,7 +495,8 @@ done:
                     QI_SHADOW_P0_FACTS_UNKNOWN,
                 shadow_p0_facts_observed ? shadow_p0_facts.reason :
                     QI_SHADOW_P0_FACTS_NO_QUERY,
-                plan_features, stats_confidence, profile_evidence, benefit, spill);
+                plan_features, stats_confidence, profile_evidence, benefit, spill,
+                bound_assessed ? &bound : NULL);
 
         if (frame_active)
         {
@@ -524,7 +553,7 @@ _PG_init(void)
 {
     DefineCustomBoolVariable("pg_qi.enabled",
                              "Enables pg_qi policy evaluation in this backend.",
-                             "When enabled, pg_qi evaluates policy; routing still requires an explicit allow-list mode.",
+                             "Delegation requires an explicit routing mode.",
                              &pg_qi_enabled,
                              true,
                              PGC_SUSET,
@@ -534,8 +563,8 @@ _PG_init(void)
                              NULL);
 
     DefineCustomEnumVariable("pg_qi.routing_mode",
-                             "Selects disabled, allow-list, or decision-only shadow policy.",
-                             "Only allowlist may request delegation; shadow_p0 is inert.",
+                             "Selects the pg_qi routing policy.",
+                             "The allowlist and bound modes may request delegation. Shadow observations only record evidence.",
                              &pg_qi_routing_mode,
                              QI_ROUTING_OFF,
                              pg_qi_routing_mode_options,
@@ -551,6 +580,9 @@ _PG_init(void)
     qi_spill_init_gucs();
     qi_count_certificate_init();
     qi_snapshot_init_guc();
+#if !PG_QI_TESTING
+    qi_bound_init_gucs();
+#endif
 
 #if PG_QI_TESTING
     DefineCustomBoolVariable("pg_qi.spike_last_plan_has_duckdb_scan",

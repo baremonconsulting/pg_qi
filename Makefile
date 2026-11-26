@@ -21,6 +21,7 @@ OBJS += src/qi_reenter.o src/qi_diag.o
 DATA += sql/pg_qi_spike_test--0.0.1.sql
 REGRESS = pg_qi_basic
 else
+OBJS += src/qi_bound.o
 REGRESS = pg_qi_shadow
 endif
 

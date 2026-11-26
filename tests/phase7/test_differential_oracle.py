@@ -14,7 +14,8 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from tools.phase5.corpus_oracle import MAGIC_V2, TRAILER_MARKER
-from tools.phase7.differential_oracle import (DifferentialError, evaluate, main as oracle_main,
+from tools.phase7.differential_oracle import (DifferentialError, evaluate, execution_subject_token,
+                                              main as oracle_main,
                                               validate_no_import_control)
 
 
@@ -82,6 +83,18 @@ class DifferentialOracleTest(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temp.cleanup()
+
+    def test_bound_receipts_must_describe_the_same_bindings(self) -> None:
+        unbound_token = execution_subject_token(self.manifest)
+        self.manifest.update(schema_version=2, bindings_sha256="c" * 64)
+        bound_token = execution_subject_token(self.manifest)
+        for receipt in self.receipts.values():
+            receipt.update(schema_version=2, bindings_sha256="c" * 64)
+            receipt["witness_after"] = receipt["witness_after"].replace(unbound_token, bound_token)
+        self.assertEqual(evaluate(self.manifest, self.receipts, self.scratch)["result"], "PASS")
+        self.receipts["forced"]["bindings_sha256"] = "d" * 64
+        with self.assertRaisesRegex(DifferentialError, "bindings_sha256 binding mismatch"):
+            evaluate(self.manifest, self.receipts, self.scratch)
 
     def receipt(self, arm: str, engine: str, path: Path, rows: int, *,
                 sqlstate: str = "") -> dict:
