@@ -20,11 +20,11 @@ typedef struct QiBoundAssessment
     QiGateState semantically_safe;
     QiGateState beneficial;
     char key[QI_BOUND_KEY_LENGTH + 1];
-    Query *provider_query;
 } QiBoundAssessment;
 
 extern void qi_bound_init_gucs(void);
 extern QiBoundAssessment qi_bound_assess(Query *query, const char *source,
                                          ParamListInfo params);
+extern Query *qi_bound_materialise(Query *query, ParamListInfo params);
 
 #endif /* PG_QI_QI_BOUND_H */

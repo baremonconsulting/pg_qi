@@ -12,6 +12,7 @@
 
 #include "postgres.h"
 
+#include "executor/executor.h"
 #include "fmgr.h"
 #include "miscadmin.h"
 #include "pg_qi/planner_compat.h"
@@ -40,6 +41,7 @@
 #include "storage/ipc.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
+#include "utils/memutils.h"
 #include "utils/timestamp.h"
 
 PG_MODULE_MAGIC;
@@ -98,6 +100,73 @@ pg_qi_call_downstream(Query *parse, const char *query_string,
                            cursor_options, bound_params,
                            QI_CURRENT_EXPLAIN_STATE);
 }
+
+#if !PG_QI_TESTING
+static void
+pg_qi_bound_copy_origins(List *original, List *delegated)
+{
+    ListCell *input = list_head(original);
+    ListCell *cell;
+
+    /* The descriptors already match. RowDescription also sends column origins. */
+    foreach(cell, delegated)
+    {
+        TargetEntry *target = lfirst_node(TargetEntry, cell);
+        const TargetEntry *source;
+
+        if (target->resjunk)
+            continue;
+        while (lfirst_node(TargetEntry, input)->resjunk)
+            input = lnext(original, input);
+        source = lfirst_node(TargetEntry, input);
+        target->resorigtbl = source->resorigtbl;
+        target->resorigcol = source->resorigcol;
+        input = lnext(original, input);
+    }
+}
+
+static PlannedStmt *
+pg_qi_bound_plan(Query *parse, const char *query_string, int cursor_options,
+                 ParamListInfo bound_params)
+{
+    MemoryContext caller = CurrentMemoryContext;
+    MemoryContext attempt = AllocSetContextCreate(caller, "pg_qi bound plan",
+                                                  ALLOCSET_DEFAULT_SIZES);
+    PlannedStmt *volatile accepted = NULL;
+
+    MemoryContextSwitchTo(attempt);
+    PG_TRY();
+    {
+        Query *materialised = qi_bound_materialise(parse, bound_params);
+        PlannedStmt *candidate = QI_CALL_PLANNER(pg_qi_call_downstream,
+                                                materialised, query_string,
+                                                cursor_options, NULL, NULL);
+
+        if (qi_plan_is_whole_duckdb(candidate))
+        {
+            TupleDesc original = ExecCleanTypeFromTL(parse->targetList);
+            TupleDesc delegated = ExecCleanTypeFromTL(candidate->planTree->targetlist);
+
+            if (equalTupleDescs(original, delegated))
+            {
+                pg_qi_bound_copy_origins(parse->targetList, candidate->planTree->targetlist);
+                accepted = candidate;
+            }
+            FreeTupleDesc(delegated);
+            FreeTupleDesc(original);
+        }
+    }
+    PG_FINALLY();
+    {
+        MemoryContextSwitchTo(caller);
+    }
+    PG_END_TRY();
+
+    if (accepted == NULL)
+        MemoryContextDelete(attempt);
+    return (PlannedStmt *) accepted;
+}
+#endif
 
 void _PG_init(void);
 void _PG_fini(void);
@@ -285,9 +354,9 @@ done:
     bool request_applied = false;
     bool shadow_p0_facts_observed = false;
     bool inspect_spill = false;
-    Query *provider_query = parse;
     QiBoundAssessment bound = {0};
     bool bound_assessed = false;
+    bool bound_attempted;
     QiRoutingMode mode_at_decision = (QiRoutingMode) pg_qi_routing_mode;
     bool enabled_at_decision = pg_qi_enabled;
     QiV2SnapshotToken v2_token;
@@ -386,7 +455,7 @@ done:
             {
                 bound = qi_bound_assess(parse, query_string, bound_params);
                 bound_assessed = true;
-                eligibility.candidate = bound.eligible == QI_GATE_PASS;
+                eligibility.candidate = bound.eligible == QI_GATE_UNKNOWN;
                 if (!eligibility.candidate)
                     eligibility.reason = bound_params == NULL
                         ? QI_ELIGIBILITY_UNSUPPORTED_PARAMETER
@@ -410,13 +479,12 @@ done:
                     case QI_ROUTING_BOUND:
                         if (!qi_context_policy_request_allowed() ||
                             (mode_at_decision == QI_ROUTING_BOUND &&
-                             bound.provider_query == NULL))
+                             (bound.semantically_safe != QI_GATE_PASS ||
+                              bound.beneficial != QI_GATE_PASS)))
                         {
                             reason = QI_SHADOW_DECISION_ONLY;
                             break;
                         }
-                        if (mode_at_decision == QI_ROUTING_BOUND)
-                            provider_query = bound.provider_query;
                         policy_intent = QI_POLICY_REQUEST_DELEGATION;
                         reason = QI_SHADOW_DELEGATION_REQUESTED;
                         decision_force_origin = QI_FORCE_QI_STACK;
@@ -444,18 +512,44 @@ done:
             }
         }
 
-        planned_stmt = pg_qi_call_downstream(provider_query, query_string,
-                                              cursor_options, bound_params
-#if QI_HAVE_PLANNER_ES
-                                              , es
-#endif
-                                              );
+        bound_attempted = bound_assessed && request_applied;
+        if (bound_attempted)
+        {
+            planned_stmt = pg_qi_bound_plan(parse, query_string, cursor_options,
+                                            bound_params);
+            bound.eligible = planned_stmt != NULL ? QI_GATE_PASS : QI_GATE_VETO;
+        }
+        else
+            planned_stmt = QI_CALL_PLANNER(pg_qi_call_downstream, parse, query_string,
+                                           cursor_options, bound_params,
+                                           QI_CURRENT_EXPLAIN_STATE);
+
+        if (frame_active)
+        {
+            AtEOXact_GUC(!bound_attempted || planned_stmt != NULL, save_nestlevel);
+            frame_active = false;
+            if (!qi_frame_pop(frame_id))
+                ereport(ERROR,
+                        (errmsg("pg_qi could not restore routing state"),
+                         errhint("Reconnect the session before planning more queries.")));
+        }
+
+        /*
+         * A clean decline can return a native plan for the materialised query.
+         * Plan again with the original tree and Bind parameters.
+         */
+        if (bound_attempted && planned_stmt == NULL)
+            planned_stmt = QI_CALL_PLANNER(pg_qi_call_downstream, parse, query_string,
+                                           cursor_options, bound_params,
+                                           QI_CURRENT_EXPLAIN_STATE);
+
         if (qi_plan_has_duckdb_scan((PlannedStmt *) planned_stmt))
         {
             observed_engine = QI_SHADOW_ENGINE_DUCKDB;
             observation =
                 QI_SHADOW_OBSERVATION_DUCKDB_SCAN_AT_DOWNSTREAM_BOUNDARY;
-            if (context_proven && planner_hook == pg_qi_planner)
+            if (context_proven && planner_hook == pg_qi_planner &&
+                (!bound_attempted || bound.eligible == QI_GATE_PASS))
                 verification = QI_VERIFICATION_VERIFIED;
         }
 
@@ -481,8 +575,6 @@ done:
                 observed_engine == QI_SHADOW_ENGINE_DUCKDB
                 ? QI_SHADOW_DELEGATION_VERIFIED
                 : QI_SHADOW_DELEGATION_DECLINED;
-            if (bound_assessed && reason == QI_SHADOW_DELEGATION_DECLINED)
-                bound.eligible = QI_GATE_VETO;
         }
 
         if (context_proven && pg_qi_shadow_planner_depth == 1)
@@ -497,16 +589,6 @@ done:
                     QI_SHADOW_P0_FACTS_NO_QUERY,
                 plan_features, stats_confidence, profile_evidence, benefit, spill,
                 bound_assessed ? &bound : NULL);
-
-        if (frame_active)
-        {
-            AtEOXact_GUC(true, save_nestlevel);
-            frame_active = false;
-            if (!qi_frame_pop(frame_id))
-                ereport(ERROR,
-                        (errmsg("pg_qi could not restore routing state"),
-                         errhint("Reconnect the session before planning more queries.")));
-        }
 
         /* Nested observations never replace the completed outer snapshot. */
         if (pg_qi_shadow_planner_depth == 1)

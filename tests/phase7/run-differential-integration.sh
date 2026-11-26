@@ -35,7 +35,7 @@ fi
 
 "$pgbin/initdb" -D "$data" --no-locale --encoding=UTF8 --no-sync >"$output/initdb.log"
 "$pgbin/pg_ctl" -D "$data" -l "$log" -o \
-    "-p $port -k $socket -c listen_addresses= -c shared_preload_libraries=$($pgconfig --pkglibdir)/pg_duckdb,$libs/pg_qi_execution_witness,$libs/pg_qi -c max_connections=20" \
+    "-p $port -k $socket -c listen_addresses= -c shared_preload_libraries=$($pgconfig --pkglibdir)/pg_duckdb,$libs/pg_qi_execution_witness,$libs/pg_qi -c duckdb.postgres_role=bound_duckdb_access -c max_connections=20" \
     -w start
 cleanup() {
     "$pgbin/pg_ctl" -D "$data" -m fast -w stop >/dev/null 2>&1 || true
@@ -43,10 +43,18 @@ cleanup() {
 trap cleanup EXIT
 
 "$pgbin/psql" -X -v ON_ERROR_STOP=1 -h "$socket" -p "$port" -d postgres <<'SQL'
+CREATE ROLE bound_duckdb_access;
+CREATE ROLE bound_reader;
+CREATE ROLE pgqi_diagnostic;
+GRANT bound_duckdb_access, pgqi_diagnostic TO bound_reader;
 CREATE EXTENSION pg_duckdb;
-CREATE TABLE witness_fixture(id integer PRIMARY KEY, label text NOT NULL);
-INSERT INTO witness_fixture
+CREATE DOMAIN bound_label AS text CHECK (length(VALUE) < 32);
+CREATE TABLE witness_fixture(id integer PRIMARY KEY, label text NOT NULL, payload bytea);
+INSERT INTO witness_fixture (id, label)
 SELECT g, 'v-' || g FROM generate_series(1, 1000) AS g;
+UPDATE witness_fixture SET label = 'v-1' || chr(92) || 'path', payload = decode('6162', 'hex') WHERE id = 1;
+UPDATE witness_fixture SET label = 'v-1' || repeat(chr(92), 2) || 'path', payload = decode('613632', 'hex') WHERE id = 2;
+GRANT SELECT ON witness_fixture TO bound_reader;
 CREATE TABLE distinct_report_fixture(
     id integer PRIMARY KEY, bucket integer NOT NULL, item_key integer, account_key integer
 );
@@ -177,6 +185,10 @@ elif expected == "INELIGIBLE_BINDING":
     assert (result["result"], result["reason"]) == ("FAIL", "ineligible_binding"), result
     assert (result["eligible"], result["safe"], result["beneficial"]) == ("veto", "unknown", "unknown"), result
     assert result["samples"] == [] and "bound_key" not in result, result
+elif expected == "PROVIDER_DECLINED":
+    assert (result["result"], result["reason"]) == ("FAIL", "provider_declined"), result
+    assert (result["eligible"], result["safe"], result["beneficial"]) == ("veto", "unknown", "unknown"), result
+    assert result["samples"] == [] and "bound_key" not in result, result
 else:
     assert result["result"] == expected, result
 assert int(sys.argv[3]) == (0 if result["result"] in {"PASS", "ERROR_PARITY"} else 1), result
@@ -219,8 +231,11 @@ python3 tests/phase7/paired_distinct_report.py |
     run_case paired-distinct-range true SAVING_BELOW_FLOOR '[{"oid":23,"value":"17"},{"oid":23,"value":"2011"}]' 3
 python3 tests/phase7/paired_distinct_report.py |
     run_case paired-distinct-null true SAVING_BELOW_FLOOR '[{"oid":23,"value":"17"},{"oid":23,"value":null}]' 3
-run_case paired-distinct-ineligible true INELIGIBLE_BINDING '[{"oid":25,"value":"v-17"}]' 3 <<'SQL'
-SELECT count(DISTINCT id) FROM witness_fixture WHERE label = $1;
+run_case bound-volatile-filter true INELIGIBLE_BINDING '[{"oid":25,"value":"v-17"}]' 3 <<'SQL'
+SELECT count(*) FROM witness_fixture WHERE label = $1 AND random() >= 0;
+SQL
+run_case bound-catalogue-read true PROVIDER_DECLINED '[{"oid":26,"value":"0"}]' 3 <<'SQL'
+SELECT count(*) FROM pg_catalog.pg_class WHERE oid > $1;
 SQL
 run_case character-typmod true FAIL <<'SQL'
 SELECT label::varchar(20) AS vc, label::char(20) AS bp
