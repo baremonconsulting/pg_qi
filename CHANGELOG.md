@@ -112,6 +112,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `EXPLAIN` command, without an active snapshot for simple-protocol queries.
   Preloaded `pg_qi` now hides that callback for DuckDB scans not prepared for
   `EXPLAIN`; such plans still show the `DuckDBScan` node.
+- Production builds now load into PostgreSQL servers built with
+  `--enable-cassert`. `pg_qi.bound_policy` was hidden from `SHOW ALL` without
+  also being excluded from the sample configuration, which fails PostgreSQL
+  16 and later's setting check at startup.
 
 ### Security
 
