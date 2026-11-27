@@ -1,9 +1,10 @@
 PG_CONFIG ?= pg_config
+PG_CLIENT_CONFIG ?= $(PG_CONFIG)
 CC ?= cc
-CPPFLAGS += -I$(shell $(PG_CONFIG) --includedir)
+CPPFLAGS += -I$(shell $(PG_CLIENT_CONFIG) --includedir)
 CFLAGS ?= -O2 -g
 CFLAGS += -std=c11 -Wall -Wextra -Werror -Wpedantic
-LDFLAGS += -L$(shell $(PG_CONFIG) --libdir) -Wl,-rpath,$(shell $(PG_CONFIG) --libdir)
+LDFLAGS += -L$(shell $(PG_CLIENT_CONFIG) --libdir) -Wl,-rpath,$(shell $(PG_CLIENT_CONFIG) --libdir)
 LDLIBS += -lpq -lcrypto
 
 .PHONY: all clean

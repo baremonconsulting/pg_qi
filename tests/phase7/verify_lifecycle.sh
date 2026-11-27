@@ -126,11 +126,11 @@ _, generic, custom = counts.split("|")
 assert int(generic) >= 1 and int(custom) >= 6, counts
 PY
 
-"$pgbin/pg_config" --includedir >/dev/null
+client_pg_config=${PG_CLIENT_CONFIG:-"$pgbin/pg_config"}
 cc -std=c99 -Wall -Wextra -Werror \
-    -I"$("$pgbin/pg_config" --includedir)" \
+    -I"$("$client_pg_config" --includedir)" \
     "$repo/tests/phase7/lifecycle_driver.c" \
-    -L"$("$pgbin/pg_config" --libdir)" -Wl,-rpath,"$("$pgbin/pg_config" --libdir)" \
+    -L"$("$client_pg_config" --libdir)" -Wl,-rpath,"$("$client_pg_config" --libdir)" \
     -lpq -o "$driver"
 "$driver"
 session_a=$("$pgbin/psql" -X -qAt postgres \

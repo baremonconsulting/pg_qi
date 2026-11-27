@@ -18,7 +18,14 @@ extract_dir=${RUNNER_TEMP}/libduckdb-${duckdb_version}
 built_duckdb=$work_dir/third_party/duckdb/build/release/src/libduckdb.so
 cached_duckdb=$RUNNER_TEMP/duckdb-cache/libduckdb.so
 hash_tool=$repo_dir/.github/scripts/ci-sha256.sh
-build_options=(DUCKDB_GEN=ninja DUCKDB_CC=clang DUCKDB_CXX=clang++)
+build_options=(DUCKDB_GEN=ninja "DUCKDB_CC=${DUCKDB_CC:-clang}" "DUCKDB_CXX=${DUCKDB_CXX:-clang++}")
+if [ -n "${PG_DUCKDB_SANITIZER:-}" ]; then
+    if [ "$build_mode" = prebuilt ]; then
+        echo "prebuilt DuckDB does not support PG_DUCKDB_SANITIZER" >&2
+        exit 2
+    fi
+    build_options+=("DUCKDB_SANITIZER=$PG_DUCKDB_SANITIZER")
+fi
 export PG_CONFIG=${PG_CONFIG:-"/usr/lib/postgresql/$major/bin/pg_config"}
 
 git clone https://github.com/duckdb/pg_duckdb.git "$work_dir"
@@ -57,7 +64,11 @@ case "$build_mode" in
 esac
 
 make -C "$work_dir" -j2 "${build_options[@]}"
-sudo --preserve-env=PG_CONFIG make -C "$work_dir" install "${build_options[@]}"
+install_make=(make)
+if [ ! -w "$("$PG_CONFIG" --pkglibdir)" ] || [ ! -w "$("$PG_CONFIG" --sharedir)/extension" ]; then
+    install_make=(sudo --preserve-env=PG_CONFIG make)
+fi
+"${install_make[@]}" -C "$work_dir" install "${build_options[@]}"
 
 installed_pg_duckdb=$($PG_CONFIG --pkglibdir)/pg_duckdb.so
 built_pg_duckdb=$work_dir/pg_duckdb.so

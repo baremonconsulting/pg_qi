@@ -6,13 +6,7 @@ script_dir=$(cd "$(dirname "$0")" && pwd)
 major=${1:?PostgreSQL major version is required}
 source_pinned=${PG_SOURCE_PINNED:-0}
 case "$source_pinned" in 0|1) ;; *) echo "PG_SOURCE_PINNED must be 0 or 1" >&2; exit 2;; esac
-case "$major" in
-    16) source_sha=${PG16_SHA:-c0534eb02de050ac1035ad7b3ad7c3f02980f153}; expected_version='PostgreSQL 16.16' ;;
-    17) source_sha=${PG17_SHA:-702b3dc86d35bcc08c8e23cffa3c4d9fe9d32c85}; expected_version='PostgreSQL 17.12' ;;
-    18) source_sha=${PG18_SHA:-f5c41f6681c910b3f69951bf6fb97c6d74605d25}; expected_version='PostgreSQL 18.7' ;;
-    19) source_sha=${PG19_SHA:-5c839a2a08b9b87a349be97371fac6c5a2873b10}; expected_version='PostgreSQL 19.0' ;;
-    *) echo "unsupported PostgreSQL major: $major" >&2; exit 2 ;;
-esac
+source "$script_dir/ci-postgresql-pin.sh" "$major"
 pgdg_key_urls=(
     https://www.postgresql.org/media/keys/ACCC4CF8.asc
     https://apt.postgresql.org/pub/repos/apt/ACCC4CF8.asc

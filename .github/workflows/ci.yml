@@ -520,7 +520,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       DUCKDB_LIBRARY_SHA256: ${{ needs.duckdb.outputs.sha256 }}
-      PG17_ASSERT_SHA: 083ac033419f690758508e08c1736089384bbee8
       PG_ASSERT_ROOT: /opt/postgresql/17-assert
     steps:
       - *require-duckdb
@@ -528,8 +527,10 @@ jobs:
       - uses: actions/checkout@v5
       - name: Install build dependencies
         run: bash .github/scripts/ci-install-postgresql.sh 17
-      - name: Build PostgreSQL 17.11 with assertions
-        run: bash .github/scripts/ci-build-postgresql-assert.sh
+      - name: Build PostgreSQL 17.12 with assertions
+        run: |
+          sudo install -d -o "$(id -u)" -g "$(id -g)" "$PG_ASSERT_ROOT"
+          PG_SOURCE_PREFIX="$PG_ASSERT_ROOT" bash .github/scripts/ci-build-postgresql-source.sh 17 none
       - name: Build target pg_duckdb
         env:
           PG_CONFIG: /opt/postgresql/17-assert/bin/pg_config

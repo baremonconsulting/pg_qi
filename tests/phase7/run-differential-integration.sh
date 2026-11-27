@@ -6,6 +6,7 @@ major=${1:?PostgreSQL major version is required}
 output=${2:?private output directory is required}
 output=$(realpath -m "$output")
 pgconfig=${PG_CONFIG:-/usr/lib/postgresql/$major/bin/pg_config}
+client_pg_config=${PG_CLIENT_CONFIG:-$pgconfig}
 pgbin=$(dirname "$pgconfig")
 port=$((55500 + major))
 data=$output/data
@@ -70,9 +71,9 @@ END
 $$;
 SQL
 
-cc -std=c99 -Wall -Wextra -Werror -I"$("$pgconfig" --includedir)" \
-    tests/phase7/bound_driver.c -L"$("$pgconfig" --libdir)" \
-    -Wl,-rpath,"$("$pgconfig" --libdir)" -lpq -o "$libs/bound-driver"
+cc -std=c99 -Wall -Wextra -Werror -I"$("$client_pg_config" --includedir)" \
+    tests/phase7/bound_driver.c -L"$("$client_pg_config" --libdir)" \
+    -Wl,-rpath,"$("$client_pg_config" --libdir)" -lpq -o "$libs/bound-driver"
 "$libs/bound-driver" "host=$socket port=$port dbname=postgres user=$USER"
 
 cat >"$output/subject.sql" <<'SQL'
