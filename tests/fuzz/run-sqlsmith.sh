@@ -3,12 +3,12 @@
 set -euo pipefail
 umask 077
 
-artifacts=$(realpath -m "${1:?Evidence directory is required}")
+artefacts=$(realpath -m "${1:?Evidence directory is required}")
 pg_config=${PG_CONFIG:?PG_CONFIG is required}
 pgbin=$("$pg_config" --bindir)
 repo_dir=$(cd "$(dirname "$0")/../.." && pwd)
 source "$repo_dir/deps/pg_duckdb.env"
-mkdir -p "$artifacts"
+mkdir -p "$artefacts"
 scratch=$(mktemp -d "${RUNNER_TEMP:-/tmp}/pgqi-sqlsmith.XXXXXXXX")
 data=$scratch/data
 socket=$scratch/socket
@@ -24,21 +24,21 @@ stop_server() {
 }
 trap stop_server EXIT
 mkdir "$socket"
-"$pgbin/initdb" -D "$data" --auth=trust --no-locale --encoding=UTF8 --no-sync >"$artifacts/initdb.log"
+"$pgbin/initdb" -D "$data" --auth=trust --no-locale --encoding=UTF8 --no-sync >"$artefacts/initdb.log"
 {
     printf "unix_socket_directories = '%s'\n" "$socket"
     printf "port = %s\n" "$port"
     printf "listen_addresses = ''\n"
     printf "shared_preload_libraries = 'pg_duckdb,pg_qi'\n"
 } >>"$data/postgresql.conf"
-"$pgbin/pg_ctl" -D "$data" -l "$artifacts/server.log" -w start
+"$pgbin/pg_ctl" -D "$data" -l "$artefacts/server.log" -w start
 
 "${psql[@]}" -d postgres <<'SQL'
 CREATE DATABASE qi_fuzz;
 ALTER DATABASE qi_fuzz SET statement_timeout = '10s';
 SQL
 
-cat >"$artifacts/schema.sql" <<'SQL'
+cat >"$artefacts/schema.sql" <<'SQL'
 CREATE EXTENSION pg_duckdb;
 CREATE EXTENSION pg_qi;
 
@@ -62,7 +62,7 @@ CREATE TABLE labels (bucket int4, description text);
 INSERT INTO labels VALUES (0, 'first'), (1, NULL), (2, 'second'), (2, 'second');
 ANALYZE;
 SQL
-"${psql[@]}" -d qi_fuzz -f "$artifacts/schema.sql"
+"${psql[@]}" -d qi_fuzz -f "$artefacts/schema.sql"
 
 {
     printf 'pg_qi=%s\npg_duckdb=%s\nduckdb=%s\n' \
@@ -72,9 +72,9 @@ SQL
     sqlsmith --version
     "${psql[@]}" -qAt -d qi_fuzz -c \
         "SELECT extname || '=' || extversion FROM pg_extension WHERE extname IN ('pg_qi','pg_duckdb') ORDER BY extname"
-} >"$artifacts/build-identity.txt" 2>&1
+} >"$artefacts/build-identity.txt" 2>&1
 
-summary=$artifacts/results.tsv
+summary=$artefacts/results.tsv
 printf 'mode\tseed\tkind\tqueries\ttimeouts\tconnection_failures\tsqlsmith_exit\tserver_healthy\n' >"$summary"
 
 for mode in shadow_p0 allowlist; do
@@ -88,7 +88,7 @@ for mode in shadow_p0 allowlist; do
             kind=random
         fi
         printf 'sqlsmith mode=%s seed=%s kind=%s\n' "$mode" "$seed" "$kind"
-        log=$artifacts/$mode-$seed.log
+        log=$artefacts/$mode-$seed.log
         result=0
         sqlsmith --target="$target" --seed="$seed" --max-queries=1500 --exclude-catalog --verbose \
             >"$log" 2>&1 || result=$?
