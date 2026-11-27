@@ -79,10 +79,10 @@ requires a real, resettable `duckdb.force_execution` GUC and therefore requires
 `pg_duckdb` to be loaded before `pg_qi`. The target CI matrix uses
 [pg_duckdb 1.2.2](https://github.com/duckdb/pg_duckdb/releases/tag/v1.2.2)
 and its embedded DuckDB 2.0.1. The exact source pins are in
-[`deps/pg_duckdb.env`](deps/pg_duckdb.env). The separate PostgreSQL 16–18
-baseline matrix retains the original Spike 1 pin
-`ee38d3b540ecea1d93683ba99bdcec5632a21eaf` with DuckDB `v1.5.4`.
-Dependency changes require the integration matrix to be replayed.
+[`deps/pg_duckdb.env`](deps/pg_duckdb.env). CI shares one cached DuckDB
+library across the PostgreSQL jobs that use it. Those jobs build
+`pg_duckdb` for their PostgreSQL version. Dependency changes require the
+integration matrix to be replayed.
 
 PostgreSQL 19 support is pinned to the final 19.0 commit
 `5c839a2a08b9b87a349be97371fac6c5a2873b10` (`REL_19_0`).
