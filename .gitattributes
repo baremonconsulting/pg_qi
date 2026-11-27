@@ -5,3 +5,7 @@
 *.sql text eol=lf
 *.md text eol=lf
 Makefile text eol=lf
+
+# Test and tooling harness. Exclude from GitHub language statistics.
+tests/** linguist-vendored
+tools/** linguist-vendored

@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- A [documentation index](docs/README.md) for installation, operation,
+  architecture and test evidence, linked from the project README.
 - Experimental routing for qualified generated analytical reads during
   extended-protocol Bind. It checks eligibility, reviewed result equivalence
   and measured savings for the current typed values, including NULL. Generic
