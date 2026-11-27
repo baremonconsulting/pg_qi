@@ -216,11 +216,11 @@ The planned Baremon Query Intelligence Platform will run outside the database an
 
 ## Known issues
 
-### Disk spill with pg_duckdb 1.2.1
+### Disk spill with pg_duckdb 1.2.1 and 1.2.2
 
-A query delegated through stock pg_duckdb 1.2.1 can fail when DuckDB needs
-to spill to disk. For non-superusers missing either PostgreSQL server file
-role, the error can include
+A delegated query can fail when DuckDB needs to spill to disk. This was
+observed with stock pg_duckdb 1.2.1 and reproduced with 1.2.2. A
+non-superuser missing either PostgreSQL server file role can see the error
 `File system LocalFileSystem has been disabled by configuration`.
 [Upstream issue #864](https://github.com/duckdb/pg_duckdb/issues/864)
 

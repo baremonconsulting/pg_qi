@@ -15,6 +15,7 @@
 #include "pg_qi/qi_delegation.h"
 #include "pg_qi/qi_detector.h"
 #if PG_QI_TESTING
+#include "pg_qi/qi_context.h"
 #include "pg_qi/qi_reenter.h"
 #endif
 #include "utils/builtins.h"
@@ -138,7 +139,7 @@ qi_state_try_push(QiBackendState *state, int guc_nest_level,
     state->depth++;
     state->counters.pushed++;
 #if PG_QI_TESTING
-    if (state == &qi_backend_state)
+    if (state == &qi_backend_state && !qi_context_inside_executor())
     {
         qi_diag_last_force_origin = frame->force_origin;
         qi_diag_last_effective_origin = frame->effective_origin;

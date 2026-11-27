@@ -214,6 +214,9 @@ QI_PLANNER_PROTO(pg_qi_planner)
     instr_time started_at;
     instr_time finished_at;
     QiClassifyResult classification = qi_classify_query(parse);
+    bool publish_last_plan = !qi_context_inside_executor();
+    bool has_duckdb_scan;
+
     INSTR_TIME_SET_CURRENT(started_at);
 
     if (!pg_qi_final_report_registered && MyBackendType == B_BACKEND)
@@ -307,9 +310,11 @@ QI_PLANNER_PROTO(pg_qi_planner)
                                               );
 
 #if PG_QI_TESTING
-        pg_qi_last_plan_has_duckdb_scan =
-            qi_plan_has_duckdb_scan((PlannedStmt *) planned_stmt);
-        qi_record_completed_plan(pg_qi_last_plan_has_duckdb_scan);
+        /* pg_duckdb can plan a PostgreSQL scan during execution. */
+        has_duckdb_scan = qi_plan_has_duckdb_scan((PlannedStmt *) planned_stmt);
+        if (publish_last_plan)
+            pg_qi_last_plan_has_duckdb_scan = has_duckdb_scan;
+        qi_record_completed_plan(has_duckdb_scan);
 #endif
     }
     PG_CATCH();
@@ -323,7 +328,8 @@ QI_PLANNER_PROTO(pg_qi_planner)
     (void) qi_frame_pop(frame_id);
 done:
 #if PG_QI_TESTING
-    qi_classify_record_test_result(classification);
+    if (publish_last_plan)
+        qi_classify_record_test_result(classification);
     INSTR_TIME_SET_CURRENT(finished_at);
     INSTR_TIME_SUBTRACT(finished_at, started_at);
     qi_record_planner_timing((uint64) INSTR_TIME_GET_MICROSEC(finished_at));
