@@ -52,20 +52,23 @@ with AddressSanitizer by Ubuntu Clang 18.1.3 on runner image
 `ubuntu24 20261122.23.1`.
 [CI job](https://github.com/baremonconsulting/pg_qi/actions/runs/46044383352/job/140659844483)
 
-To reproduce, run the `explain_analyze` case of `tests/explain_guard/verify.sh`
-against that build with `pg_duckdb` and `pg_qi` preloaded. It runs this in one
-session:
+It reproduces with only `pg_duckdb` preloaded. Run this in one session
+against that build:
 
 ```sql
+CREATE EXTENSION pg_duckdb;
+CREATE TABLE t (grp int, buyer int);
+INSERT INTO t VALUES (1, 1), (1, 1), (1, 2), (2, 3);
 LOAD 'auto_explain';
 SET auto_explain.log_min_duration = 0;
-SET auto_explain.log_level = notice;
 SET auto_explain.log_format = json;
 SET duckdb.force_execution = true;
-EXPLAIN (ANALYZE, FORMAT JSON)
-SELECT grp, count(DISTINCT buyer) AS buyers
-FROM qi_explain_guard_t GROUP BY grp ORDER BY grp;
+EXPLAIN (ANALYZE, FORMAT JSON) SELECT grp, count(DISTINCT buyer) FROM t GROUP BY grp;
 ```
+
+The same `EXPLAIN ANALYZE` without `auto_explain` produces no report. In
+pg_qi, the `explain_analyze` case of `tests/explain_guard/verify.sh` reaches
+the same read.
 
 Upstream issue: not reported yet.
 
