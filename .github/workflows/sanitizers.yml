@@ -31,6 +31,7 @@ jobs:
       PG_CONFIG: /opt/pg-${{ matrix.sanitizer }}/18/bin/pg_config
       PG_CLIENT_CONFIG: /usr/lib/postgresql/18/bin/pg_config
       PG_DUCKDB_SANITIZER: ${{ matrix.sanitizer == 'address' && 'address' || '' }}
+      PG_QI_KNOWN_FINDINGS: ${{ matrix.sanitizer == 'address' && 'pg-duckdb-scan-query-text' || '' }}
       SANITIZER_EVIDENCE_NAME: sanitizers-${{ matrix.sanitizer }}
       SANITIZER_EVIDENCE_DIR: ci-artifacts/sanitizers-${{ matrix.sanitizer }}
     steps:

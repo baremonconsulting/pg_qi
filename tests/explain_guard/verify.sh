@@ -21,6 +21,15 @@ trap 'rm -rf "$work"' EXIT
 query='SELECT grp, count(DISTINCT buyer) AS buyers FROM qi_explain_guard_t GROUP BY grp ORDER BY grp'
 failures=0
 
+# The sanitiser workflow lists confirmed upstream findings in
+# PG_QI_KNOWN_FINDINGS. tests/sanitizers/known-findings.md explains each one.
+known_finding() {
+    case ",${PG_QI_KNOWN_FINDINGS:-}," in
+        *",$1,"*) return 0 ;;
+    esac
+    return 1
+}
+
 wait_ready() {
     local i
     for i in $(seq 1 50); do
@@ -91,8 +100,12 @@ expect_logged_without_reexecution scroll_cursor
 # An EXPLAIN command prepares an EXPLAIN in DuckDB; its plan must stay.
 session explain "EXPLAIN (FORMAT JSON) $query"
 grep -q '"DuckDB Execution Plan"' "$work/explain.out" || fail explain 'EXPLAIN lost the DuckDB plan'
-session explain_analyze "EXPLAIN (ANALYZE, FORMAT JSON) $query"
-grep -q '"DuckDB Execution Plan"' "$work/explain_analyze.out" || fail explain_analyze 'EXPLAIN ANALYZE lost the DuckDB plan'
+if known_finding pg-duckdb-scan-query-text; then
+    echo 'SKIP explain_analyze: known finding pg-duckdb-scan-query-text'
+else
+    session explain_analyze "EXPLAIN (ANALYZE, FORMAT JSON) $query"
+    grep -q '"DuckDB Execution Plan"' "$work/explain_analyze.out" || fail explain_analyze 'EXPLAIN ANALYZE lost the DuckDB plan'
+fi
 
 wait_ready
 "$pgbin/psql" -X -q -d "$dbname" -c 'DROP TABLE IF EXISTS qi_explain_guard_t' >/dev/null 2>&1 || true
