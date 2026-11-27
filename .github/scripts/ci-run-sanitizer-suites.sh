@@ -71,7 +71,7 @@ with_server "$artifacts/production" pg_duckdb,pg_qi_outer_test,pg_qi production_
 rm -f "$libdir/pg_qi_outer_test.so"
 trap - EXIT
 
-bash tests/phase7/run-differential-integration.sh "$major" "$artifacts/differential-integration"
+bash tests/phase7/run-differential-integration.sh "$major" "$artifacts/pq31"
 bash tests/phase7/verify_count_certificate.sh "$major" "$artifacts/count-certificate"
 bash tests/phase4c/refusal-tests.sh
 (

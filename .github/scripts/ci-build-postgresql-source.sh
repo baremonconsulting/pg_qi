@@ -12,7 +12,10 @@ build_dir=${RUNNER_TEMP}/postgresql-$major-build
 
 case "$sanitizer" in
     address) sanitizer_flags="-fsanitize=address -fno-omit-frame-pointer" ;;
-    undefined) sanitizer_flags="-fsanitize=undefined -fno-sanitize=vptr -fno-sanitize-recover=all -fno-omit-frame-pointer" ;;
+    undefined)
+        sanitizer_flags="-fsanitize=undefined -fno-sanitize=vptr -fno-sanitize-recover=all"
+        sanitizer_flags+=" -fno-omit-frame-pointer -fno-sanitize=function"
+        ;;
     none) sanitizer_flags= ;;
     *) echo "unsupported build mode: $sanitizer" >&2; exit 2 ;;
 esac

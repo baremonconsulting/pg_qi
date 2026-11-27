@@ -39,13 +39,17 @@ jobs:
         run: |
           bash .github/scripts/ci-install-postgresql.sh 18
           sudo apt-get install --yes --no-install-recommends \
-            "clang-$CLANG_VERSION" "libclang-rt-$CLANG_VERSION-dev" libicu-dev
+            "clang-$CLANG_VERSION" "libclang-rt-$CLANG_VERSION-dev" "llvm-$CLANG_VERSION" libicu-dev
       - &prepare-sanitizer-runtime
         name: Prepare the sanitiser runtime
         run: |
           mkdir -p "$SANITIZER_LOG_DIR" "$SANITIZER_EVIDENCE_DIR"
           sudo install -d -o "$(id -u)" -g "$(id -g)" "$PG_INSTALL_ROOT"
           sudo sysctl vm.mmap_rnd_bits=28
+          llvm_bin="/usr/lib/llvm-$CLANG_VERSION/bin"
+          printf '%s\n' "$llvm_bin" >>"$GITHUB_PATH"
+          "$llvm_bin/llvm-symbolizer" --version >"$SANITIZER_EVIDENCE_DIR/llvm-symbolizer.txt"
+          cat "$SANITIZER_EVIDENCE_DIR/llvm-symbolizer.txt"
       - name: Record the build inputs and set the cache keys
         id: cache-keys
         shell: bash
@@ -212,7 +216,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
-            "libclang-rt-$CLANG_VERSION-dev" libicu74 liblz4-1 libreadline8t64 libssl3t64 sqlsmith
+            "libclang-rt-$CLANG_VERSION-dev" "llvm-$CLANG_VERSION" libicu74 liblz4-1 libreadline8t64 libssl3t64 sqlsmith
       - *prepare-sanitizer-runtime
       - name: Download this attempt's address-sanitised build
         uses: actions/download-artifact@v6
