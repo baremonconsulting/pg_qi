@@ -1,0 +1,235 @@
+name: Sanitizers
+
+on:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * *'
+
+permissions:
+  contents: read
+
+env:
+  CLANG_VERSION: "18"
+  PG_QI_BUILD_ID: ${{ github.sha }}
+  PG_QI_SITE_BUILD_ID: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  SANITIZER_LOG_DIR: ${{ github.workspace }}/sanitizer-logs
+  ASAN_OPTIONS: detect_leaks=0:abort_on_error=1:detect_stack_use_after_return=0:log_path=${{ github.workspace }}/sanitizer-logs/asan
+  UBSAN_OPTIONS: print_stacktrace=1:abort_on_error=1:log_path=${{ github.workspace }}/sanitizer-logs/ubsan
+
+jobs:
+  sanitizers:
+    name: sanitizers (${{ matrix.sanitizer }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [address, undefined]
+    env:
+      SANITIZER: ${{ matrix.sanitizer }}
+      PG_INSTALL_ROOT: /opt/pg-${{ matrix.sanitizer }}
+      PG_CONFIG: /opt/pg-${{ matrix.sanitizer }}/18/bin/pg_config
+      PG_CLIENT_CONFIG: /usr/lib/postgresql/18/bin/pg_config
+      PG_DUCKDB_SANITIZER: ${{ matrix.sanitizer == 'address' && 'address' || '' }}
+      PG_QI_KNOWN_FINDINGS: ${{ matrix.sanitizer == 'address' && 'pg-duckdb-scan-query-text' || '' }}
+      SANITIZER_EVIDENCE_NAME: sanitizers-${{ matrix.sanitizer }}
+      SANITIZER_EVIDENCE_DIR: ci-artifacts/sanitizers-${{ matrix.sanitizer }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install build dependencies
+        run: |
+          bash .github/scripts/ci-install-postgresql.sh 18
+          sudo apt-get install --yes --no-install-recommends \
+            "clang-$CLANG_VERSION" "libclang-rt-$CLANG_VERSION-dev" "llvm-$CLANG_VERSION" libicu-dev
+      - &prepare-sanitizer-runtime
+        name: Prepare the sanitiser runtime
+        run: |
+          mkdir -p "$SANITIZER_LOG_DIR" "$SANITIZER_EVIDENCE_DIR"
+          sudo install -d -o "$(id -u)" -g "$(id -g)" "$PG_INSTALL_ROOT"
+          sudo sysctl vm.mmap_rnd_bits=28
+          llvm_bin="/usr/lib/llvm-$CLANG_VERSION/bin"
+          printf '%s\n' "$llvm_bin" >>"$GITHUB_PATH"
+          "$llvm_bin/llvm-symbolizer" --version >"$SANITIZER_EVIDENCE_DIR/llvm-symbolizer.txt"
+          cat "$SANITIZER_EVIDENCE_DIR/llvm-symbolizer.txt"
+      - name: Record the build inputs and set the cache keys
+        id: cache-keys
+        shell: bash
+        run: |
+          set -euo pipefail
+          source .github/scripts/ci-postgresql-pin.sh 18
+          source deps/pg_duckdb.env
+          compiler_packages=$(dpkg-query -W "clang-$CLANG_VERSION" "libclang-rt-$CLANG_VERSION-dev")
+          compiler=$(printf '%s\n' "$compiler_packages" | sha256sum | cut -d' ' -f1)
+          platform="$RUNNER_ARCH-$ImageOS-$ImageVersion"
+          postgres_recipe=$(sha256sum .github/scripts/ci-build-postgresql-source.sh .github/scripts/ci-postgresql-pin.sh | sha256sum | cut -d' ' -f1)
+          duckdb_recipe=$(bash .github/scripts/ci-sha256.sh .github/scripts/ci-build-pg-duckdb.sh)
+          printf 'postgres=postgres-%s-%s-%s-%s-%s\n' "$platform" "$source_sha" "$SANITIZER" "$compiler" "$postgres_recipe" >>"$GITHUB_OUTPUT"
+          printf 'duckdb=duckdb-sanitizer-%s-%s-%s-%s-%s-%s\n' "$platform" "$DUCKDB_SHA" "$PG_DUCKDB_SHA" "$SANITIZER" "$compiler" "$duckdb_recipe" >>"$GITHUB_OUTPUT"
+          printf 'PG18_SHA=%s\nDUCKDB_CC=clang-%s\nDUCKDB_CXX=clang++-%s\n' \
+            "$source_sha" "$CLANG_VERSION" "$CLANG_VERSION" >>"$GITHUB_ENV"
+          {
+            printf 'postgres=%s\npg_duckdb=%s\nduckdb=%s\npg_qi=%s\nrunner=%s\nsanitiser=%s\n' \
+              "$source_sha" "$PG_DUCKDB_SHA" "$DUCKDB_SHA" "$PG_QI_BUILD_ID" "$platform" "$SANITIZER"
+            clang-"$CLANG_VERSION" --version
+            printf '%s\n' "$compiler_packages"
+          } | tee "$SANITIZER_EVIDENCE_DIR/build-inputs.txt"
+      - name: Restore PostgreSQL
+        id: postgres-cache
+        uses: actions/cache/restore@v6
+        with:
+          key: ${{ steps.cache-keys.outputs.postgres }}
+          path: ${{ env.PG_INSTALL_ROOT }}/18
+      - name: Build pinned PostgreSQL
+        if: steps.postgres-cache.outputs.cache-hit != 'true'
+        run: bash .github/scripts/ci-build-postgresql-source.sh 18 "$SANITIZER"
+      - name: Verify the PostgreSQL installation
+        shell: bash
+        run: |
+          set -euo pipefail
+          source .github/scripts/ci-postgresql-pin.sh 18
+          pgbin=$("$PG_CONFIG" --bindir)
+          pkglibdir=$("$PG_CONFIG" --pkglibdir)
+          test "$("$PG_CONFIG" --version)" = "$expected_version"
+          test "$("$pgbin/postgres" --version)" = "postgres (PostgreSQL) ${expected_version#PostgreSQL }"
+          configure=$("$PG_CONFIG" --configure)
+          grep -Fq -- --enable-cassert <<<"$configure"
+          grep -Fq -- "-fsanitize=$SANITIZER" <<<"$configure"
+          test -r "$pkglibdir/file_fdw.so"
+          test -r "$pkglibdir/auto_explain.so"
+          build_id=$(bash .github/scripts/ci-postgres-build-id.sh 18 "$source_sha")
+          printf 'PG_QI_POSTGRES_BUILD_ID=%s\n' "$build_id" >>"$GITHUB_ENV"
+          printf 'postgresql_build_id=%s\nconfigure=%s\n' "$build_id" "$configure" \
+            | tee "$SANITIZER_EVIDENCE_DIR/postgresql-build.txt"
+      - name: Cache the PostgreSQL installation
+        if: steps.postgres-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          key: ${{ steps.cache-keys.outputs.postgres }}
+          path: ${{ env.PG_INSTALL_ROOT }}/18
+      - name: Restore DuckDB
+        id: duckdb-cache
+        uses: actions/cache/restore@v6
+        with:
+          key: ${{ steps.cache-keys.outputs.duckdb }}
+          path: ${{ runner.temp }}/duckdb-cache/libduckdb.so
+      - name: Build and install the pinned provider
+        shell: bash
+        env:
+          DUCKDB_CACHE_HIT: ${{ steps.duckdb-cache.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          cached_library="$RUNNER_TEMP/duckdb-cache/libduckdb.so"
+          export PG_DUCKDB_BUILD_MODE=source
+          if [ "$DUCKDB_CACHE_HIT" = true ]; then
+            PG_DUCKDB_BUILD_MODE=cached
+            DUCKDB_LIBRARY_SHA256=$(bash .github/scripts/ci-sha256.sh "$cached_library")
+            export DUCKDB_LIBRARY_SHA256
+          fi
+          bash .github/scripts/ci-build-pg-duckdb.sh 18
+          if [ "$PG_DUCKDB_BUILD_MODE" = source ]; then
+            install -D "$("$PG_CONFIG" --pkglibdir)/libduckdb.so" "$cached_library"
+          fi
+          bash .github/scripts/ci-sha256.sh "$cached_library" | tee "$SANITIZER_EVIDENCE_DIR/duckdb-library.txt"
+      - name: Cache the DuckDB library
+        if: steps.duckdb-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          key: ${{ steps.cache-keys.outputs.duckdb }}
+          path: ${{ runner.temp }}/duckdb-cache/libduckdb.so
+      - name: Build the production extension
+        env:
+          PG_QI_TESTING: "0"
+        run: |
+          bash .github/scripts/ci-build-install-pg-qi.sh 18 "$SANITIZER_EVIDENCE_DIR/production-build"
+          bash .github/scripts/ci-production-boundary.sh 18 "$SANITIZER_EVIDENCE_DIR"
+      - name: Archive the production ASan installation
+        if: matrix.sanitizer == 'address'
+        run: tar -czf "$RUNNER_TEMP/asan-postgresql.tar.gz" -C "$PG_INSTALL_ROOT" 18
+      - name: Publish the ASan installation for sqlsmith
+        if: matrix.sanitizer == 'address'
+        uses: actions/upload-artifact@v6
+        with:
+          name: asan-postgresql-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/asan-postgresql.tar.gz
+          compression-level: 0
+          if-no-files-found: error
+      - name: Run the production and test suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .github/scripts/ci-run-sanitizer-suites.sh 18 "$SANITIZER_EVIDENCE_DIR" \
+            2>&1 | tee "$SANITIZER_EVIDENCE_DIR/suites.log"
+      - &check-sanitizer-reports
+        name: Check sanitiser reports and server logs
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          status=0
+          for report in "$SANITIZER_LOG_DIR"/*; do
+            printf 'Sanitiser report %s\n' "$report"
+            cat "$report"
+            status=1
+          done
+          if [ -d "$SANITIZER_EVIDENCE_DIR" ]; then
+            while IFS= read -r -d '' log; do
+              if grep -F 'was terminated by signal' "$log"; then
+                printf 'Server process terminated by signal in %s\n' "$log"
+                status=1
+              fi
+            done < <(find "$SANITIZER_EVIDENCE_DIR" -type f \
+              \( -name server.log -o -name postgresql.log \) -print0)
+          fi
+          exit "$status"
+      - &upload-sanitizer-evidence
+        name: Upload test and sanitiser evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ env.SANITIZER_EVIDENCE_NAME }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.SANITIZER_LOG_DIR }}/
+            ${{ env.SANITIZER_EVIDENCE_DIR }}/**/*.log
+            ${{ env.SANITIZER_EVIDENCE_DIR }}/**/*.txt
+            ${{ env.SANITIZER_EVIDENCE_DIR }}/**/*.tsv
+            ${{ env.SANITIZER_EVIDENCE_DIR }}/**/*.json
+            ${{ env.SANITIZER_EVIDENCE_DIR }}/**/schema.sql
+            ${{ env.SANITIZER_EVIDENCE_DIR }}/phase4c/**/STATUS
+            ${{ env.SANITIZER_EVIDENCE_DIR }}/phase4c/**/*.sha256
+            !${{ env.SANITIZER_EVIDENCE_DIR }}/**/data/**
+            regression.diffs
+            regression.out
+
+  sqlsmith:
+    name: sqlsmith
+    needs: sanitizers
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    env:
+      PG_INSTALL_ROOT: /opt/pg-address
+      PG_CONFIG: /opt/pg-address/18/bin/pg_config
+      SANITIZER_EVIDENCE_NAME: sqlsmith
+      SANITIZER_EVIDENCE_DIR: ci-artifacts/sqlsmith
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install the ASan runtime and sqlsmith
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            "libclang-rt-$CLANG_VERSION-dev" "llvm-$CLANG_VERSION" libicu74 liblz4-1 libreadline8t64 libssl3t64 sqlsmith
+      - *prepare-sanitizer-runtime
+      - name: Download this attempt's address-sanitised build
+        uses: actions/download-artifact@v6
+        with:
+          name: asan-postgresql-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/asan-postgresql
+      - name: Restore the address-sanitised installation
+        run: |
+          tar -xzf "$RUNNER_TEMP/asan-postgresql/asan-postgresql.tar.gz" -C "$PG_INSTALL_ROOT"
+          dpkg-query -W sqlsmith "libclang-rt-$CLANG_VERSION-dev" \
+            | tee "$SANITIZER_EVIDENCE_DIR/runtime-packages.txt"
+      - name: Run sqlsmith on the production build
+        run: bash tests/fuzz/run-sqlsmith.sh "$SANITIZER_EVIDENCE_DIR"
+      - *check-sanitizer-reports
+      - *upload-sanitizer-evidence

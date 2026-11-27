@@ -170,7 +170,7 @@ qi_bound_init_gucs(void)
     DefineCustomStringVariable("pg_qi.bound_policy",
                                "Reviewed rules for delegating queries with bound values.",
                                NULL, &qi_bound_policy_text, "", PGC_SUSET,
-                               GUC_SUPERUSER_ONLY | GUC_NO_SHOW_ALL,
+                               GUC_SUPERUSER_ONLY | GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE,
                                qi_bound_check_policy, qi_bound_assign_policy, NULL);
     DefineCustomIntVariable("pg_qi.bound_min_saving_ms",
                             "Minimum measured saving for a bound routing rule in milliseconds.",

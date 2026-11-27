@@ -86,8 +86,8 @@ pgqi4c_verify_installed_production() {
 }
 
 pgqi4c_build_driver() {
-    local pgconfig=$1 output=$2
-    cc -O2 -Wall -Wextra -Werror -I"$($pgconfig --includedir)" \
+    local pgconfig=${PG_CLIENT_CONFIG:-$1} output=$2
+    cc -O2 -Wall -Wextra -Werror -I"$("$pgconfig" --includedir)" \
        "$pgqi4c_repo/scripts/phase4c/production-driver.c" \
-       -L"$($pgconfig --libdir)" -Wl,-rpath,"$($pgconfig --libdir)" -lpq -o "$output"
+       -L"$("$pgconfig" --libdir)" -Wl,-rpath,"$("$pgconfig" --libdir)" -lpq -o "$output"
 }

@@ -112,6 +112,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `EXPLAIN` command, without an active snapshot for simple-protocol queries.
   Preloaded `pg_qi` now hides that callback for DuckDB scans not prepared for
   `EXPLAIN`; such plans still show the `DuckDBScan` node.
+- Production builds now load into PostgreSQL servers built with
+  `--enable-cassert`. `pg_qi.bound_policy` was hidden from `SHOW ALL` without
+  also being excluded from the sample configuration, which fails PostgreSQL
+  16 and later's setting check at startup.
 
 ### Security
 
@@ -123,6 +127,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - A plan-only `EXPLAIN` of a DuckDB plan can make pg_duckdb fall back to
   PostgreSQL for later queries in the same transaction. Inspect the plan in a
   separate transaction before running the query.
+- When `auto_explain` logs it, `EXPLAIN ANALYZE` of a DuckDB-executed query
+  that scans a PostgreSQL table makes pg_duckdb 1.2.2 read freed memory. The
+  log can show corrupted text for pg_duckdb's internal scan query. Ordinary
+  queries and `EXPLAIN` without `ANALYZE` are not affected.
+  [duckdb/pg_duckdb#1150](https://github.com/duckdb/pg_duckdb/issues/1150)
 - Routing is pre-alpha, default-off and limited to a narrow static allow-list;
   external policy management and telemetry export are not implemented.
 - Runtime preload currently requires `pg_duckdb` to provide a real, resettable

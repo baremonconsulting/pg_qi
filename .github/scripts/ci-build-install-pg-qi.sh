@@ -14,7 +14,11 @@ make PG_CONFIG="$pg_config" PG_QI_TESTING="$testing" clean >"$artifact_dir/clean
 make PG_CONFIG="$pg_config" PG_QI_TESTING="$testing" \
     PG_QI_BUILD_ID="$build_id" PG_QI_POSTGRES_BUILD_ID="$postgres_build_id" \
     -j2 >"$artifact_dir/build.log" 2>&1
-sudo --preserve-env=PG_CONFIG make PG_CONFIG="$pg_config" \
+install_make=(make)
+if [ ! -w "$("$pg_config" --pkglibdir)" ] || [ ! -w "$("$pg_config" --sharedir)/extension" ]; then
+    install_make=(sudo --preserve-env=PG_CONFIG make)
+fi
+"${install_make[@]}" PG_CONFIG="$pg_config" \
     PG_QI_TESTING="$testing" \
     PG_QI_BUILD_ID="$build_id" \
     PG_QI_POSTGRES_BUILD_ID="$postgres_build_id" \
