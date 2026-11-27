@@ -77,6 +77,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- Update the target provider to pg_duckdb 1.2.2 with embedded DuckDB 2.0.1.
+  Build-bound certificates and model profiles require fresh evidence for
+  the new provider.
 - Bound routing confirms eligibility from the provider's whole-query plan.
   It supports bounded built-in Bind values and returns to native planning
   with the original parameters on a clean decline. Existing rules need a

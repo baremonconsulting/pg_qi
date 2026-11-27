@@ -2,6 +2,8 @@ PG_QI_TESTING ?= 0
 PG_QI_BUILD_ID ?= 0000000000000000000000000000000000000000
 PG_QI_POSTGRES_BUILD_ID ?= 0000000000000000000000000000000000000000000000000000000000000000
 
+include deps/pg_duckdb.env
+
 EXTENSION = pg_qi
 MODULE_big = pg_qi
 OBJS = src/pg_qi.o src/qi_classify.o src/qi_context.o src/qi_decision.o \
@@ -28,7 +30,9 @@ endif
 PGFILEDESC = "pg_qi - PostgreSQL Query Intelligence"
 PG_CPPFLAGS += -Isrc/include -DPG_QI_TESTING=$(PG_QI_TESTING) \
                -DPG_QI_BUILD_ID=\"$(PG_QI_BUILD_ID)\" \
-               -DPG_QI_POSTGRES_BUILD_ID=\"$(PG_QI_POSTGRES_BUILD_ID)\"
+               -DPG_QI_POSTGRES_BUILD_ID=\"$(PG_QI_POSTGRES_BUILD_ID)\" \
+               -DQI_EXPECTED_PG_DUCKDB_SHA=\"$(PG_DUCKDB_SHA)\" \
+               -DQI_EXPECTED_DUCKDB_SHA=\"$(DUCKDB_SHA)\"
 PG_CFLAGS += -Werror
 
 PG_CONFIG ?= pg_config
@@ -42,6 +46,6 @@ endif
 .PHONY: pg_qi_build_identity_force
 pg_qi_build_identity_force:
 
-# Build identities are command-line inputs, not files. Recompile the one
-# translation unit that embeds them even when no source timestamp changed.
-src/qi_profile.o src/qi_count_certificate.o: pg_qi_build_identity_force
+# Refresh each build-bound object when identities change between invocations.
+src/qi_profile.o src/qi_count_certificate.o src/qi_semantic.o: pg_qi_build_identity_force
+src/qi_profile.bc src/qi_count_certificate.bc src/qi_semantic.bc: pg_qi_build_identity_force

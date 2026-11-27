@@ -16,14 +16,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from tools.phase5.corpus_oracle import load_json
 from tools.phase7.count_matrix import ARMS, CASES, DELETED, case_run_id, inspect, require, site_binding
+from tools.provider_pins import DUCKDB_SHA as DUCKDB_SOURCE, PG_DUCKDB_SHA as PG_DUCKDB_SOURCE
 
 VERSIONS = {16: "16.16", 17: "17.12", 18: "18.7", 19: "19.0"}
 HEX40 = re.compile(r"[0-9a-f]{40}\Z")
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 RUNTIME_FIELDS = ("postgres", "pg_qi[.]so", "pg_duckdb[.]so", "libduckdb[.]so")
 RUN_NAME = re.compile(r"count-matrix-pg(16|17|18|19)\.[A-Za-z0-9]{8}\Z")
-PG_DUCKDB_SOURCE = "8756099e267c47f0b86c24de4cf995327f1f4279"
-DUCKDB_SOURCE = "d54cbbe3df17e8e5ce68312f483b4155836112aa"
 MAX_LIFETIME = 90 * 24 * 60 * 60
 
 

@@ -76,9 +76,11 @@ The broader WP14.2 classifier remains a test-gate prototype. See the
 
 `pg_duckdb` is not a compile-time dependency. The current runtime adapter
 requires a real, resettable `duckdb.force_execution` GUC and therefore requires
-`pg_duckdb` to be loaded before `pg_qi`. The current target CI matrix pins
-`pg_duckdb` commit `8756099e267c47f0b86c24de4cf995327f1f4279`; a separate
-PostgreSQL 16–18 baseline matrix retains the original Spike 1 pin
+`pg_duckdb` to be loaded before `pg_qi`. The target CI matrix uses
+[pg_duckdb 1.2.2](https://github.com/duckdb/pg_duckdb/releases/tag/v1.2.2)
+and its embedded DuckDB 2.0.1. The exact source pins are in
+[`deps/pg_duckdb.env`](deps/pg_duckdb.env). The separate PostgreSQL 16–18
+baseline matrix retains the original Spike 1 pin
 `ee38d3b540ecea1d93683ba99bdcec5632a21eaf` with DuckDB `v1.5.4`.
 Dependency changes require the integration matrix to be replayed.
 
