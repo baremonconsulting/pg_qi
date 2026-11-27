@@ -170,17 +170,29 @@ artefacts hold each COUNT matrix, runtime results and evidence index.
 | 18.7 | `1aae6d0f64c2694409867906c825ed9058f436b5da887d5787e52c0de9fb20f3` |
 | 19.0 | `bf86792e13fc0829253a39277b9ba0b785e23565c412ea6087e2d659347f3962` |
 
-The issued records are scoped to their respective test clusters.
-Deployment-owner approval is pending. Each deployment needs fresh
-evidence and approval for its exact site and build under the Phase 7
-procedures.
+The deployment owner approved the replacement COUNT(*) certificates and
+model profiles for the four isolated builds in the final CI replay of
+PR revision `399f0fffdee041b6bfee31b2b6e2c744e7fae436`. The approval
+covers the cluster and build identities attested by CI merge ref
+`eb3d36da21502bd14c274195e4276ffafe5e88ba`.
+[Approval in PQ-58](https://baremon.atlassian.net/browse/PQ-58?focusedCommentId=10728),
+[approved replay](https://github.com/baremonconsulting/pg_qi/actions/runs/45988165722)
+
+| PostgreSQL | Approved COUNT evidence SHA-256 |
+| --- | --- |
+| 16.16 | `d1ce73946d6471d923fe2647ea5476ca1c94093bb29a677c127d092104579f13` |
+| 17.12 | `f87fc332e010e6a08205717822c1abd7a6dfa9514697ba62815bcd6fd420d5e9` |
+| 18.7 | `8b301da19888c07dd30ebeb10d148f87d834ff65ce35c37cc4472051cc49f668` |
+| 19.0 | `cfe8f5ff875a73997f9e1ab9ba4d1988db7089faa671128b8f7fd7f3e97c3c2f` |
+
+Each deployment needs fresh evidence and approval for its exact site
+and build under the Phase 7 procedures.
 [COUNT certificate procedure](../phase7/PQ7-7-count-semantic-certificate.md),
 [immutable profiles](../phase7/PQ7-10-immutable-profiles.md)
 
 ## Verdict
 
-**Compatibility replay passed.** The release remains subject to human
-review and fresh deployment-owner approval of the build-bound evidence.
+**Compatibility replay passed.**
 
 If reversal is needed, revert the pull request and redeploy the preceding
 build with the evidence for its exact identity. The provider upgrade leaves
