@@ -14,7 +14,8 @@ if [[ -z ${PG_QI_SOURCE_ARCHIVE+x} ]]; then
     test "$(git rev-parse --show-toplevel)" = "$(pwd -P)"
     test "$(git rev-parse HEAD)" = "$revision"
     test -z "$(git status --porcelain --untracked-files=all -- Makefile pg_qi.control src sql \
-        tools/phase5 tools/phase7 tests/phase7 .github/scripts ':(exclude)tools/phase7/differential-driver')"
+        deps/pg_duckdb.env tools/provider_pins.py tools/phase5 tools/phase7 tests/phase7 \
+        .github/scripts ':(exclude)tools/phase7/differential-driver')"
     make -C tools/phase7 PG_CONFIG="$pgconfig" clean >/dev/null
 else
     capsule=${PG_QI_SOURCE_ARCHIVE:?empty source capsule path}
@@ -51,7 +52,7 @@ for base in map(Path, ('src', 'sql', 'tools/phase5', 'tools/phase7', 'tests/phas
     for item in base.rglob('*'):
         if item.is_symlink() or not item.is_dir():
             require(item in paths, item)
-for item in map(Path, ('Makefile', 'pg_qi.control')):
+for item in map(Path, ('Makefile', 'pg_qi.control', 'deps/pg_duckdb.env', 'tools/provider_pins.py')):
     require(item in paths, item)
 PY
 fi
@@ -266,6 +267,13 @@ PY
     configure "$mutated" "$(printf '%s' "$mutated" | sha256sum | cut -d' ' -f1)"
     probe "mismatched-$field" unknown "$subject" "$readonly_rr"
 done
+# A record from the preceding provider must fail even with a matching approval hash.
+mutated=$(sed -E \
+    -e 's/;provider_src=[0-9a-f]+/;provider_src=8756099e267c47f0b86c24de4cf995327f1f4279/' \
+    -e 's/;duckdb_src=[0-9a-f]+/;duckdb_src=d54cbbe3df17e8e5ce68312f483b4155836112aa/' \
+    <<<"$certificate")
+configure "$mutated" "$(printf '%s' "$mutated" | sha256sum | cut -d' ' -f1)"
+probe previous-provider-pins unknown "$subject" "$readonly_rr"
 mutated=$(python3 -c 'import re,sys; print(re.sub(r";issued=[0-9]+;expires=[0-9]+$",";issued=1;expires=2",sys.argv[1]))' "$certificate")
 configure "$mutated" "$(printf '%s' "$mutated" | sha256sum | cut -d' ' -f1)"
 probe expired unknown "$subject" "$readonly_rr"

@@ -3,8 +3,12 @@
 set -euo pipefail
 
 major=${1:?PostgreSQL major version is required}
-pg_duckdb_sha=${PG_DUCKDB_SHA:-8756099e267c47f0b86c24de4cf995327f1f4279}
-duckdb_sha=${DUCKDB_SHA:-d54cbbe3df17e8e5ce68312f483b4155836112aa}
+repo_dir=$(cd "$(dirname "$0")/../.." && pwd)
+pg_duckdb_sha=${PG_DUCKDB_SHA:-}
+duckdb_sha=${DUCKDB_SHA:-}
+source "$repo_dir/deps/pg_duckdb.env"
+pg_duckdb_sha=${pg_duckdb_sha:-$PG_DUCKDB_SHA}
+duckdb_sha=${duckdb_sha:-$DUCKDB_SHA}
 build_mode=${PG_DUCKDB_BUILD_MODE:-source}
 duckdb_version=${DUCKDB_VERSION:-v1.5.4}
 archive_sha=${DUCKDB_ARCHIVE_SHA256:-838d98a85e697bab9935010c88a8c67d3312ccedcab4cb4a0ba01da65113bb70}
@@ -57,3 +61,8 @@ built_duckdb_sha=$(bash "$hash_tool" "$built_duckdb")
 installed_duckdb_sha=$(bash "$hash_tool" "$installed_duckdb")
 test "$built_pg_duckdb_sha" = "$installed_pg_duckdb_sha"
 test "$built_duckdb_sha" = "$installed_duckdb_sha"
+
+printf 'PG_DUCKDB_SHA=%s\nDUCKDB_SHA=%s\n' "$pg_duckdb_sha" "$duckdb_sha"
+if [ -n "${GITHUB_ENV:-}" ]; then
+    printf 'PG_DUCKDB_SHA=%s\nDUCKDB_SHA=%s\n' "$pg_duckdb_sha" "$duckdb_sha" >>"$GITHUB_ENV"
+fi

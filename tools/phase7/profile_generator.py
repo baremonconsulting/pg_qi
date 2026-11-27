@@ -5,10 +5,13 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from pathlib import Path
 
-PG_DUCKDB_SHA = "8756099e267c47f0b86c24de4cf995327f1f4279"
-DUCKDB_SHA = "d54cbbe3df17e8e5ce68312f483b4155836112aa"
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from tools.provider_pins import DUCKDB_SHA, PG_DUCKDB_SHA
+
 MAX_VALIDITY_SECONDS = 90 * 24 * 60 * 60
 
 

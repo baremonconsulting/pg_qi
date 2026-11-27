@@ -9,6 +9,10 @@ import re
 import subprocess
 import sys
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
+
+from tools.provider_pins import DUCKDB_SHA as EXPECTED_DUCKDB, PG_DUCKDB_SHA as EXPECTED_PG_DUCKDB
+
 HEX40 = re.compile(r"[0-9a-f]{40}")
 HEX64 = re.compile(r"[0-9a-f]{64}")
 EXPECTED = {
@@ -17,8 +21,6 @@ EXPECTED = {
     "18": ("PostgreSQL 18.7", "f5c41f6681c910b3f69951bf6fb97c6d74605d25"),
     "19": ("PostgreSQL 19.0", "5c839a2a08b9b87a349be97371fac6c5a2873b10"),
 }
-EXPECTED_PG_DUCKDB = "8756099e267c47f0b86c24de4cf995327f1f4279"
-EXPECTED_DUCKDB = "d54cbbe3df17e8e5ce68312f483b4155836112aa"
 FIELDS = {
     "schema_version", "postgresql_major", "postgresql_version",
     "postgresql_source_commit", "postgresql_configure",

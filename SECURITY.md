@@ -45,11 +45,11 @@ are security-relevant and should use the private reporting channel above.
 
 ## File privileges for disk spill
 
-For a non-superuser, stock pg_duckdb 1.2.1 requires the effective PostgreSQL
-role to belong to both `pg_read_server_files` and `pg_write_server_files`
-to keep `LocalFileSystem` available. The provider's filesystem settings
-and the operating system's file permissions still apply.
-[pg_duckdb role check](https://github.com/duckdb/pg_duckdb/blob/v1.2.1/src/pg/permissions.cpp#L11-L15)
+Stock pg_duckdb 1.2.1 and 1.2.2 require the effective non-superuser
+PostgreSQL role to belong to both `pg_read_server_files` and
+`pg_write_server_files` to keep `LocalFileSystem` available. The provider's
+filesystem settings and the operating system's file permissions still apply.
+[pg_duckdb 1.2.2 role check](https://github.com/duckdb/pg_duckdb/blob/v1.2.2/src/pg/permissions.cpp#L11-L15)
 
 These grants cover files that PostgreSQL can read or write through its
 operating system account. PostgreSQL warns that the roles bypass

@@ -16,13 +16,11 @@
 #endif
 
 #ifndef QI_EXPECTED_PG_DUCKDB_SHA
-#define QI_EXPECTED_PG_DUCKDB_SHA \
-    "8756099e267c47f0b86c24de4cf995327f1f4279"
+#error "QI_EXPECTED_PG_DUCKDB_SHA must come from the provider build pins"
 #endif
 
 #ifndef QI_EXPECTED_DUCKDB_SHA
-#define QI_EXPECTED_DUCKDB_SHA \
-    "d54cbbe3df17e8e5ce68312f483b4155836112aa"
+#error "QI_EXPECTED_DUCKDB_SHA must come from the provider build pins"
 #endif
 
 #endif /* PG_QI_QI_BUILD_IDENTITY_H */

@@ -27,6 +27,9 @@ wrong_build=$("${generator[@]}" --generation 13 --issued-at "$((now - 60))" \
 wrong_postgres=$("${generator[@]}" --generation 16 --issued-at "$((now - 60))" \
     --expires-at "$((now + 3600))" \
     --postgres-build ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff)
+previous_provider=$("${generator[@]}" --generation 17 --issued-at "$((now - 60))" \
+    --expires-at "$((now + 3600))" --pg-duckdb-sha 8756099e267c47f0b86c24de4cf995327f1f4279 \
+    --duckdb-sha d54cbbe3df17e8e5ce68312f483b4155836112aa)
 wrong_site=$("${generator[@]}" --generation 14 --issued-at "$((now - 60))" \
     --expires-at "$((now + 3600))" \
     --site-build dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd)
@@ -58,7 +61,7 @@ grep -Fqx "pg_qi.model_profile = '$(${generator[@]} --generation 10 \
 "$pgbin/psql" -X -qAt -v ON_ERROR_STOP=1 postgres \
     -v work="$work" -v a="$profile_a" -v b="$profile_b" \
     -v wrong_build="$wrong_build" -v wrong_postgres="$wrong_postgres" \
-    -v wrong_site="$wrong_site" \
+    -v previous_provider="$previous_provider" -v wrong_site="$wrong_site" \
     -v expired="$expired" -v invalid="$invalid" -v oversize="$oversize" \
     >"$work/session.out" 2>"$work/session.err" <<'SQL'
 CREATE ROLE pgqi_diagnostic NOLOGIN;
@@ -116,6 +119,14 @@ SELECT pg_reload_conf();
 SELECT pg_sleep(0.05);
 SELECT count(*) FROM profile_fixture;
 \o :work/wrong_postgres.out
+SHOW pg_qi.profile_evidence;
+\o /dev/null
+
+ALTER SYSTEM SET pg_qi.model_profile TO :'previous_provider';
+SELECT pg_reload_conf();
+SELECT pg_sleep(0.05);
+SELECT count(*) FROM profile_fixture;
+\o :work/previous_provider.out
 SHOW pg_qi.profile_evidence;
 \o /dev/null
 
@@ -214,6 +225,9 @@ for value in (a, b):
     assert value["envelope"] == "hypothetical"
 assert record("wrong_build.out")["reason"] == "wrong_pg_qi_build"
 assert record("wrong_postgres.out")["reason"] == "wrong_postgres_build"
+previous_provider = record("previous_provider.out")
+assert previous_provider["reason"] == "wrong_provider_build"
+assert previous_provider["present"] == "false"
 assert record("wrong_site.out")["reason"] == "wrong_site_build"
 assert record("expired.out")["reason"] == "expired"
 assert record("invalid.out")["reason"] == "malformed"
@@ -225,4 +239,4 @@ assert record("benefit_withheld.out") == {"v": "1", "s": "withheld"}
 assert int(a["install_sequence"]) < int(b["install_sequence"])
 PY
 
-echo "PQ-34 immutable profile verification PASS (PG$major)"
+echo "PQ-34 immutable profile verification PASS (PG$major), including refusal of previous provider pins"
