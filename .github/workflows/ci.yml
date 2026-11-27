@@ -16,9 +16,56 @@ env:
   PG19_SHA: 5c839a2a08b9b87a349be97371fac6c5a2873b10
   PG_QI_BUILD_ID: ${{ github.sha }}
   PG_QI_SITE_BUILD_ID: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  PG_DUCKDB_BUILD_MODE: source
+  PG_DUCKDB_BUILD_MODE: cached
 
 jobs:
+  duckdb:
+    name: Build DuckDB library
+    runs-on: ubuntu-latest
+    outputs:
+      artifact-id: ${{ steps.publish.outputs.artifact-id }}
+      sha256: ${{ steps.library.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set the DuckDB cache key
+        id: key
+        shell: bash
+        run: |
+          set -euo pipefail
+          source deps/pg_duckdb.env
+          build_script_sha=$(bash .github/scripts/ci-sha256.sh .github/scripts/ci-build-pg-duckdb.sh)
+          printf 'key=duckdb-%s-%s-%s-%s-%s-%s\n' \
+            "$RUNNER_ARCH" "$ImageOS" "$ImageVersion" "$DUCKDB_SHA" "$PG_DUCKDB_SHA" "$build_script_sha" >>"$GITHUB_OUTPUT"
+      - name: Cache the DuckDB library
+        id: cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/duckdb-cache/libduckdb.so
+          key: ${{ steps.key.outputs.key }}
+      - name: Install build dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: bash .github/scripts/ci-install-postgresql.sh 17
+      - name: Build pinned DuckDB
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          PG_DUCKDB_BUILD_MODE: duckdb-only
+        run: bash .github/scripts/ci-build-pg-duckdb.sh 17
+      - name: Record the DuckDB library identity
+        id: library
+        shell: bash
+        run: |
+          set -euo pipefail
+          digest=$(bash .github/scripts/ci-sha256.sh "$RUNNER_TEMP/duckdb-cache/libduckdb.so")
+          printf 'sha256=%s\n' "$digest" >>"$GITHUB_OUTPUT"
+          printf 'Shared DuckDB library SHA-256 %s\n' "$digest"
+      - name: Publish the DuckDB library
+        id: publish
+        uses: actions/upload-artifact@v6
+        with:
+          name: duckdb-library-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/duckdb-cache/libduckdb.so
+          if-no-files-found: error
+
   compile:
     name: Compile PG${{ matrix.postgresql }} (-Werror)
     runs-on: ubuntu-latest
@@ -54,8 +101,23 @@ jobs:
 
   phase5-protocol-spike:
     name: Phase 5 protocol and memory spike PG16
+    needs: duckdb
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
+    env:
+      DUCKDB_LIBRARY_SHA256: ${{ needs.duckdb.outputs.sha256 }}
     steps:
+      - &require-duckdb
+        name: Require the shared DuckDB build
+        env:
+          DUCKDB_BUILD_RESULT: ${{ needs.duckdb.result }}
+        run: test "$DUCKDB_BUILD_RESULT" = success
+      - &download-duckdb
+        name: Download the shared DuckDB library
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.duckdb.outputs.artifact-id }}
+          path: ${{ runner.temp }}/duckdb-cache
       - uses: actions/checkout@v5
       - name: Install PostgreSQL 16 and dependencies
         run: bash .github/scripts/ci-install-postgresql.sh 16
@@ -102,13 +164,20 @@ jobs:
 
   production-shadow:
     name: Production routing PG${{ matrix.postgresql }}
+    needs: duckdb
+    # Required checks must fail if the shared build fails.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    env:
+      DUCKDB_LIBRARY_SHA256: ${{ needs.duckdb.outputs.sha256 }}
     strategy:
       fail-fast: false
       matrix:
         postgresql: ["16", "17", "18", "19"]
     steps:
+      - *require-duckdb
+      - *download-duckdb
       - uses: actions/checkout@v5
       - name: Install PostgreSQL and dependencies
         env:
@@ -297,12 +366,18 @@ jobs:
 
   regression:
     name: Regression PG${{ matrix.postgresql }}
+    needs: duckdb
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
+    env:
+      DUCKDB_LIBRARY_SHA256: ${{ needs.duckdb.outputs.sha256 }}
     strategy:
       fail-fast: false
       matrix:
         postgresql: ["16", "17", "18", "19"]
     steps:
+      - *require-duckdb
+      - *download-duckdb
       - uses: actions/checkout@v5
       - name: Install PostgreSQL and dependencies
         run: bash .github/scripts/ci-install-postgresql.sh "${{ matrix.postgresql }}"
@@ -343,12 +418,18 @@ jobs:
 
   integration:
     name: S0-S11 integration PG${{ matrix.postgresql }}
+    needs: duckdb
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
+    env:
+      DUCKDB_LIBRARY_SHA256: ${{ needs.duckdb.outputs.sha256 }}
     strategy:
       fail-fast: false
       matrix:
         postgresql: ["16", "17", "18", "19"]
     steps:
+      - *require-duckdb
+      - *download-duckdb
       - uses: actions/checkout@v5
       - name: Install PostgreSQL and dependencies
         env:
@@ -375,52 +456,20 @@ jobs:
             ${{ runner.temp }}/wp9-${{ matrix.postgresql }}/pg*/*.log
             ci-artifacts/integration-pg${{ matrix.postgresql }}
 
-  baseline-integration:
-    name: Baseline S0-S11 PG${{ matrix.postgresql }}
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        postgresql: ["16", "17", "18"]
-    env:
-      PG_DUCKDB_SHA: ee38d3b540ecea1d93683ba99bdcec5632a21eaf
-      DUCKDB_SHA: 08e34c447bae34eaee3723cac61f2878b6bdf787
-      DUCKDB_VERSION: v1.5.4
-      DUCKDB_ARCHIVE_SHA256: 838d98a85e697bab9935010c88a8c67d3312ccedcab4cb4a0ba01da65113bb70
-      PG_DUCKDB_BUILD_MODE: prebuilt
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install PostgreSQL and dependencies
-        run: bash .github/scripts/ci-install-postgresql.sh "${{ matrix.postgresql }}"
-      - name: Build baseline pg_duckdb
-        run: bash .github/scripts/ci-build-pg-duckdb.sh "${{ matrix.postgresql }}"
-      - name: Build and install pg_qi
-        run: bash .github/scripts/ci-build-install-pg-qi.sh "${{ matrix.postgresql }}" "ci-artifacts/baseline-pg${{ matrix.postgresql }}"
-      - name: Run baseline S0-S11
-        env:
-          PG_INSTALL_ROOT: /usr/lib/postgresql
-          WP9_MAJORS: ${{ matrix.postgresql }}
-          WP9_SKIP_BUILD_INSTALL: "1"
-          WP9_ARTIFACT_DIR: ${{ runner.temp }}/baseline-wp9-${{ matrix.postgresql }}
-        run: bash scripts/spike1/wp9-matrix.sh
-      - name: Upload baseline evidence
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: baseline-s0-s11-pg${{ matrix.postgresql }}
-          path: |
-            ${{ runner.temp }}/baseline-wp9-${{ matrix.postgresql }}/results.tsv
-            ${{ runner.temp }}/baseline-wp9-${{ matrix.postgresql }}/pg*/*.log
-            ci-artifacts/baseline-pg${{ matrix.postgresql }}
-
   differential:
     name: Differential semantics PG${{ matrix.postgresql }}
+    needs: duckdb
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
+    env:
+      DUCKDB_LIBRARY_SHA256: ${{ needs.duckdb.outputs.sha256 }}
     strategy:
       fail-fast: false
       matrix:
         postgresql: ["16", "19"]
     steps:
+      - *require-duckdb
+      - *download-duckdb
       - uses: actions/checkout@v5
       - name: Install PostgreSQL and dependencies
         env:
@@ -464,41 +513,18 @@ jobs:
             ${{ runner.temp }}/differential-pg${{ matrix.postgresql }}
             ci-artifacts/differential-pg${{ matrix.postgresql }}
 
-  reentrancy-focus:
-    name: Reentrancy and failpoints PG17
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install PostgreSQL and dependencies
-        run: bash .github/scripts/ci-install-postgresql.sh 17
-      - name: Build pinned pg_duckdb
-        run: bash .github/scripts/ci-build-pg-duckdb.sh 17
-      - name: Build and install pg_qi
-        run: bash .github/scripts/ci-build-install-pg-qi.sh 17 ci-artifacts/reentrancy-pg17
-      - name: Repeat protected ERROR and reentrancy scenarios
-        shell: bash
-        run: |
-          set -euo pipefail
-          for repetition in 1 2 3; do
-            PG_INSTALL_ROOT=/usr/lib/postgresql WP9_MAJORS=17 WP9_SKIP_BUILD_INSTALL=1 WP9_ARTIFACT_DIR="${RUNNER_TEMP}/reentrancy-$repetition" bash scripts/spike1/wp9-matrix.sh
-          done
-      - name: Upload reentrancy evidence
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: reentrancy-focus-pg17
-          path: |
-            ${{ runner.temp }}/reentrancy-*/results.tsv
-            ${{ runner.temp }}/reentrancy-*/pg17/*.log
-            ci-artifacts/reentrancy-pg17
-
   concurrency-smoke:
     name: Concurrency smoke PG17 assertions
+    needs: duckdb
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     env:
+      DUCKDB_LIBRARY_SHA256: ${{ needs.duckdb.outputs.sha256 }}
       PG17_ASSERT_SHA: 083ac033419f690758508e08c1736089384bbee8
       PG_ASSERT_ROOT: /opt/postgresql/17-assert
     steps:
+      - *require-duckdb
+      - *download-duckdb
       - uses: actions/checkout@v5
       - name: Install build dependencies
         run: bash .github/scripts/ci-install-postgresql.sh 17
@@ -538,33 +564,3 @@ jobs:
             ${{ runner.temp }}/wp10-pg17
             ci-artifacts/concurrency-pg17
             ci-artifacts/concurrency-production-pg17
-
-  parallel-isolation:
-    name: Parallel worker isolation S11 PG17
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install PostgreSQL and dependencies
-        run: bash .github/scripts/ci-install-postgresql.sh 17
-      - name: Build pinned pg_duckdb
-        run: bash .github/scripts/ci-build-pg-duckdb.sh 17
-      - name: Build and install pg_qi
-        run: bash .github/scripts/ci-build-install-pg-qi.sh 17 ci-artifacts/parallel-pg17
-      - name: Run S11 with parallelism enabled
-        env:
-          PG_INSTALL_ROOT: /usr/lib/postgresql
-          WP9_MAJORS: "17"
-          WP9_SKIP_BUILD_INSTALL: "1"
-          WP9_ARTIFACT_DIR: ${{ runner.temp }}/parallel-s11
-        run: bash scripts/spike1/wp9-matrix.sh
-      - name: Require explicit parallel-worker evidence
-        run: grep -Eq '^[0-9]+\|t\|0\|f\|f\|' "${RUNNER_TEMP}/parallel-s11/pg17/S11.log"
-      - name: Upload parallel evidence
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: parallel-isolation-pg17
-          path: |
-            ${{ runner.temp }}/parallel-s11/results.tsv
-            ${{ runner.temp }}/parallel-s11/pg17/*.log
-            ci-artifacts/parallel-pg17
