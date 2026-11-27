@@ -70,7 +70,7 @@ The same `EXPLAIN ANALYZE` without `auto_explain` produces no report. In
 pg_qi, the `explain_analyze` case of `tests/explain_guard/verify.sh` reaches
 the same read.
 
-Upstream issue: not reported yet.
+Upstream issue: [duckdb/pg_duckdb#1150](https://github.com/duckdb/pg_duckdb/issues/1150).
 
 The address job sets `PG_QI_KNOWN_FINDINGS=pg-duckdb-scan-query-text`. It skips
 only the `explain_analyze` case of `tests/explain_guard/verify.sh`. The
